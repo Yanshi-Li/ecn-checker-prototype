@@ -1,0 +1,8 @@
+partNumber,description,lifecycleStatus,safetyCritical,approvedSupplier
+A-100,Control Unit Assembly,ACTIVE,false,Internal
+C-100,Safety Fuse 5A,ACTIVE,true,Supplier-A
+C-200,Capacitor 10uF,ACTIVE,false,Supplier-B
+C-250,Capacitor 10uF Old Version,OBSOLETE,false,Supplier-B
+C-300,Resistor 100 Ohm,ACTIVE,false,Supplier-C
+C-400,Replacement Capacitor 10uF,ACTIVE,false,Supplier-B
+C-999,Test Component,ACTIVE,false,Supplier-X

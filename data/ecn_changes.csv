@@ -1,0 +1,6 @@
+ecnId,lineNumber,action,parentPartNumber,oldPartNumber,newPartNumber,oldQuantity,newQuantity,uom
+ECN-2026-001,1,REPLACE,A-100,C-200,C-250,1,1,EA
+ECN-2026-001,2,REMOVE,A-100,C-999,,1,0,EA
+ECN-2026-001,3,ADD,A-100,,C-100,0,1,EA
+ECN-2026-001,4,CHANGE_QUANTITY,A-100,C-300,C-300,4,0,EA
+ECN-2026-001,5,ADD,A-100,,C-400,0,2,EA

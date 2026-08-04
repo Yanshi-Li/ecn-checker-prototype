@@ -1,0 +1,4 @@
+parentPartNumber,componentPartNumber,quantity,uom,bomRevision,status
+A-100,C-100,1,EA,R01,RELEASED
+A-100,C-200,1,EA,R01,RELEASED
+A-100,C-300,4,EA,R01,RELEASED

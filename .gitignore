@@ -1,0 +1,22 @@
+# Java compiled files
+*.class
+
+# Java build output
+out/
+target/
+build/
+
+# IDE files
+.idea/
+.vscode/
+.settings/
+.classpath
+.project
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Local configuration / secrets
+.env
+config-local.properties
