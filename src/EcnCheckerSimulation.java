@@ -1,5 +1,6 @@
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -39,10 +40,15 @@ public class EcnCheckerSimulation {
             System.out.println("AI model used: No");
             System.out.println();
 
+            List<EcnDashboardView> dashboardReports = new ArrayList<>();
+
             for (EcnHeader ecn : ecnHeaders) {
                 List<CheckResult> results = runChecks(ecn, changes, releasedBom, parts);
                 printReport(ecn, results);
+                dashboardReports.add(buildDashboardReport(ecn, results));
             }
+
+            writeDashboardOutputs(dashboardReports);
 
         } catch (IOException e) {
             System.err.println("ERROR: Could not read a CSV input file.");
@@ -379,6 +385,208 @@ public class EcnCheckerSimulation {
         }
     }
 
+    private static EcnDashboardView buildDashboardReport(EcnHeader ecn, List<CheckResult> results) {
+        int passes = 0;
+        int warnings = 0;
+        int blockers = 0;
+
+        for (CheckResult result : results) {
+            switch (result.severity()) {
+                case "PASS" -> passes++;
+                case "WARNING" -> warnings++;
+                case "BLOCKER" -> blockers++;
+                default -> { }
+            }
+        }
+
+        String decision = blockers > 0
+                ? "BLOCKER"
+                : warnings > 0 ? "REVIEW" : "APPROVE";
+
+        List<DashboardResultView> dashboardResults = results.stream()
+                .map(result -> new DashboardResultView(
+                        result.severity(),
+                        result.ruleId(),
+                        result.ruleDescription(),
+                        result.message(),
+                        result.evidence(),
+                        result.reason(),
+                        result.requiredAction()))
+                .toList();
+
+        return new EcnDashboardView(
+                ecn.ecnId(),
+                ecn.title(),
+                ecn.status(),
+                ecn.affectedAssembly(),
+                ecn.effectiveDate(),
+                ecn.qualityApproval(),
+                passes,
+                warnings,
+                blockers,
+                decision,
+                dashboardResults);
+    }
+
+    private static void writeDashboardOutputs(List<EcnDashboardView> reports) throws IOException {
+        Path outputDir = Path.of("out");
+        Files.createDirectories(outputDir);
+
+        Path jsonPath = outputDir.resolve("ecn-dashboard.json");
+        Path htmlPath = outputDir.resolve("ecn-dashboard.html");
+
+        Files.writeString(jsonPath, buildDashboardJson(reports), StandardCharsets.UTF_8);
+        Files.writeString(htmlPath, buildDashboardHtml(reports), StandardCharsets.UTF_8);
+
+        System.out.println();
+        System.out.println("Reviewer dashboard generated at: " + htmlPath.toAbsolutePath());
+        System.out.println("Structured data exported to: " + jsonPath.toAbsolutePath());
+    }
+
+    private static String buildDashboardJson(List<EcnDashboardView> reports) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("{\n  \"ecns\": [\n");
+
+        for (int i = 0; i < reports.size(); i++) {
+            EcnDashboardView report = reports.get(i);
+            builder.append("    {\n");
+            builder.append("      \"ecnId\": \"").append(escapeJson(report.ecnId())).append("\",\n");
+            builder.append("      \"title\": \"").append(escapeJson(report.title())).append("\",\n");
+            builder.append("      \"status\": \"").append(escapeJson(report.status())).append("\",\n");
+            builder.append("      \"affectedAssembly\": \"").append(escapeJson(report.affectedAssembly())).append("\",\n");
+            builder.append("      \"effectiveDate\": \"").append(escapeJson(report.effectiveDate())).append("\",\n");
+            builder.append("      \"qualityApproval\": ").append(report.qualityApproval()).append(",\n");
+            builder.append("      \"passCount\": ").append(report.passCount()).append(",\n");
+            builder.append("      \"warningCount\": ").append(report.warningCount()).append(",\n");
+            builder.append("      \"blockerCount\": ").append(report.blockerCount()).append(",\n");
+            builder.append("      \"decision\": \"").append(escapeJson(report.decision())).append("\",\n");
+            builder.append("      \"results\": [\n");
+
+            List<DashboardResultView> resultViews = report.results();
+            for (int j = 0; j < resultViews.size(); j++) {
+                DashboardResultView result = resultViews.get(j);
+                builder.append("        {\n");
+                builder.append("          \"severity\": \"").append(escapeJson(result.severity())).append("\",\n");
+                builder.append("          \"ruleId\": \"").append(escapeJson(result.ruleId())).append("\",\n");
+                builder.append("          \"ruleDescription\": \"").append(escapeJson(result.ruleDescription())).append("\",\n");
+                builder.append("          \"message\": \"").append(escapeJson(result.message())).append("\",\n");
+                builder.append("          \"evidence\": \"").append(escapeJson(result.evidence())).append("\",\n");
+                builder.append("          \"reason\": \"").append(escapeJson(result.reason())).append("\",\n");
+                builder.append("          \"requiredAction\": \"").append(escapeJson(result.requiredAction())).append("\"\n");
+                builder.append("        }");
+                if (j < resultViews.size() - 1) {
+                    builder.append(",");
+                }
+                builder.append("\n");
+            }
+
+            builder.append("      ]\n");
+            builder.append("    }");
+            if (i < reports.size() - 1) {
+                builder.append(",");
+            }
+            builder.append("\n");
+        }
+
+        builder.append("  ]\n");
+        builder.append("}\n");
+        return builder.toString();
+    }
+
+    private static String buildDashboardHtml(List<EcnDashboardView> reports) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("<!DOCTYPE html>\n");
+        builder.append("<html lang=\"en\">\n");
+        builder.append("<head>\n");
+        builder.append("  <meta charset=\"utf-8\" />\n");
+        builder.append("  <title>ECN Reviewer Dashboard</title>\n");
+        builder.append("  <style>\n");
+        builder.append("    body { font-family: Arial, sans-serif; margin: 24px; background: #f5f7fb; color: #1f2937; }\n");
+        builder.append("    h1 { margin-bottom: 8px; }\n");
+        builder.append("    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }\n");
+        builder.append("    .card { background: white; border-radius: 10px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }\n");
+        builder.append("    .card h3 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; color: #6b7280; }\n");
+        builder.append("    .card .value { font-size: 28px; font-weight: bold; }\n");
+        builder.append("    .panel { background: white; border-radius: 10px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 16px; }\n");
+        builder.append("    table { width: 100%; border-collapse: collapse; }\n");
+        builder.append("    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }\n");
+        builder.append("    .severity { font-weight: bold; }\n");
+        builder.append("    .PASS { color: #047857; }\n");
+        builder.append("    .WARNING { color: #b45309; }\n");
+        builder.append("    .BLOCKER { color: #b91c1c; }\n");
+        builder.append("    .decision { font-weight: bold; padding: 6px 10px; border-radius: 999px; display: inline-block; }\n");
+        builder.append("    .decision.APPROVE { background: #dcfce7; color: #166534; }\n");
+        builder.append("    .decision.REVIEW { background: #fef3c7; color: #92400e; }\n");
+        builder.append("    .decision.BLOCKER { background: #fee2e2; color: #991b1b; }\n");
+        builder.append("  </style>\n");
+        builder.append("</head>\n");
+        builder.append("<body>\n");
+        builder.append("  <h1>ECN Reviewer Dashboard</h1>\n");
+        builder.append("  <p>This view summarizes automated ECN validation results for reviewer triage.</p>\n");
+        builder.append("  <div class=\"summary\">\n");
+
+        int totalPasses = 0;
+        int totalWarnings = 0;
+        int totalBlockers = 0;
+        for (EcnDashboardView report : reports) {
+            totalPasses += report.passCount();
+            totalWarnings += report.warningCount();
+            totalBlockers += report.blockerCount();
+        }
+
+        builder.append("    <div class=\"card\"><h3>Total ECNs</h3><div class=\"value\">" + reports.size() + "</div></div>\n");
+        builder.append("    <div class=\"card\"><h3>Passes</h3><div class=\"value\">" + totalPasses + "</div></div>\n");
+        builder.append("    <div class=\"card\"><h3>Warnings</h3><div class=\"value\">" + totalWarnings + "</div></div>\n");
+        builder.append("    <div class=\"card\"><h3>Blockers</h3><div class=\"value\">" + totalBlockers + "</div></div>\n");
+        builder.append("  </div>\n");
+
+        for (EcnDashboardView report : reports) {
+            builder.append("  <div class=\"panel\">\n");
+            builder.append("    <h2>").append(escapeHtml(report.ecnId())).append(" - ").append(escapeHtml(report.title())).append("</h2>\n");
+            builder.append("    <p><strong>Status:</strong> ").append(escapeHtml(report.status())).append(" &nbsp; <strong>Assembly:</strong> ").append(escapeHtml(report.affectedAssembly())).append(" &nbsp; <strong>Effective:</strong> ").append(escapeHtml(report.effectiveDate())).append("</p>\n");
+            builder.append("    <p><strong>Review decision:</strong> <span class=\"decision ").append(report.decision()).append("\">").append(escapeHtml(report.decision())).append("</span></p>\n");
+            builder.append("    <p><strong>Summary:</strong> Pass=" + report.passCount() + ", Warning=" + report.warningCount() + ", Blocker=" + report.blockerCount() + "</p>\n");
+            builder.append("    <table>\n");
+            builder.append("      <tr><th>Severity</th><th>Rule</th><th>Result</th><th>Action</th></tr>\n");
+            for (DashboardResultView result : report.results()) {
+                builder.append("      <tr>");
+                builder.append("        <td class=\"severity ").append(escapeHtml(result.severity())).append("\">").append(escapeHtml(result.severity())).append("</td>");
+                builder.append("        <td>").append(escapeHtml(result.ruleId())).append("</td>");
+                builder.append("        <td>").append(escapeHtml(result.message())).append("</td>");
+                builder.append("        <td>").append(escapeHtml(result.requiredAction().isBlank() ? "None" : result.requiredAction())).append("</td>");
+                builder.append("      </tr>\n");
+            }
+            builder.append("    </table>\n");
+            builder.append("  </div>\n");
+        }
+
+        builder.append("</body>\n");
+        builder.append("</html>\n");
+        return builder.toString();
+    }
+
+    private static String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "");
+    }
+
+    private static String escapeHtml(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
+    }
+
     private static void printReport(EcnHeader ecn, List<CheckResult> results) {
         int passes = 0;
         int warnings = 0;
@@ -394,27 +602,27 @@ public class EcnCheckerSimulation {
         System.out.println("--------------------------------------------------");
 
         for (CheckResult result : results) {
-    System.out.println();
-    System.out.printf("[%-7s] %s — %s%n",
-            result.severity(),
-            result.ruleId(),
-            result.ruleDescription());
+            System.out.println();
+            System.out.printf("[%-7s] %s — %s%n",
+                    result.severity(),
+                    result.ruleId(),
+                    result.ruleDescription());
 
-    System.out.println("Result:   " + result.message());
-    System.out.println("Evidence: " + result.evidence());
-    System.out.println("Reason:   " + result.reason());
+            System.out.println("Result:   " + result.message());
+            System.out.println("Evidence: " + result.evidence());
+            System.out.println("Reason:   " + result.reason());
 
-    if (!result.requiredAction().isBlank()) {
-        System.out.println("Action:   " + result.requiredAction());
-    }
+            if (!result.requiredAction().isBlank()) {
+                System.out.println("Action:   " + result.requiredAction());
+            }
 
-    switch (result.severity()) {
-        case "PASS" -> passes++;
-        case "WARNING" -> warnings++;
-        case "BLOCKER" -> blockers++;
-        default -> { }
-    }
-}
+            switch (result.severity()) {
+                case "PASS" -> passes++;
+                case "WARNING" -> warnings++;
+                case "BLOCKER" -> blockers++;
+                default -> { }
+            }
+        }
 
         System.out.println("--------------------------------------------------");
         System.out.println("Summary: Pass=" + passes
@@ -634,6 +842,30 @@ private static CheckResult blocker(
     ) { }
 
 record CheckResult(
+        String severity,
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason,
+        String requiredAction
+) { }
+
+record EcnDashboardView(
+        String ecnId,
+        String title,
+        String status,
+        String affectedAssembly,
+        String effectiveDate,
+        boolean qualityApproval,
+        int passCount,
+        int warningCount,
+        int blockerCount,
+        String decision,
+        List<DashboardResultView> results
+) { }
+
+record DashboardResultView(
         String severity,
         String ruleId,
         String ruleDescription,

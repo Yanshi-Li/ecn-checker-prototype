@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ECN Reviewer Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #f5f7fb; color: #1f2937; }
+    h1 { margin-bottom: 8px; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card { background: white; border-radius: 10px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .card h3 { margin: 0 0 8px; font-size: 14px; text-transform: uppercase; color: #6b7280; }
+    .card .value { font-size: 28px; font-weight: bold; }
+    .panel { background: white; border-radius: 10px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    .severity { font-weight: bold; }
+    .PASS { color: #047857; }
+    .WARNING { color: #b45309; }
+    .BLOCKER { color: #b91c1c; }
+    .decision { font-weight: bold; padding: 6px 10px; border-radius: 999px; display: inline-block; }
+    .decision.APPROVE { background: #dcfce7; color: #166534; }
+    .decision.REVIEW { background: #fef3c7; color: #92400e; }
+    .decision.BLOCKER { background: #fee2e2; color: #991b1b; }
+  </style>
+</head>
+<body>
+  <h1>ECN Reviewer Dashboard</h1>
+  <p>This view summarizes automated ECN validation results for reviewer triage.</p>
+  <div class="summary">
+    <div class="card"><h3>Total ECNs</h3><div class="value">1</div></div>
+    <div class="card"><h3>Passes</h3><div class="value">18</div></div>
+    <div class="card"><h3>Warnings</h3><div class="value">2</div></div>
+    <div class="card"><h3>Blockers</h3><div class="value">3</div></div>
+  </div>
+  <div class="panel">
+    <h2>ECN-2026-001 - Sample ECN with intentional failures</h2>
+    <p><strong>Status:</strong> DRAFT &nbsp; <strong>Assembly:</strong> A-100 &nbsp; <strong>Effective:</strong> 2026-09-01</p>
+    <p><strong>Review decision:</strong> <span class="decision BLOCKER">BLOCKER</span></p>
+    <p><strong>Summary:</strong> Pass=18, Warning=2, Blocker=3</p>
+    <table>
+      <tr><th>Severity</th><th>Rule</th><th>Result</th><th>Action</th></tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>ECN-001</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>ECN-002</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>ECN-003</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>BOM-001</td>        <td>Line 1: Existing component 'C-200' exists in the released BOM.</td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>PART-001</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity BLOCKER">BLOCKER</td>        <td>PART-004</td>        <td>Line 1: Proposed part 'C-250' has lifecycle status OBSOLETE.</td>        <td>Select an ACTIVE part or obtain a controlled waiver.</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>BOM-003</td>        <td>Line 1: Proposed quantity is valid: 1 EA.</td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>ECN-003</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity BLOCKER">BLOCKER</td>        <td>BOM-001</td>        <td>Line 2: Existing component 'C-999' was not found in released BOM.</td>        <td>Correct the old part number or select a component from the released BOM.</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>ECN-003</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>PART-001</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>PART-004</td>        <td>Line 3: Proposed part 'C-100' has lifecycle status ACTIVE.</td>        <td>None</td>      </tr>
+      <tr>        <td class="severity WARNING">WARNING</td>        <td>BOM-002</td>        <td>Confirm whether this should be CHANGE_QUANTITY instead of ADD.</td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>BOM-003</td>        <td>Line 3: Proposed quantity is valid: 1 EA.</td>        <td>None</td>      </tr>
+      <tr>        <td class="severity WARNING">WARNING</td>        <td>REG-001</td>        <td>Obtain and record Quality approval before ECN completion.</td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>ECN-003</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>BOM-001</td>        <td>Line 4: Existing component 'C-300' exists in the released BOM.</td>        <td>None</td>      </tr>
+      <tr>        <td class="severity BLOCKER">BLOCKER</td>        <td>BOM-003</td>        <td>Line 4: Proposed quantity is 0 EA.</td>        <td>Enter a quantity greater than zero, or use REMOVE if the component should be deleted.</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>ECN-003</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>PART-001</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>PART-004</td>        <td>Line 5: Proposed part 'C-400' has lifecycle status ACTIVE.</td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>BOM-002</td>        <td></td>        <td>None</td>      </tr>
+      <tr>        <td class="severity PASS">PASS</td>        <td>BOM-003</td>        <td>Line 5: Proposed quantity is valid: 2 EA.</td>        <td>None</td>      </tr>
+    </table>
+  </div>
+</body>
+</html>
