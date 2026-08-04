@@ -7,6 +7,7 @@
       "affectedAssembly": "A-100",
       "effectiveDate": "2026-09-01",
       "qualityApproval": false,
+      "description": "Replace the obsolete capacitor with an approved alternative and adjust the affected assembly quantity for the next release.",
       "passCount": 18,
       "warningCount": 2,
       "blockerCount": 3,

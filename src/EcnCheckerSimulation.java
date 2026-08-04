@@ -421,6 +421,7 @@ public class EcnCheckerSimulation {
                 ecn.affectedAssembly(),
                 ecn.effectiveDate(),
                 ecn.qualityApproval(),
+                ecn.description(),
                 passes,
                 warnings,
                 blockers,
@@ -456,6 +457,7 @@ public class EcnCheckerSimulation {
             builder.append("      \"affectedAssembly\": \"").append(escapeJson(report.affectedAssembly())).append("\",\n");
             builder.append("      \"effectiveDate\": \"").append(escapeJson(report.effectiveDate())).append("\",\n");
             builder.append("      \"qualityApproval\": ").append(report.qualityApproval()).append(",\n");
+            builder.append("      \"description\": \"").append(escapeJson(report.description())).append("\",\n");
             builder.append("      \"passCount\": ").append(report.passCount()).append(",\n");
             builder.append("      \"warningCount\": ").append(report.warningCount()).append(",\n");
             builder.append("      \"blockerCount\": ").append(report.blockerCount()).append(",\n");
@@ -743,7 +745,8 @@ private static CheckResult blocker(
         for (String[] row : readCsvRows(file)) {
             headers.add(new EcnHeader(
                     row[0], row[1], row[2], row[3], row[4],
-                    Boolean.parseBoolean(row[5])
+                    Boolean.parseBoolean(row[5]),
+                    row.length > 6 ? row[6] : ""
             ));
         }
 
@@ -826,7 +829,8 @@ private static CheckResult blocker(
             String status,
             String affectedAssembly,
             String effectiveDate,
-            boolean qualityApproval
+            boolean qualityApproval,
+            String description
     ) { }
 
     record EcnChangeLine(
@@ -858,6 +862,7 @@ record EcnDashboardView(
         String affectedAssembly,
         String effectiveDate,
         boolean qualityApproval,
+        String description,
         int passCount,
         int warningCount,
         int blockerCount,
