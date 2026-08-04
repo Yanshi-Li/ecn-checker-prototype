@@ -1,8 +1,71 @@
-# Architecture
 
-This document outlines the proposed structure for the ECN checker prototype.
+## `docs/architecture.md`
 
-## Components
-- Data ingestion from CSV files
-- Rule evaluation engine
-- Simulation output for stakeholder review
+```markdown
+# ECN Checker Architecture — Version 1
+
+## Current prototype architecture
+
+```text
++----------------------------+
+| CSV Sample Data            |
+|----------------------------|
+| parts.csv                  |
+| master_bom.csv             |
+| ecn_header.csv             |
+| ecn_changes.csv            |
++-------------+--------------+
+              |
+              v
++----------------------------+
+| Java ECN Checker           |
+|----------------------------|
+| - CSV readers              |
+| - Part-master validation   |
+| - BOM validation           |
+| - Quantity validation      |
+| - Quality/safety checks    |
+| - Pass/Warning/Blocker     |
++-------------+--------------+
+              |
+              v
++----------------------------+
+| Console Report             |
+|----------------------------|
+| PASS / WARNING / BLOCKER   |
+| Final ECN decision         |
++----------------------------+
+
+
+
+Future Target Architecture
+
++--------------------------+
+| Windchill                |
+| ECN / Part / BOM data    |
++------------+-------------+
+             |
+             | Approved API / SDK / service
+             v
++--------------------------+
+| Windchill Adapter        |
+| Host-specific code only  |
++------------+-------------+
+             |
+             v
++--------------------------+
+| ECN Checker Core         |
+|--------------------------|
+| BOM comparison           |
+| Validation rules         |
+| Risk / workflow checks   |
+| Audit result generation  |
++------------+-------------+
+             |
+             v
++--------------------------+
+| Checker Interface        |
+|--------------------------|
+| Windchill plugin tab,    |
+| web page, or dashboard   |
++--------------------------+

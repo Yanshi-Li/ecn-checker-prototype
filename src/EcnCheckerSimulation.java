@@ -165,16 +165,26 @@ public class EcnCheckerSimulation {
         if (!exists) {
             results.add(blocker(
                     "BOM-001",
+                    "Existing component must exist in the released BOM",
                     "Line " + line.lineNumber() + ": Existing component '"
-                            + line.oldPartNumber()
-                            + "' was not found in the released BOM.",
-                    "Correct the old part number or use a component currently in the released BOM."
+                            + line.oldPartNumber() + "' was not found in released BOM.",
+                    "Searched released BOM for parent=" + ecn.affectedAssembly()
+                            + ", component=" + line.oldPartNumber()
+                            + ". No matching RELEASED record was found.",
+                    "An ECN cannot remove, replace, or change quantity for a component "
+                            + "that is not in the current released BOM.",
+                    "Correct the old part number or select a component from the released BOM."
             ));
         } else {
             results.add(pass(
                     "BOM-001",
+                    "Existing component must exist in the released BOM",
                     "Line " + line.lineNumber() + ": Existing component '"
-                            + line.oldPartNumber() + "' exists in released BOM."
+                            + line.oldPartNumber() + "' exists in the released BOM.",
+                    "Released BOM record found: parent=" + ecn.affectedAssembly()
+                            + ", component=" + line.oldPartNumber()
+                            + ", status=RELEASED.",
+                    "The ECN change refers to a valid currently released BOM component."
             ));
         }
     }
@@ -225,17 +235,28 @@ public class EcnCheckerSimulation {
 
         if (!newPart.lifecycleStatus().equals("ACTIVE")) {
             results.add(blocker(
-                    "PART-004",
-                    "Line " + line.lineNumber() + ": Proposed part '"
-                            + line.newPartNumber() + "' has lifecycle status "
-                            + newPart.lifecycleStatus() + ".",
-                    "Select an ACTIVE part or obtain a controlled waiver."
-            ));
+        "PART-004",
+        "Proposed added or replacement part must have ACTIVE lifecycle status",
+        "Line " + line.lineNumber() + ": Proposed part '"
+                + line.newPartNumber() + "' has lifecycle status "
+                + newPart.lifecycleStatus() + ".",
+        "Part master record: partNumber=" + newPart.partNumber()
+                + ", lifecycleStatus=" + newPart.lifecycleStatus(),
+        "The ECN attempts to add or replace a BOM component with a part "
+                + "that is not active. This could create supply, design, "
+                + "or production risk.",
+        "Select an ACTIVE part or obtain a controlled waiver."
+));
         } else {
             results.add(pass(
-                    "PART-004",
-                    "Line " + line.lineNumber() + ": Proposed part lifecycle is ACTIVE."
-            ));
+        "PART-004",
+        "Proposed added or replacement part must have ACTIVE lifecycle status",
+        "Line " + line.lineNumber() + ": Proposed part '"
+                + line.newPartNumber() + "' has lifecycle status ACTIVE.",
+        "Part master record: partNumber=" + newPart.partNumber()
+                + ", lifecycleStatus=ACTIVE",
+        "The proposed part is active and is eligible for further ECN review."
+));
         }
     }
 
@@ -295,15 +316,28 @@ public class EcnCheckerSimulation {
         if (line.newQuantity().compareTo(BigDecimal.ZERO) <= 0) {
             results.add(blocker(
                     "BOM-003",
-                    "Line " + line.lineNumber() + ": Proposed quantity must be greater than zero. "
-                            + "Current proposed value: " + line.newQuantity(),
-                    "Enter a valid quantity greater than zero."
+                    "Proposed BOM quantity must be greater than zero",
+                    "Line " + line.lineNumber() + ": Proposed quantity is "
+                            + line.newQuantity() + " " + line.uom() + ".",
+                    "ECN change line: action=" + line.action()
+                            + ", oldQuantity=" + line.oldQuantity()
+                            + ", newQuantity=" + line.newQuantity()
+                            + ", uom=" + line.uom(),
+                    "ADD, REPLACE, and CHANGE_QUANTITY actions require a positive "
+                            + "proposed quantity. A zero quantity is invalid.",
+                    "Enter a quantity greater than zero, or use REMOVE if the component "
+                            + "should be deleted."
             ));
         } else {
             results.add(pass(
                     "BOM-003",
+                    "Proposed BOM quantity must be greater than zero",
                     "Line " + line.lineNumber() + ": Proposed quantity is valid: "
-                            + line.newQuantity() + " " + line.uom()
+                            + line.newQuantity() + " " + line.uom() + ".",
+                    "ECN change line: action=" + line.action()
+                            + ", newQuantity=" + line.newQuantity()
+                            + ", uom=" + line.uom(),
+                    "The proposed quantity is greater than zero and is valid for this action."
             ));
         }
     }
@@ -360,20 +394,27 @@ public class EcnCheckerSimulation {
         System.out.println("--------------------------------------------------");
 
         for (CheckResult result : results) {
-            System.out.printf("[%-7s] %-8s %s%n",
-                    result.severity(), result.ruleId(), result.message());
+    System.out.println();
+    System.out.printf("[%-7s] %s — %s%n",
+            result.severity(),
+            result.ruleId(),
+            result.ruleDescription());
 
-            if (!result.requiredAction().isBlank()) {
-                System.out.println("          Action: " + result.requiredAction());
-            }
+    System.out.println("Result:   " + result.message());
+    System.out.println("Evidence: " + result.evidence());
+    System.out.println("Reason:   " + result.reason());
 
-            switch (result.severity()) {
-                case "PASS" -> passes++;
-                case "WARNING" -> warnings++;
-                case "BLOCKER" -> blockers++;
-                default -> { }
-            }
-        }
+    if (!result.requiredAction().isBlank()) {
+        System.out.println("Action:   " + result.requiredAction());
+    }
+
+    switch (result.severity()) {
+        case "PASS" -> passes++;
+        case "WARNING" -> warnings++;
+        case "BLOCKER" -> blockers++;
+        default -> { }
+    }
+}
 
         System.out.println("--------------------------------------------------");
         System.out.println("Summary: Pass=" + passes
@@ -391,17 +432,73 @@ public class EcnCheckerSimulation {
         System.out.println("==================================================");
     }
 
-    private static CheckResult pass(String ruleId, String message) {
-        return new CheckResult("PASS", ruleId, message, "");
+    private static CheckResult pass(String ruleId, String ruleDescription) {
+        return pass(ruleId, ruleDescription, "", "", "");
     }
 
-    private static CheckResult warning(String ruleId, String message, String action) {
-        return new CheckResult("WARNING", ruleId, message, action);
-    }
+    private static CheckResult pass(
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason) {
 
-    private static CheckResult blocker(String ruleId, String message, String action) {
-        return new CheckResult("BLOCKER", ruleId, message, action);
-    }
+    return new CheckResult(
+            "PASS",
+            ruleId,
+            ruleDescription,
+            message,
+            evidence,
+            reason,
+            ""
+    );
+}
+
+private static CheckResult warning(String ruleId, String ruleDescription, String message) {
+    return warning(ruleId, ruleDescription, message, "", "", "");
+}
+
+private static CheckResult warning(
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason,
+        String action) {
+
+    return new CheckResult(
+            "WARNING",
+            ruleId,
+            ruleDescription,
+            message,
+            evidence,
+            reason,
+            action
+    );
+}
+
+private static CheckResult blocker(String ruleId, String ruleDescription, String message) {
+    return blocker(ruleId, ruleDescription, message, "", "", "");
+}
+
+private static CheckResult blocker(
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason,
+        String action) {
+
+    return new CheckResult(
+            "BLOCKER",
+            ruleId,
+            ruleDescription,
+            message,
+            evidence,
+            reason,
+            action
+    );
+}
 
     // ---------------- CSV file readers ----------------
 
@@ -536,10 +633,13 @@ public class EcnCheckerSimulation {
             String uom
     ) { }
 
-    record CheckResult(
-            String severity,
-            String ruleId,
-            String message,
-            String requiredAction
-    ) { }
+record CheckResult(
+        String severity,
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason,
+        String requiredAction
+) { }
 }
