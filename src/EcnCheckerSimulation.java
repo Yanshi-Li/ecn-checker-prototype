@@ -24,19 +24,21 @@ import java.util.Map;
  */
 public class EcnCheckerSimulation {
 
-    private static final Path DATA_FOLDER = Path.of("data");
+    private static final Path DEFAULT_DATA_FOLDER = Path.of("data");
 
     public static void main(String[] args) {
         try {
-            Map<String, Part> parts = loadParts(DATA_FOLDER.resolve("parts.csv"));
-            List<BomLine> releasedBom = loadBom(DATA_FOLDER.resolve("master_bom.csv"));
-            List<EcnHeader> ecnHeaders = loadEcnHeaders(DATA_FOLDER.resolve("ecn_header.csv"));
-            List<EcnChangeLine> changes = loadEcnChanges(DATA_FOLDER.resolve("ecn_changes.csv"));
+            Path dataFolder = args.length > 0 ? Path.of(args[0]) : DEFAULT_DATA_FOLDER;
+            Map<String, Part> parts = loadParts(dataFolder.resolve("parts.csv"));
+            List<BomLine> releasedBom = loadBom(dataFolder.resolve("master_bom.csv"));
+            List<EcnHeader> ecnHeaders = loadEcnHeaders(dataFolder.resolve("ecn_header.csv"));
+            List<EcnChangeLine> changes = loadEcnChanges(dataFolder.resolve("ecn_changes.csv"));
 
             System.out.println("==================================================");
             System.out.println("          ECN CHECKER PROTOTYPE - VERSION 1      ");
             System.out.println("==================================================");
             System.out.println("Source: CSV simulation data");
+            System.out.println("Input data folder: " + dataFolder.toAbsolutePath());
             System.out.println("AI model used: No");
             System.out.println();
 
