@@ -1,0 +1,2 @@
+ecn_id,title,description,author,date,affected_parts,change_type
+ECN-2024-001,Replace Capacitor C12,Replace capacitor C12 (AB-1001) with higher-rated AB-1002 due to thermal stress failures observed in field testing.,Jane Smith,2024-07-15,AB-1001,replace
