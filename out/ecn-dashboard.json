@@ -1,18 +1,36 @@
 {
   "ecns": [
     {
-      "ecnId": "ECN-2026-005",
-      "title": "Sample from PDF file",
+      "ecnId": "ECN-2026-001",
+      "title": "Sample ECN with intentional failures",
       "status": "DRAFT",
       "affectedAssembly": "A-100",
       "effectiveDate": "2026-09-01",
       "qualityApproval": false,
-      "description": "Replace the obsolete capacitor with an approved alternative.",
-      "passCount": 6,
+      "description": "Replace capacitor <script>alert(1)</script>",
+      "passCount": 19,
       "warningCount": 2,
-      "blockerCount": 0,
-      "decision": "REVIEW",
+      "blockerCount": 4,
+      "decision": "BLOCKER",
       "results": [
+        {
+          "severity": "PASS",
+          "ruleId": "DESC-001",
+          "ruleDescription": "ECN description must have a meaningful length",
+          "message": "The ECN description contains 43 characters.",
+          "evidence": "Description length=43, allowed range=10 to 250",
+          "reason": "The description is present and has sufficient length for initial review.",
+          "requiredAction": ""
+        },
+        {
+          "severity": "BLOCKER",
+          "ruleId": "DESC-002",
+          "ruleDescription": "ECN description must contain only permitted characters",
+          "message": "The ECN description contains unsupported character(s): < >",
+          "evidence": "Description value: 'Replace capacitor <script>alert(1)</script>'",
+          "reason": "Unsupported characters can cause security, display, export, or integration issues. For example, < and > may be interpreted as markup by some systems.",
+          "requiredAction": "Remove or replace unsupported characters. Allowed characters include letters, numbers, spaces, and . , ; : ( ) / _ + & ' \" - # %"
+        },
         {
           "severity": "PASS",
           "ruleId": "ECN-001",
@@ -25,7 +43,7 @@
         {
           "severity": "PASS",
           "ruleId": "ECN-002",
-          "ruleDescription": "ECN contains 1 change line(s).",
+          "ruleDescription": "ECN contains 5 change line(s).",
           "message": "",
           "evidence": "",
           "reason": "",
@@ -42,8 +60,71 @@
         },
         {
           "severity": "PASS",
+          "ruleId": "BOM-001",
+          "ruleDescription": "Existing component must exist in the released BOM",
+          "message": "Line 1: Existing component 'C-200' exists in the released BOM.",
+          "evidence": "Released BOM record found: parent=A-100, component=C-200, status=RELEASED.",
+          "reason": "The ECN change refers to a valid currently released BOM component.",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
           "ruleId": "PART-001",
-          "ruleDescription": "Line 1: Proposed part 'C-100' exists in part master.",
+          "ruleDescription": "Line 1: Proposed part 'C-250' exists in part master.",
+          "message": "",
+          "evidence": "",
+          "reason": "",
+          "requiredAction": ""
+        },
+        {
+          "severity": "BLOCKER",
+          "ruleId": "PART-004",
+          "ruleDescription": "Proposed added or replacement part must have ACTIVE lifecycle status",
+          "message": "Line 1: Proposed part 'C-250' has lifecycle status OBSOLETE.",
+          "evidence": "Part master record: partNumber=C-250, lifecycleStatus=OBSOLETE",
+          "reason": "The ECN attempts to add or replace a BOM component with a part that is not active. This could create supply, design, or production risk.",
+          "requiredAction": "Select an ACTIVE part or obtain a controlled waiver."
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "BOM-003",
+          "ruleDescription": "Proposed BOM quantity must be greater than zero",
+          "message": "Line 1: Proposed quantity is valid: 1 EA.",
+          "evidence": "ECN change line: action=REPLACE, newQuantity=1, uom=EA",
+          "reason": "The proposed quantity is greater than zero and is valid for this action.",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "ECN-003",
+          "ruleDescription": "Line 2: Parent assembly matches ECN.",
+          "message": "",
+          "evidence": "",
+          "reason": "",
+          "requiredAction": ""
+        },
+        {
+          "severity": "BLOCKER",
+          "ruleId": "BOM-001",
+          "ruleDescription": "Existing component must exist in the released BOM",
+          "message": "Line 2: Existing component 'C-999' was not found in released BOM.",
+          "evidence": "Searched released BOM for parent=A-100, component=C-999. No matching RELEASED record was found.",
+          "reason": "An ECN cannot remove, replace, or change quantity for a component that is not in the current released BOM.",
+          "requiredAction": "Correct the old part number or select a component from the released BOM."
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "ECN-003",
+          "ruleDescription": "Line 3: Parent assembly matches ECN.",
+          "message": "",
+          "evidence": "",
+          "reason": "",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "PART-001",
+          "ruleDescription": "Line 3: Proposed part 'C-100' exists in part master.",
           "message": "",
           "evidence": "",
           "reason": "",
@@ -53,7 +134,7 @@
           "severity": "PASS",
           "ruleId": "PART-004",
           "ruleDescription": "Proposed added or replacement part must have ACTIVE lifecycle status",
-          "message": "Line 1: Proposed part 'C-100' has lifecycle status ACTIVE.",
+          "message": "Line 3: Proposed part 'C-100' has lifecycle status ACTIVE.",
           "evidence": "Part master record: partNumber=C-100, lifecycleStatus=ACTIVE",
           "reason": "The proposed part is active and is eligible for further ECN review.",
           "requiredAction": ""
@@ -61,7 +142,7 @@
         {
           "severity": "WARNING",
           "ruleId": "BOM-002",
-          "ruleDescription": "Line 1: Proposed ADD part 'C-100' already exists in the released BOM.",
+          "ruleDescription": "Line 3: Proposed ADD part 'C-100' already exists in the released BOM.",
           "message": "Confirm whether this should be CHANGE_QUANTITY instead of ADD.",
           "evidence": "",
           "reason": "",
@@ -71,7 +152,7 @@
           "severity": "PASS",
           "ruleId": "BOM-003",
           "ruleDescription": "Proposed BOM quantity must be greater than zero",
-          "message": "Line 1: Proposed quantity is valid: 1 EA.",
+          "message": "Line 3: Proposed quantity is valid: 1 EA.",
           "evidence": "ECN change line: action=ADD, newQuantity=1, uom=EA",
           "reason": "The proposed quantity is greater than zero and is valid for this action.",
           "requiredAction": ""
@@ -79,10 +160,82 @@
         {
           "severity": "WARNING",
           "ruleId": "REG-001",
-          "ruleDescription": "Line 1: Proposed part 'C-100' is safety critical, but Quality approval is false.",
+          "ruleDescription": "Line 3: Proposed part 'C-100' is safety critical, but Quality approval is false.",
           "message": "Obtain and record Quality approval before ECN completion.",
           "evidence": "",
           "reason": "",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "ECN-003",
+          "ruleDescription": "Line 4: Parent assembly matches ECN.",
+          "message": "",
+          "evidence": "",
+          "reason": "",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "BOM-001",
+          "ruleDescription": "Existing component must exist in the released BOM",
+          "message": "Line 4: Existing component 'C-300' exists in the released BOM.",
+          "evidence": "Released BOM record found: parent=A-100, component=C-300, status=RELEASED.",
+          "reason": "The ECN change refers to a valid currently released BOM component.",
+          "requiredAction": ""
+        },
+        {
+          "severity": "BLOCKER",
+          "ruleId": "BOM-003",
+          "ruleDescription": "Proposed BOM quantity must be greater than zero",
+          "message": "Line 4: Proposed quantity is 0 EA.",
+          "evidence": "ECN change line: action=CHANGE_QUANTITY, oldQuantity=4, newQuantity=0, uom=EA",
+          "reason": "ADD, REPLACE, and CHANGE_QUANTITY actions require a positive proposed quantity. A zero quantity is invalid.",
+          "requiredAction": "Enter a quantity greater than zero, or use REMOVE if the component should be deleted."
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "ECN-003",
+          "ruleDescription": "Line 5: Parent assembly matches ECN.",
+          "message": "",
+          "evidence": "",
+          "reason": "",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "PART-001",
+          "ruleDescription": "Line 5: Proposed part 'C-400' exists in part master.",
+          "message": "",
+          "evidence": "",
+          "reason": "",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "PART-004",
+          "ruleDescription": "Proposed added or replacement part must have ACTIVE lifecycle status",
+          "message": "Line 5: Proposed part 'C-400' has lifecycle status ACTIVE.",
+          "evidence": "Part master record: partNumber=C-400, lifecycleStatus=ACTIVE",
+          "reason": "The proposed part is active and is eligible for further ECN review.",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "BOM-002",
+          "ruleDescription": "Line 5: Proposed ADD part is not already in BOM.",
+          "message": "",
+          "evidence": "",
+          "reason": "",
+          "requiredAction": ""
+        },
+        {
+          "severity": "PASS",
+          "ruleId": "BOM-003",
+          "ruleDescription": "Proposed BOM quantity must be greater than zero",
+          "message": "Line 5: Proposed quantity is valid: 2 EA.",
+          "evidence": "ECN change line: action=ADD, newQuantity=2, uom=EA",
+          "reason": "The proposed quantity is greater than zero and is valid for this action.",
           "requiredAction": ""
         }
       ]

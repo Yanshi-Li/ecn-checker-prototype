@@ -38,8 +38,9 @@
 
 
 
-Future Target Architecture
+## Future Target Architecture
 
+```text
 +--------------------------+
 | Windchill                |
 | ECN / Part / BOM data    |

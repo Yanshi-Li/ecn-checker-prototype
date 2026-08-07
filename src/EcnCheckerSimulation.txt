@@ -25,22 +25,22 @@ import java.util.Map;
 public class EcnCheckerSimulation {
 
     private static final Path DEFAULT_DATA_FOLDER = Path.of("data");
-    private static final int MIN_DESCRIPTION_LENGTH = 10;
-    private static final int MAX_DESCRIPTION_LENGTH = 250;
+	private static final int MIN_DESCRIPTION_LENGTH = 10;
+	private static final int MAX_DESCRIPTION_LENGTH = 250;
 
-    /*
-     * Allowed characters for the Version 1 prototype:
-     * - Unicode letters: \p{L}
-     * - Unicode numbers: \p{N}
-     * - Spaces
-     * - Common engineering punctuation:
-     *   . , ; : ( ) / _ + & ' " - # %
-     *
-     * The rule deliberately blocks:
-     * < > { } [ ] | \ ` and control characters.
-     */
-    private static final String DESCRIPTION_ALLOWED_CHARACTERS =
-            "^[\\p{L}\\p{N}\\s.,;:()/_+&'\"\\-#%]+$";
+/*
+ * Allowed characters for the Version 1 prototype:
+ * - Unicode letters: \p{L}
+ * - Unicode numbers: \p{N}
+ * - Spaces
+ * - Common engineering punctuation:
+ *   . , ; : ( ) / _ + & ' " - # %
+ *
+ * The rule deliberately blocks:
+ * < > { } [ ] | \ ` and control characters.
+ */
+	private static final String DESCRIPTION_ALLOWED_CHARACTERS =
+        "^[\\p{L}\\p{N}\\s.,;:()/_+&'\"\\-#%]+$";
 
     public static void main(String[] args) {
         try {
@@ -80,20 +80,34 @@ public class EcnCheckerSimulation {
         }
     }
 
-    // ── runChecks ─────────────────────────────────────────────────────────────
     private static List<CheckResult> runChecks(
-            EcnHeader ecn,
-            List<EcnChangeLine> allChanges,
-            List<BomLine> releasedBom,
-            Map<String, Part> parts) {
+        EcnHeader ecn,
+        List<EcnChangeLine> allChanges,
+        List<BomLine> releasedBom,
+        Map<String, Part> parts) {
 
-        List<CheckResult> results = new ArrayList<>();
+    List<CheckResult> results = new ArrayList<>();
 
-        // First validation: ECN description quality and permitted characters.
-        checkEcnDescription(ecn, results);
+    // First validation: ECN description quality and permitted characters.
+    checkEcnDescription(ecn, results);
+	private static String findInvalidCharacters(String value) {
+    StringBuilder invalidCharacters = new StringBuilder();
 
-        // ECN-001: Affected assembly must exist in the part master.
-        Part assembly = parts.get(ecn.affectedAssembly());
+    for (char character : value.toCharArray()) {
+        String singleCharacter = String.valueOf(character);
+
+        if (!singleCharacter.matches("[\\p{L}\\p{N}\\s.,;:()/_+&'\"\\-#%]")) {
+            if (invalidCharacters.indexOf(singleCharacter) < 0) {
+                invalidCharacters.append(singleCharacter).append(" ");
+            }
+        }
+    }
+
+    return invalidCharacters.toString().trim();
+}
+
+    // Existing ECN-001 assembly validation continues below.
+    Part assembly = parts.get(ecn.affectedAssembly());
 
         if (assembly == null) {
             results.add(blocker(
@@ -140,116 +154,97 @@ public class EcnCheckerSimulation {
         }
 
         return results;
-    }   // ← runChecks ends here
+    }
+	/*
+ * DESC-001:
+ * ECN description must be present and have a meaningful length.
+ */
+private static void checkEcnDescription(
+        EcnHeader ecn,
+        List<CheckResult> results) {
 
-    // ── findInvalidCharacters ─────────────────────────────────────────────────
-    private static String findInvalidCharacters(String value) {
-        StringBuilder invalidCharacters = new StringBuilder();
+    String description = ecn.description();
 
-        for (char character : value.toCharArray()) {
-            String singleCharacter = String.valueOf(character);
-
-            if (!singleCharacter.matches("[\\p{L}\\p{N}\\s.,;:()/_+&'\"\\-#%]")) {
-                if (invalidCharacters.indexOf(singleCharacter) < 0) {
-                    invalidCharacters.append(singleCharacter).append(" ");
-                }
-            }
-        }
-
-        return invalidCharacters.toString().trim();
+    if (description == null || description.isBlank()) {
+        results.add(blocker(
+                "DESC-001",
+                "ECN description must be completed",
+                "The ECN description is blank.",
+                "ECN header field: description is empty.",
+                "Checkers and approvers need a clear description to understand "
+                        + "what is changing and why the ECN was raised.",
+                "Enter a meaningful ECN description before submission."
+        ));
+        return;
     }
 
-    // ── checkEcnDescription ───────────────────────────────────────────────────
+    int length = description.length();
+
+    if (length < MIN_DESCRIPTION_LENGTH) {
+        results.add(blocker(
+                "DESC-001",
+                "ECN description must have a meaningful length",
+                "The ECN description has only " + length + " characters. "
+                        + "Minimum required length is " + MIN_DESCRIPTION_LENGTH + ".",
+                "Description value: '" + description + "'",
+                "A very short description does not provide enough information "
+                        + "for Engineering, Quality, Manufacturing, or Procurement review.",
+                "Provide a clearer description of the proposed engineering change."
+        ));
+    } else if (length > MAX_DESCRIPTION_LENGTH) {
+        results.add(blocker(
+                "DESC-001",
+                "ECN description must have a meaningful length",
+                "The ECN description has " + length + " characters. "
+                        + "Maximum allowed length is " + MAX_DESCRIPTION_LENGTH + ".",
+                "Description length=" + length + ", maximum=" + MAX_DESCRIPTION_LENGTH,
+                "The description exceeds the Version 1 field limit and may not fit "
+                        + "in connected PLM, ERP, or reporting fields.",
+                "Shorten the description or place detailed information in an attachment."
+        ));
+    } else {
+        results.add(pass(
+                "DESC-001",
+                "ECN description must have a meaningful length",
+                "The ECN description contains " + length + " characters.",
+                "Description length=" + length
+                        + ", allowed range=" + MIN_DESCRIPTION_LENGTH
+                        + " to " + MAX_DESCRIPTION_LENGTH,
+                "The description is present and has sufficient length for initial review."
+        ));
+    }
+
     /*
-     * DESC-001:
-     * ECN description must be present and have a meaningful length.
+     * DESC-002:
+     * Check for permitted characters.
      */
-    private static void checkEcnDescription(
-            EcnHeader ecn,
-            List<CheckResult> results) {
+    if (!description.matches(DESCRIPTION_ALLOWED_CHARACTERS)) {
+        String invalidCharacters = findInvalidCharacters(description);
 
-        String description = ecn.description();
-
-        if (description == null || description.isBlank()) {
-            results.add(blocker(
-                    "DESC-001",
-                    "ECN description must be completed",
-                    "The ECN description is blank.",
-                    "ECN header field: description is empty.",
-                    "Checkers and approvers need a clear description to understand "
-                            + "what is changing and why the ECN was raised.",
-                    "Enter a meaningful ECN description before submission."
-            ));
-            return;
-        }
-
-        int length = description.length();
-
-        if (length < MIN_DESCRIPTION_LENGTH) {
-            results.add(blocker(
-                    "DESC-001",
-                    "ECN description must have a meaningful length",
-                    "The ECN description has only " + length + " characters. "
-                            + "Minimum required length is " + MIN_DESCRIPTION_LENGTH + ".",
-                    "Description value: '" + description + "'",
-                    "A very short description does not provide enough information "
-                            + "for Engineering, Quality, Manufacturing, or Procurement review.",
-                    "Provide a clearer description of the proposed engineering change."
-            ));
-        } else if (length > MAX_DESCRIPTION_LENGTH) {
-            results.add(blocker(
-                    "DESC-001",
-                    "ECN description must have a meaningful length",
-                    "The ECN description has " + length + " characters. "
-                            + "Maximum allowed length is " + MAX_DESCRIPTION_LENGTH + ".",
-                    "Description length=" + length + ", maximum=" + MAX_DESCRIPTION_LENGTH,
-                    "The description exceeds the Version 1 field limit and may not fit "
-                            + "in connected PLM, ERP, or reporting fields.",
-                    "Shorten the description or place detailed information in an attachment."
-            ));
-        } else {
-            results.add(pass(
-                    "DESC-001",
-                    "ECN description must have a meaningful length",
-                    "The ECN description contains " + length + " characters.",
-                    "Description length=" + length
-                            + ", allowed range=" + MIN_DESCRIPTION_LENGTH
-                            + " to " + MAX_DESCRIPTION_LENGTH,
-                    "The description is present and has sufficient length for initial review."
-            ));
-        }
-
-        /*
-         * DESC-002:
-         * Check for permitted characters.
-         */
-        if (!description.matches(DESCRIPTION_ALLOWED_CHARACTERS)) {
-            String invalidCharacters = findInvalidCharacters(description);
-
-            results.add(blocker(
-                    "DESC-002",
-                    "ECN description must contain only permitted characters",
-                    "The ECN description contains unsupported character(s): "
-                            + invalidCharacters,
-                    "Description value: '" + description + "'",
-                    "Unsupported characters can cause security, display, export, "
-                            + "or integration issues. For example, < and > may be "
-                            + "interpreted as markup by some systems.",
-                    "Remove or replace unsupported characters. Allowed characters include "
-                            + "letters, numbers, spaces, and . , ; : ( ) / _ + & ' \" - # %"
-            ));
-        } else {
-            results.add(pass(
-                    "DESC-002",
-                    "ECN description must contain only permitted characters",
-                    "The ECN description contains permitted characters only.",
-                    "Validated against Version 1 permitted-character rule.",
-                    "The description is suitable for the prototype input format."
-            ));
-        }
+        results.add(blocker(
+                "DESC-002",
+                "ECN description must contain only permitted characters",
+                "The ECN description contains unsupported character(s): "
+                        + invalidCharacters,
+                "Description value: '" + description + "'",
+                "Unsupported characters can cause security, display, export, "
+                        + "or integration issues. For example, < and > may be "
+                        + "interpreted as markup by some systems.",
+                "Remove or replace unsupported characters. Allowed characters include "
+                        + "letters, numbers, spaces, and . , ; : ( ) / _ + & ' \" - # %"
+        ));
+    } else {
+        results.add(pass(
+                "DESC-002",
+                "ECN description must contain only permitted characters",
+                "The ECN description contains permitted characters only.",
+                "Validated against Version 1 permitted-character rule.",
+                "The description is suitable for the prototype input format."
+        ));
     }
+}
 
-    // ── checkParentAssemblyMatchesEcn ─────────────────────────────────────────
+
     // ECN-003: Each change line must use the ECN affected assembly.
     private static void checkParentAssemblyMatchesEcn(
             EcnHeader ecn,
@@ -272,7 +267,6 @@ public class EcnCheckerSimulation {
         }
     }
 
-    // ── checkExistingPartInReleasedBom ────────────────────────────────────────
     /*
      * BOM-001:
      * REMOVE, REPLACE, and CHANGE_QUANTITY require the old part
@@ -326,7 +320,6 @@ public class EcnCheckerSimulation {
         }
     }
 
-    // ── checkNewPartExistsAndIsActive ─────────────────────────────────────────
     /*
      * PART-001: New component must exist in part master.
      * PART-004: New component lifecycle status must be ACTIVE.
@@ -373,32 +366,31 @@ public class EcnCheckerSimulation {
 
         if (!newPart.lifecycleStatus().equals("ACTIVE")) {
             results.add(blocker(
-                    "PART-004",
-                    "Proposed added or replacement part must have ACTIVE lifecycle status",
-                    "Line " + line.lineNumber() + ": Proposed part '"
-                            + line.newPartNumber() + "' has lifecycle status "
-                            + newPart.lifecycleStatus() + ".",
-                    "Part master record: partNumber=" + newPart.partNumber()
-                            + ", lifecycleStatus=" + newPart.lifecycleStatus(),
-                    "The ECN attempts to add or replace a BOM component with a part "
-                            + "that is not active. This could create supply, design, "
-                            + "or production risk.",
-                    "Select an ACTIVE part or obtain a controlled waiver."
-            ));
+        "PART-004",
+        "Proposed added or replacement part must have ACTIVE lifecycle status",
+        "Line " + line.lineNumber() + ": Proposed part '"
+                + line.newPartNumber() + "' has lifecycle status "
+                + newPart.lifecycleStatus() + ".",
+        "Part master record: partNumber=" + newPart.partNumber()
+                + ", lifecycleStatus=" + newPart.lifecycleStatus(),
+        "The ECN attempts to add or replace a BOM component with a part "
+                + "that is not active. This could create supply, design, "
+                + "or production risk.",
+        "Select an ACTIVE part or obtain a controlled waiver."
+));
         } else {
             results.add(pass(
-                    "PART-004",
-                    "Proposed added or replacement part must have ACTIVE lifecycle status",
-                    "Line " + line.lineNumber() + ": Proposed part '"
-                            + line.newPartNumber() + "' has lifecycle status ACTIVE.",
-                    "Part master record: partNumber=" + newPart.partNumber()
-                            + ", lifecycleStatus=ACTIVE",
-                    "The proposed part is active and is eligible for further ECN review."
-            ));
+        "PART-004",
+        "Proposed added or replacement part must have ACTIVE lifecycle status",
+        "Line " + line.lineNumber() + ": Proposed part '"
+                + line.newPartNumber() + "' has lifecycle status ACTIVE.",
+        "Part master record: partNumber=" + newPart.partNumber()
+                + ", lifecycleStatus=ACTIVE",
+        "The proposed part is active and is eligible for further ECN review."
+));
         }
     }
 
-    // ── checkAddedPartIsNotAlreadyInBom ───────────────────────────────────────
     /*
      * BOM-002:
      * ADD should not add a component already in the released BOM.
@@ -435,7 +427,6 @@ public class EcnCheckerSimulation {
         }
     }
 
-    // ── checkQuantity ─────────────────────────────────────────────────────────
     /*
      * BOM-003:
      * ADD, REPLACE, and CHANGE_QUANTITY must have a new quantity > 0.
@@ -482,7 +473,6 @@ public class EcnCheckerSimulation {
         }
     }
 
-    // ── checkSafetyCriticalApproval ───────────────────────────────────────────
     /*
      * REG-001:
      * New safety-critical parts require Quality approval.
@@ -520,7 +510,6 @@ public class EcnCheckerSimulation {
         }
     }
 
-    // ── buildDashboardReport ──────────────────────────────────────────────────
     private static EcnDashboardView buildDashboardReport(EcnHeader ecn, List<CheckResult> results) {
         int passes = 0;
         int warnings = 0;
@@ -528,10 +517,10 @@ public class EcnCheckerSimulation {
 
         for (CheckResult result : results) {
             switch (result.severity()) {
-                case "PASS"    -> passes++;
+                case "PASS" -> passes++;
                 case "WARNING" -> warnings++;
                 case "BLOCKER" -> blockers++;
-                default        -> { }
+                default -> { }
             }
         }
 
@@ -565,7 +554,6 @@ public class EcnCheckerSimulation {
                 dashboardResults);
     }
 
-    // ── writeDashboardOutputs ─────────────────────────────────────────────────
     private static void writeDashboardOutputs(List<EcnDashboardView> reports) throws IOException {
         Path outputDir = Path.of("out");
         Files.createDirectories(outputDir);
@@ -578,10 +566,9 @@ public class EcnCheckerSimulation {
 
         System.out.println();
         System.out.println("Reviewer dashboard generated at: " + htmlPath.toAbsolutePath());
-        System.out.println("Structured data exported to:     " + jsonPath.toAbsolutePath());
+        System.out.println("Structured data exported to: " + jsonPath.toAbsolutePath());
     }
 
-    // ── buildDashboardJson ────────────────────────────────────────────────────
     private static String buildDashboardJson(List<EcnDashboardView> reports) {
         StringBuilder builder = new StringBuilder();
         builder.append("{\n  \"ecns\": [\n");
@@ -633,7 +620,6 @@ public class EcnCheckerSimulation {
         return builder.toString();
     }
 
-    // ── buildDashboardHtml ────────────────────────────────────────────────────
     private static String buildDashboardHtml(List<EcnDashboardView> reports) {
         StringBuilder builder = new StringBuilder();
         builder.append("<!DOCTYPE html>\n");
@@ -657,7 +643,7 @@ public class EcnCheckerSimulation {
         builder.append("    .BLOCKER { color: #b91c1c; }\n");
         builder.append("    .decision { font-weight: bold; padding: 6px 10px; border-radius: 999px; display: inline-block; }\n");
         builder.append("    .decision.APPROVE { background: #dcfce7; color: #166534; }\n");
-        builder.append("    .decision.REVIEW  { background: #fef3c7; color: #92400e; }\n");
+        builder.append("    .decision.REVIEW { background: #fef3c7; color: #92400e; }\n");
         builder.append("    .decision.BLOCKER { background: #fee2e2; color: #991b1b; }\n");
         builder.append("  </style>\n");
         builder.append("</head>\n");
@@ -666,43 +652,37 @@ public class EcnCheckerSimulation {
         builder.append("  <p>This view summarizes automated ECN validation results for reviewer triage.</p>\n");
         builder.append("  <div class=\"summary\">\n");
 
-        int totalPasses   = 0;
+        int totalPasses = 0;
         int totalWarnings = 0;
         int totalBlockers = 0;
         for (EcnDashboardView report : reports) {
-            totalPasses   += report.passCount();
+            totalPasses += report.passCount();
             totalWarnings += report.warningCount();
             totalBlockers += report.blockerCount();
         }
 
-        builder.append("    <div class=\"card\"><h3>Total ECNs</h3><div class=\"value\">").append(reports.size()).append("</div></div>\n");
-        builder.append("    <div class=\"card\"><h3>Passes</h3><div class=\"value\">").append(totalPasses).append("</div></div>\n");
-        builder.append("    <div class=\"card\"><h3>Warnings</h3><div class=\"value\">").append(totalWarnings).append("</div></div>\n");
-        builder.append("    <div class=\"card\"><h3>Blockers</h3><div class=\"value\">").append(totalBlockers).append("</div></div>\n");
+        builder.append("    <div class=\"card\"><h3>Total ECNs</h3><div class=\"value\">" + reports.size() + "</div></div>\n");
+        builder.append("    <div class=\"card\"><h3>Passes</h3><div class=\"value\">" + totalPasses + "</div></div>\n");
+        builder.append("    <div class=\"card\"><h3>Warnings</h3><div class=\"value\">" + totalWarnings + "</div></div>\n");
+        builder.append("    <div class=\"card\"><h3>Blockers</h3><div class=\"value\">" + totalBlockers + "</div></div>\n");
         builder.append("  </div>\n");
 
         for (EcnDashboardView report : reports) {
             builder.append("  <div class=\"panel\">\n");
             builder.append("    <h2>").append(escapeHtml(report.ecnId())).append(" - ").append(escapeHtml(report.title())).append("</h2>\n");
-            builder.append("    <p><strong>Status:</strong> ").append(escapeHtml(report.status()))
-                   .append(" &nbsp; <strong>Assembly:</strong> ").append(escapeHtml(report.affectedAssembly()))
-                   .append(" &nbsp; <strong>Effective:</strong> ").append(escapeHtml(report.effectiveDate())).append("</p>\n");
+            builder.append("    <p><strong>Status:</strong> ").append(escapeHtml(report.status())).append(" &nbsp; <strong>Assembly:</strong> ").append(escapeHtml(report.affectedAssembly())).append(" &nbsp; <strong>Effective:</strong> ").append(escapeHtml(report.effectiveDate())).append("</p>\n");
             builder.append("    <p><strong>Review decision:</strong> <span class=\"decision ").append(report.decision()).append("\">").append(escapeHtml(report.decision())).append("</span></p>\n");
-            builder.append("    <p><strong>Summary:</strong> Pass=").append(report.passCount())
-                   .append(", Warning=").append(report.warningCount())
-                   .append(", Blocker=").append(report.blockerCount()).append("</p>\n");
+            builder.append("    <p><strong>Summary:</strong> Pass=" + report.passCount() + ", Warning=" + report.warningCount() + ", Blocker=" + report.blockerCount() + "</p>\n");
             builder.append("    <table>\n");
             builder.append("      <tr><th>Severity</th><th>Rule</th><th>Result</th><th>Action</th></tr>\n");
-
             for (DashboardResultView result : report.results()) {
                 builder.append("      <tr>");
-                builder.append("<td class=\"severity ").append(escapeHtml(result.severity())).append("\">").append(escapeHtml(result.severity())).append("</td>");
-                builder.append("<td>").append(escapeHtml(result.ruleId())).append("</td>");
-                builder.append("<td>").append(escapeHtml(result.message())).append("</td>");
-                builder.append("<td>").append(escapeHtml(result.requiredAction().isBlank() ? "None" : result.requiredAction())).append("</td>");
-                builder.append("</tr>\n");
+                builder.append("        <td class=\"severity ").append(escapeHtml(result.severity())).append("\">").append(escapeHtml(result.severity())).append("</td>");
+                builder.append("        <td>").append(escapeHtml(result.ruleId())).append("</td>");
+                builder.append("        <td>").append(escapeHtml(result.message())).append("</td>");
+                builder.append("        <td>").append(escapeHtml(result.requiredAction().isBlank() ? "None" : result.requiredAction())).append("</td>");
+                builder.append("      </tr>\n");
             }
-
             builder.append("    </table>\n");
             builder.append("  </div>\n");
         }
@@ -712,16 +692,37 @@ public class EcnCheckerSimulation {
         return builder.toString();
     }
 
-    // ── printReport ───────────────────────────────────────────────────────────
+    private static String escapeJson(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "");
+    }
+
+    private static String escapeHtml(String value) {
+        if (value == null) {
+            return "";
+        }
+
+        return value.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
+    }
+
     private static void printReport(EcnHeader ecn, List<CheckResult> results) {
-        int passes   = 0;
+        int passes = 0;
         int warnings = 0;
         int blockers = 0;
 
         System.out.println("--------------------------------------------------");
         System.out.println("ECN ID:             " + ecn.ecnId());
         System.out.println("Title:              " + ecn.title());
-        System.out.println("Description:        " + ecn.description());
+		System.out.println("Description:        " + ecn.description());
         System.out.println("Status:             " + ecn.status());
         System.out.println("Affected Assembly:  " + ecn.affectedAssembly());
         System.out.println("Effective Date:     " + ecn.effectiveDate());
@@ -744,10 +745,10 @@ public class EcnCheckerSimulation {
             }
 
             switch (result.severity()) {
-                case "PASS"    -> passes++;
+                case "PASS" -> passes++;
                 case "WARNING" -> warnings++;
                 case "BLOCKER" -> blockers++;
-                default        -> { }
+                default -> { }
             }
         }
 
@@ -767,107 +768,124 @@ public class EcnCheckerSimulation {
         System.out.println("==================================================");
     }
 
-    // ── Helper factory methods ────────────────────────────────────────────────
-
     private static CheckResult pass(String ruleId, String ruleDescription) {
         return pass(ruleId, ruleDescription, "", "", "");
     }
 
     private static CheckResult pass(
-            String ruleId,
-            String ruleDescription,
-            String message,
-            String evidence,
-            String reason) {
-        return new CheckResult("PASS", ruleId, ruleDescription, message, evidence, reason, "");
-    }
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason) {
 
-    private static CheckResult warning(String ruleId, String ruleDescription, String message) {
-        return warning(ruleId, ruleDescription, message, "", "", "");
-    }
+    return new CheckResult(
+            "PASS",
+            ruleId,
+            ruleDescription,
+            message,
+            evidence,
+            reason,
+            ""
+    );
+}
 
-    private static CheckResult warning(
-            String ruleId,
-            String ruleDescription,
-            String message,
-            String evidence,
-            String reason,
-            String action) {
-        return new CheckResult("WARNING", ruleId, ruleDescription, message, evidence, reason, action);
-    }
+private static CheckResult warning(String ruleId, String ruleDescription, String message) {
+    return warning(ruleId, ruleDescription, message, "", "", "");
+}
 
-    private static CheckResult blocker(String ruleId, String ruleDescription, String message) {
-        return blocker(ruleId, ruleDescription, message, "", "", "");
-    }
+private static CheckResult warning(
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason,
+        String action) {
 
-    private static CheckResult blocker(
-            String ruleId,
-            String ruleDescription,
-            String message,
-            String evidence,
-            String reason,
-            String action) {
-        return new CheckResult("BLOCKER", ruleId, ruleDescription, message, evidence, reason, action);
-    }
+    return new CheckResult(
+            "WARNING",
+            ruleId,
+            ruleDescription,
+            message,
+            evidence,
+            reason,
+            action
+    );
+}
 
-    // ── escapeJson / escapeHtml ───────────────────────────────────────────────
+private static CheckResult blocker(String ruleId, String ruleDescription, String message) {
+    return blocker(ruleId, ruleDescription, message, "", "", "");
+}
 
-    private static String escapeJson(String value) {
-        if (value == null) return "";
-        return value.replace("\\", "\\\\")
-                    .replace("\"", "\\\"")
-                    .replace("\n", "\\n")
-                    .replace("\r", "");
-    }
+private static CheckResult blocker(
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason,
+        String action) {
 
-    private static String escapeHtml(String value) {
-        if (value == null) return "";
-        return value.replace("&",  "&amp;")
-                    .replace("<",  "&lt;")
-                    .replace(">",  "&gt;")
-                    .replace("\"", "&quot;");
-    }
+    return new CheckResult(
+            "BLOCKER",
+            ruleId,
+            ruleDescription,
+            message,
+            evidence,
+            reason,
+            action
+    );
+}
 
-    // ── CSV file readers ──────────────────────────────────────────────────────
+    // ---------------- CSV file readers ----------------
 
     private static Map<String, Part> loadParts(Path file) throws IOException {
         Map<String, Part> parts = new HashMap<>();
+
         for (String[] row : readCsvRows(file)) {
-            Part part = new Part(row[0], row[1], row[2],
-                    Boolean.parseBoolean(row[3]), row[4]);
+            Part part = new Part(
+                    row[0], row[1], row[2],
+                    Boolean.parseBoolean(row[3]), row[4]
+            );
             parts.put(part.partNumber(), part);
         }
+
         return parts;
     }
 
     private static List<BomLine> loadBom(Path file) throws IOException {
         List<BomLine> bomLines = new ArrayList<>();
+
         for (String[] row : readCsvRows(file)) {
             bomLines.add(new BomLine(
                     row[0], row[1], new BigDecimal(row[2]),
-                    row[3], row[4], row[5]));
+                    row[3], row[4], row[5]
+            ));
         }
+
         return bomLines;
     }
 
     private static List<EcnHeader> loadEcnHeaders(Path file) throws IOException {
         List<EcnHeader> headers = new ArrayList<>();
+
         for (String[] row : readCsvRows(file)) {
             headers.add(new EcnHeader(
-                    row[0],                       // ecnId
-                    row[1],                       // title
-                    row[2],                       // description
-                    row[3],                       // status
-                    row[4],                       // affectedAssembly
-                    row[5],                       // effectiveDate
-                    Boolean.parseBoolean(row[6])  // qualityApproval
-            ));
+					row[0],                          // ecnId
+					row[1],                          // title
+					row[2],                          // description
+					row[3],                          // status
+					row[4],                          // affectedAssembly
+					row[5],                          // effectiveDate
+					Boolean.parseBoolean(row[6])     // qualityApproval
+			));
         }
+
         return headers;
     }
 
     private static List<EcnChangeLine> loadEcnChanges(Path file) throws IOException {
         List<EcnChangeLine> changes = new ArrayList<>();
+
         for (String[] row : readCsvRows(file)) {
             changes.add(new EcnChangeLine(
                     row[0],
@@ -881,6 +899,7 @@ public class EcnCheckerSimulation {
                     row[8]
             ));
         }
+
         return changes;
     }
 
@@ -911,7 +930,7 @@ public class EcnCheckerSimulation {
         return rows;
     }
 
-    // ── Domain records ────────────────────────────────────────────────────────
+    // ---------------- Domain records ----------------
 
     enum ChangeAction {
         ADD, REMOVE, REPLACE, CHANGE_QUANTITY
@@ -934,15 +953,15 @@ public class EcnCheckerSimulation {
             String status
     ) { }
 
-    record EcnHeader(
-            String ecnId,
-            String title,
-            String description,
-            String status,
-            String affectedAssembly,
-            String effectiveDate,
-            boolean qualityApproval
-    ) { }
+	record EcnHeader(
+        String ecnId,
+        String title,
+        String description,
+        String status,
+        String affectedAssembly,
+        String effectiveDate,
+        boolean qualityApproval
+	) { }
 
     record EcnChangeLine(
             String ecnId,
@@ -956,38 +975,38 @@ public class EcnCheckerSimulation {
             String uom
     ) { }
 
-    record CheckResult(
-            String severity,
-            String ruleId,
-            String ruleDescription,
-            String message,
-            String evidence,
-            String reason,
-            String requiredAction
-    ) { }
+record CheckResult(
+        String severity,
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason,
+        String requiredAction
+) { }
 
-    record EcnDashboardView(
-            String ecnId,
-            String title,
-            String status,
-            String affectedAssembly,
-            String effectiveDate,
-            boolean qualityApproval,
-            String description,
-            int passCount,
-            int warningCount,
-            int blockerCount,
-            String decision,
-            List<DashboardResultView> results
-    ) { }
+record EcnDashboardView(
+        String ecnId,
+        String title,
+        String status,
+        String affectedAssembly,
+        String effectiveDate,
+        boolean qualityApproval,
+        String description,
+        int passCount,
+        int warningCount,
+        int blockerCount,
+        String decision,
+        List<DashboardResultView> results
+) { }
 
-    record DashboardResultView(
-            String severity,
-            String ruleId,
-            String ruleDescription,
-            String message,
-            String evidence,
-            String reason,
-            String requiredAction
-    ) { }
+record DashboardResultView(
+        String severity,
+        String ruleId,
+        String ruleDescription,
+        String message,
+        String evidence,
+        String reason,
+        String requiredAction
+) { }
 }

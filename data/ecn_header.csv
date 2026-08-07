@@ -1,2 +1,2 @@
-ecnId,title,status,affectedAssembly,effectiveDate,qualityApproval,description
-ECN-2026-001,Sample ECN with intentional failures,DRAFT,A-100,2026-09-01,false,Replace the obsolete capacitor with an approved alternative and adjust the affected assembly quantity for the next release.
+ecnId,title,description,status,affectedAssembly,effectiveDate,qualityApproval
+ECN-2026-001,Sample ECN with intentional failures,Replace capacitor <script>alert(1)</script>,DRAFT,A-100,2026-09-01,false
