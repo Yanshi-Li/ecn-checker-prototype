@@ -1,9 +1,9 @@
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 from ai_assistant import generate_assistant_output
+from ecn_checker import run_checker
 from plugin_workflow import build_plugin_payload, write_plugin_dashboard
 from single_ecn_workflow import build_single_ecn_view, write_single_ecn_dashboard
 
@@ -19,13 +19,10 @@ SINGLE_ECN_HTML = OUT_DIR / "single-ecn-workflow.html"
 
 def main() -> int:
     OUT_DIR.mkdir(exist_ok=True)
-    subprocess.run(["javac", "-d", str(OUT_DIR), "src/EcnCheckerSimulation.java"], cwd=ROOT, check=True)
-    subprocess.run(["java", "-cp", str(OUT_DIR), "EcnCheckerSimulation"], cwd=ROOT, check=True)
+    dashboard = run_checker(ROOT / "data", OUT_DIR)
 
     if not DASHBOARD_JSON.exists():
         raise FileNotFoundError(f"Expected dashboard JSON at {DASHBOARD_JSON}")
-
-    dashboard = json.loads(DASHBOARD_JSON.read_text(encoding="utf-8"))
     generate_assistant_output(dashboard, AI_OUTPUT, HYBRID_HTML)
 
     plugin_payload = build_plugin_payload(dashboard)
@@ -33,11 +30,6 @@ def main() -> int:
 
     single_ecn_payload = build_single_ecn_view(dashboard)
     write_single_ecn_dashboard(single_ecn_payload, SINGLE_ECN_HTML)
-
-    print(f"AI assistant output written to {AI_OUTPUT}")
-    print(f"Hybrid dashboard written to {HYBRID_HTML}")
-    print(f"Plugin workflow view written to {PLUGIN_HTML}")
-    print(f"Single ECN workflow view written to {SINGLE_ECN_HTML}")
     return 0
 
 

@@ -1,3 +1,4 @@
+import html as html_lib
 import json
 import os
 import urllib.error
@@ -175,12 +176,12 @@ def generate_assistant_output(dashboard: Dict[str, Any], output_path: Union[Path
 </head>
 <body>
   <h1>Hybrid ECN Assistant</h1>
-  <p>This page shows AI-assisted reviewer guidance generated from the checker results.</p>
+    <p>This page shows AI-assisted reviewer guidance generated from the checker results.</p>
 """
     for ecn in ecns:
-        html += f"<div class=\"card\"><h2>{ecn['ecnId']}</h2><p><strong>Summary:</strong> {ecn['summary']}</p><p><strong>Risk:</strong> <span class=\"{ecn['riskLevel']}\">{ecn['riskLevel'].upper()}</span></p><ul>"
+        html += f"<div class=\"card\"><h2>{html_lib.escape(ecn['ecnId'])}</h2><p><strong>Summary:</strong> {html_lib.escape(ecn['summary'])}</p><p><strong>Risk:</strong> <span class=\"{html_lib.escape(ecn['riskLevel'])}\">{html_lib.escape(ecn['riskLevel'].upper())}</span></p><ul>"
         for action in ecn["reviewerActions"]:
-            html += f"<li>{action}</li>"
+            html += f"<li>{html_lib.escape(action)}</li>"
         html += "</ul></div>"
     html += "</body></html>"
     html_path.write_text(html, encoding="utf-8")

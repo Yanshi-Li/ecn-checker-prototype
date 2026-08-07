@@ -141,8 +141,8 @@ def extract_text_from_path(input_path: Path | str) -> str:
         return path.read_text(encoding="utf-8", errors="ignore")
 
     if suffix == ".eml":
-        raw_text = path.read_text(encoding="utf-8", errors="ignore")
-        return _extract_text_from_email(raw_text)
+        raw_bytes = path.read_bytes()
+        return _extract_text_from_eml_bytes(raw_bytes)
 
     if suffix == ".pdf":
         raw_bytes = path.read_bytes()
@@ -166,27 +166,33 @@ def extract_text_from_path(input_path: Path | str) -> str:
     raise ValueError(f"Unsupported input file type: {suffix}")
 
 
-def _extract_text_from_email(raw_text: str) -> str:
-    lines = []
-    in_body = False
-    for line in raw_text.splitlines():
-        if line.startswith("Content-Type:"):
-            continue
-        if not in_body and line.strip() == "":
-            in_body = True
-            continue
-        if in_body:
-            lines.append(line)
-        else:
-            lines.append(line)
-    return "\n".join(lines).strip()
+def _extract_text_from_eml_bytes(raw_bytes: bytes) -> str:
+    message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+    body_parts = []
+    if message.is_multipart():
+        for part in message.walk():
+            if part.get_content_maintype() == "text" and part.get_content_disposition() != "attachment":
+                body_parts.append(part.get_content())
+    else:
+        body_parts.append(message.get_content())
+    return "\n".join(part for part in body_parts if part).strip()
+
+
+_PDF_MAX_BYTES = 10 * 1024 * 1024   # 10 MB hard limit
+_PDF_MAX_STREAMS = 256               # maximum number of streams to extract
+_PDF_MAX_STREAM_BYTES = 512 * 1024  # maximum size of a single decompressed stream (512 KB)
 
 
 def _extract_text_from_pdf_bytes(raw_bytes: bytes) -> str:
+    if len(raw_bytes) > _PDF_MAX_BYTES:
+        raw_bytes = raw_bytes[:_PDF_MAX_BYTES]
+
     marker = b"stream"
     chunks = []
     start = 0
-    while True:
+    streams_read = 0
+
+    while streams_read < _PDF_MAX_STREAMS:
         start_index = raw_bytes.find(marker, start)
         if start_index < 0:
             break
@@ -198,14 +204,18 @@ def _extract_text_from_pdf_bytes(raw_bytes: bytes) -> str:
         if payload:
             try:
                 if b"FlateDecode" in raw_bytes[max(0, start_index - 200): start_index + 80]:
-                    payload = zlib.decompress(payload)
+                    decompressed = zlib.decompress(payload)
+                    payload = decompressed[:_PDF_MAX_STREAM_BYTES]
             except Exception:
                 pass
+            if len(payload) > _PDF_MAX_STREAM_BYTES:
+                payload = payload[:_PDF_MAX_STREAM_BYTES]
             text = payload.decode("latin-1", errors="ignore")
             text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
             if text:
                 chunks.append(text)
         start = end_index + len(b"endstream")
+        streams_read += 1
 
     if chunks:
         return "\n".join(chunks)
