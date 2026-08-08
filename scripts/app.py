@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import os
 import sys
 import csv
@@ -6,18 +6,20 @@ import io
 
 print("=== app.py starting ===", flush=True)
 
+# Must come before importing ecn_checker
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, request, render_template, jsonify
 from ecn_checker import run_checks
 
+# Resolve paths relative to repo root, not scripts/
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(
     __name__,
     template_folder=os.path.join(ROOT, "templates"),
 )
-app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB limit
 
 
 def allowed_file(filename: str) -> bool:
@@ -65,7 +67,6 @@ def upload():
 
 
 if __name__ == "__main__":
-    print(f"ROOT: {ROOT}", flush=True)
-    print(f"templates folder: {os.path.join(ROOT, 'templates')}", flush=True)
-    print(f"index.html exists: {os.path.exists(os.path.join(ROOT, 'templates', 'index.html'))}", flush=True)
+    print(f"Templates folder: {os.path.join(ROOT, 'templates')}", flush=True)
+    print(f"templates/index.html exists: {os.path.exists(os.path.join(ROOT, 'templates', 'index.html'))}", flush=True)
     app.run(debug=True, port=5000)
