@@ -1,6 +1,6 @@
 # ECN Checker Prototype — Version 1
 
-A standalone Java prototype that validates Engineering Change Notice (ECN)
+A standalone Python prototype that validates Engineering Change Notice (ECN)
 change lines against simulated master part and released Bill of Materials (BOM)
 data.
 
@@ -12,18 +12,14 @@ implemented, or completed.
 This Version 1 prototype does not require Windchill access. It uses CSV files
 to simulate data that may later be retrieved from Windchill, a PLM, or an ERP.
 
-## AI usage
+## Architecture
 
-This version now includes a hybrid AI-assisted workflow:
-
-- Java remains the deterministic rules engine.
-- Python can generate reviewer-friendly summaries and actions from the checker output.
-- If no model is configured, the system falls back to deterministic guidance.
+All validation is handled in pure Python — no Java required.
 
 ```text
 ECN CSV + Master BOM CSV + Part Master CSV
                 ↓
-          Java validation rules
+     Python validation rules (ecn_checker.py)
                 ↓
       JSON dashboard results
                 ↓
@@ -32,36 +28,86 @@ ECN CSV + Master BOM CSV + Part Master CSV
       Reviewer summary + next actions
 ```
 
-## Hybrid workflow
+## Web Upload UI
+
+ECN Creators and BOM Coordinators can validate their CSV files through a
+browser interface before submission.
+
+### Start the server
+
+```bash
+pip install flask
+python scripts/app.py
+```
+
+Then open **http://localhost:5000** in your browser.
+
+### How to use it
+
+1. Select your role — **ECN Creator** (for `ecn_header` / `ecn_changes` files)
+   or **BOM Coordinator** (for `bom` / `parts` files).
+2. Drag-and-drop or click to browse and select one or more `.csv` files.
+3. Click **Check My Files**.
+4. Review per-file errors and warnings inline — fix any issues and re-upload.
+
+## Command-line workflow
 
 Run the full pipeline with:
 
 ```bash
-python3 scripts/run_hybrid.py
+python scripts/run_hybrid.py
 ```
 
 This will:
-- compile and run the Java checker,
+- run the Python validation rules against the CSV files in `data/`,
 - generate the reviewer dashboard,
 - produce a structured AI summary JSON file,
 - and create a simple hybrid HTML view.
 
+Outputs are written to `out/`.
+
+## AI usage
+
+The workflow includes an optional AI-assisted summary step:
+
+- `ecn_checker.py` is the deterministic rules engine.
+- The Python assistant generates reviewer-friendly summaries and next actions
+  from the checker output.
+- If no model is configured, the system falls back to deterministic guidance.
+
 ### Optional LLM configuration
 
-If you want the Python assistant to use an LLM, configure one of these providers:
-
-OpenAI:
+**OpenAI:**
 
 ```bash
 export OPENAI_API_KEY=your_key
 export OPENAI_MODEL=gpt-4o-mini
 ```
 
-Ollama:
+**Ollama:**
 
 ```bash
 export OLLAMA_BASE_URL=http://localhost:11434
 export OLLAMA_MODEL=llama3.2:latest
 ```
 
-If no credentials are configured, the assistant uses the built-in deterministic fallback.
+If no credentials are configured, the assistant uses the built-in
+deterministic fallback.
+
+## Key locations
+
+| Path | Description |
+|---|---|
+| `scripts/app.py` | Flask web server — upload UI and validation endpoint |
+| `scripts/ecn_checker.py` | Core validation rule engine |
+| `scripts/run_hybrid.py` | End-to-end CLI pipeline |
+| `data/` | Sample CSV inputs used by the prototype |
+| `out/` | Generated dashboard and AI summary outputs |
+| `docs/` | Architecture, rule, and test documentation |
+| `tests/` | Regression tests |
+
+## Running tests
+
+```bash
+pytest -q
+```
