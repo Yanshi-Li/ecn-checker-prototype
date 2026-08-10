@@ -1,2 +1,4 @@
 ecnId,title,description,status,affectedAssembly,effectiveDate,qualityApproval
 ECN-2026-001,Sample ECN with intentional failures,Replace capacitor <script>alert(1)</script>,DRAFT,A-100,2026-09-01,false
+ECN-2026-002,Cost Reduction R301 Swap,Replace Resistor R301 (C-300) with lower-cost equivalent C-350 to reduce unit cost by 15%. Supplier-D has been qualified and approved.,APPROVED,A-100,2026-10-01,true
+ECN-2026-003,Stock Shortage C-200 Concession,,PENDING,A-100,,false

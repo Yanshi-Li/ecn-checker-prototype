@@ -20,3 +20,4 @@ Thumbs.db
 # Local configuration / secrets
 .env
 config-local.properties
+scripts/__pycache__/ecn_checker.cpython-313.pyc

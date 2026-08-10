@@ -6,3 +6,5 @@ C-250,Capacitor 10uF Old Version,OBSOLETE,false,Supplier-B
 C-300,Resistor 100 Ohm,ACTIVE,false,Supplier-C
 C-400,Replacement Capacitor 10uF,ACTIVE,false,Supplier-B
 C-999,Test Component,ACTIVE,false,Supplier-X
+C-350,Resistor 100 Ohm Low-Cost,ACTIVE,false,Supplier-D
+C-260,Capacitor 10uF Alternate,ACTIVE,false,Supplier-E

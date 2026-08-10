@@ -1,2 +1,4 @@
 ecn_id,title,description,author,date,affected_parts,change_type
 ECN-2024-001,Replace Capacitor C12,Replace capacitor C12 (AB-1001) with higher-rated AB-1002 due to thermal stress failures observed in field testing.,Jane Smith,2024-07-15,AB-1001,replace
+ECN-2026-002,Cost Reduction R301 Swap,Replace Resistor R301 (C-300) with lower-cost equivalent C-350. Supplier-D has been qualified. Estimated 15% unit cost saving.,Bob Jones,2026-09-15,C-300,replace
+ECN-2026-003,Stock Shortage C-200 Concession,Stock shortage of C-200 capacitor from Supplier-B. Temporary concession to use C-260 from Supplier-E until stock is replenished.,Alice Wong,2026-11-10,C-200,replace

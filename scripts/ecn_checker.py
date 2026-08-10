@@ -9,6 +9,7 @@ import csv
 import io
 import re
 from typing import Any
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -31,6 +32,27 @@ def run_checks(
     -------
     list of dicts  [{"file": str, "issues": [{"rule", "severity", "message"}]}]
     """
+    # ── Build a parts lookup for cross-file checks ───────────────────────────
+    # Key: part_number (lowercase), Value: True = active, False = obsolete/inactive
+    parts_active: dict[str, bool] = {}
+    for filename, content in file_data.items():
+        if _detect_file_type(filename, content) == "parts":
+            reader = _make_reader(content)
+            rows = list(reader)
+            if len(rows) > 1:
+                col = _col_map(rows[0])
+                for row in rows[1:]:
+                    pn = _val(row, col, "part_number").strip().lower()
+                    # Support both column naming conventions used across CSV files
+                    status = (
+                        _val(row, col, "lifecyclestatus").strip().upper()
+                        or _val(row, col, "status").strip().upper()
+                    )
+                    if pn:
+                        parts_active[pn] = status not in (
+                            "OBSOLETE", "INACTIVE", "END-OF-LIFE"
+                        )
+
     results = []
     for filename, content in file_data.items():
         issues: list[dict[str, str]] = []
@@ -41,16 +63,18 @@ def run_checks(
         headers = rows[0] if rows else []
         data_rows = rows[1:] if len(rows) > 1 else []
 
-        # ── Universal checks ────────────────────────────────────────────────
+        # ── Universal checks ─────────────────────────────────────────────────
         issues += _check_not_empty(filename, rows)
         issues += _check_no_duplicate_headers(filename, headers)
         issues += _check_no_blank_rows(filename, data_rows)
 
-        # ── File-type checks ────────────────────────────────────────────────
+        # ── File-type checks ─────────────────────────────────────────────────
         if file_type == "ecn_header":
             issues += _check_ecn_header(filename, headers, data_rows)
         elif file_type == "ecn_changes":
             issues += _check_ecn_changes(filename, headers, data_rows)
+            if parts_active:
+                issues += _check_new_part_active(filename, headers, data_rows, parts_active)
         elif file_type == "bom":
             issues += _check_bom(filename, headers, data_rows)
         elif file_type == "parts":
@@ -235,6 +259,57 @@ def _check_ecn_changes(filename: str, headers: list, data_rows: list) -> list:
             issues.append(
                 _issue("ECN-C-005", "warning",
                        f"Row {i}: old_value and new_value are identical for a 'modify' change.")
+            )
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# ECN Changes → Parts cross-file check  (rule ECN-C-006)
+# ---------------------------------------------------------------------------
+
+def _check_new_part_active(
+    filename: str,
+    headers: list,
+    data_rows: list,
+    parts_active: dict[str, bool],
+) -> list:
+    """
+    ECN-C-006: For every REPLACE or ADD row in ecn_changes, verify that
+    newPartNumber (or new_value) exists in parts.csv and is not obsolete/inactive.
+    Fires only when a parts file was also supplied in the same run_checks call.
+    """
+    issues = []
+    col = _col_map(headers)
+
+    # Support both column naming conventions
+    new_part_col = "newpartnumber" if "newpartnumber" in col else "new_value"
+    change_type_col = "change_type" if "change_type" in col else "action"
+
+    for i, row in enumerate(data_rows, start=2):
+        ct = _val(row, col, change_type_col).strip().lower()
+        if ct not in ("replace", "add"):
+            continue
+
+        new_pn = _val(row, col, new_part_col).strip()
+        if not new_pn:
+            continue
+
+        key = new_pn.lower()
+        if key not in parts_active:
+            issues.append(
+                _issue(
+                    "ECN-C-006", "error",
+                    f"Row {i}: newPartNumber '{new_pn}' not found in parts master.",
+                )
+            )
+        elif not parts_active[key]:
+            issues.append(
+                _issue(
+                    "ECN-C-006", "error",
+                    f"Row {i}: newPartNumber '{new_pn}' is OBSOLETE or INACTIVE "
+                    "and cannot be used as a replacement.",
+                )
             )
 
     return issues

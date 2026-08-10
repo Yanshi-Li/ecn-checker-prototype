@@ -28,18 +28,32 @@ def test_normalize_ecn_text_and_build_input_files(tmp_path):
 
 def test_load_ecn_from_text_and_pdf_files(tmp_path):
     text_path = tmp_path / "sample_ecn.txt"
-    text_path.write_text("ECN ID: ECN-2026-002\nTitle: Sample from text file\nAffected assembly: A-100\nQuality approval: yes\nDescription: Replace the obsolete capacitor with an approved alternative.\nChange 1: Add component C-100 quantity 1\n", encoding="utf-8")
+    text_path.write_text(
+        "ECN ID: ECN-2026-002\n"
+        "Title: Cost Reduction R301 Swap\n"
+        "Affected assembly: A-100\n"
+        "Quality approval: yes\n"
+        "Description: Replace Resistor R301 (C-300) with lower-cost equivalent C-350 to reduce unit cost by 15%. Supplier-D has been qualified and approved.\n"
+        "Change 1: Replace component C-300 with C-350 quantity 4\n",
+        encoding="utf-8"
+    )
 
     normalized_text = ecn_intake.load_ecn_from_path(text_path)
     assert normalized_text["ecnId"] == "ECN-2026-002"
+    assert normalized_text["affectedAssembly"] == "A-100"
+    assert len(normalized_text["changes"]) == 1
 
-    pdf_path = tmp_path / "sample_ecn.pdf"
+        pdf_path = tmp_path / "sample_ecn.pdf"
     pdf_path.write_bytes(
-        b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 100 >>\nstream\nECN ID: ECN-2026-003\nTitle: Sample from PDF file\nAffected assembly: A-100\nQuality approval: no\nDescription: Replace the obsolete capacitor with an approved alternative.\nChange 1: Add component C-100 quantity 1\nendstream\nendobj\n"
+        b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 100 >>\nstream\n"
+        b"ECN ID: ECN-2026-003\nTitle: Stock Shortage C-200 Concession\nAffected assembly: A-100\nQuality approval: no\n"
+        b"Description:\nChange 1: Replace component C-200 with C-260 quantity 1\nChange 2: Replace component C-100 with C-100 quantity 2\nendstream\nendobj\n"
     )
 
     normalized_pdf = ecn_intake.load_ecn_from_path(pdf_path)
     assert normalized_pdf["ecnId"] == "ECN-2026-003"
+    # ECN-2026-003 has a blank description — description should be empty or missing
+    assert normalized_pdf.get("description", "").strip() == ""
 
 
 def test_load_ecn_from_eml_file(tmp_path):
