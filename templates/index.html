@@ -1,4 +1,4 @@
-﻿!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -151,7 +151,20 @@
         <div class="form-group full">
           <label for="ecn-title">Title <span style="color:#ef4444">*</span></label>
           <input type="text" id="ecn-title" placeholder="Brief description of the change" />
+          <span class="field-hint">Avoid special characters &gt;, &lt;, :, &quot;, /, \, |, ?, *</span>
           <span class="field-error" id="err-ecn-title">Title is required</span>
+        </div>
+        <div class="form-group full">
+          <label for="ecn-reason">Reason for Change <span style="color:#ef4444">*</span></label>
+          <textarea id="ecn-reason" rows="2" placeholder="e.g. Cost Reduction — explain in plain English why this change is needed"></textarea>
+          <span class="field-hint">State why the change is being made so non-technical people can understand.</span>
+          <span class="field-error" id="err-ecn-reason">Reason for Change is required</span>
+        </div>
+        <div class="form-group full">
+          <label for="ecn-description">Description of Change <span style="color:#ef4444">*</span></label>
+          <textarea id="ecn-description" rows="4" placeholder="First paragraph: general description of the change.&#10;Subsequent paragraphs: detail each part of the change so future reviewers can understand the history."></textarea>
+          <span class="field-hint">First paragraph: general overview. Subsequent paragraphs: detail each part of the change.</span>
+          <span class="field-error" id="err-ecn-description">Description of Change is required</span>
         </div>
         <div class="form-group">
           <label for="ecn-initiator">Initiator <span style="color:#ef4444">*</span></label>
@@ -407,6 +420,8 @@
     if (!ecnNum || !/^ECN-\d{4,}$/i.test(ecnNum)) { showError("ecn-number","err-ecn-number"); valid = false; }
     if (!document.getElementById("ecn-status").value) { showError("ecn-status","err-ecn-status"); valid = false; }
     if (!document.getElementById("ecn-title").value.trim()) { showError("ecn-title","err-ecn-title"); valid = false; }
+    if (!document.getElementById("ecn-reason").value.trim()) { showError("ecn-reason","err-ecn-reason"); valid = false; }
+    if (!document.getElementById("ecn-description").value.trim()) { showError("ecn-description","err-ecn-description"); valid = false; }
     if (!document.getElementById("ecn-initiator").value.trim()) { showError("ecn-initiator","err-ecn-initiator"); valid = false; }
     if (!document.getElementById("ecn-date").value) { showError("ecn-date","err-ecn-date"); valid = false; }
     return valid;
@@ -424,13 +439,15 @@
 
   // ── Build CSVs ────────────────────────────────────────────────────
   function buildECNCSVs() {
-    const ecnNum    = document.getElementById("ecn-number").value.trim();
-    const status    = document.getElementById("ecn-status").value.trim();
-    const title     = document.getElementById("ecn-title").value.trim();
-    const initiator = document.getElementById("ecn-initiator").value.trim();
-    const date      = document.getElementById("ecn-date").value.trim();
-    const headerCSV = ["ecn_number,title,status,initiator,date_initiated",
-      `"${ecnNum}","${title}","${status}","${initiator}","${date}"`].join("\n");
+    const ecnNum      = document.getElementById("ecn-number").value.trim();
+    const status      = document.getElementById("ecn-status").value.trim();
+    const title       = document.getElementById("ecn-title").value.trim();
+    const reason      = document.getElementById("ecn-reason").value.trim();
+    const description = document.getElementById("ecn-description").value.trim();
+    const initiator   = document.getElementById("ecn-initiator").value.trim();
+    const date        = document.getElementById("ecn-date").value.trim();
+    const headerCSV = ["ecn_number,title,reason_for_change,description,status,initiator,date_initiated",
+      `"${ecnNum}","${title}","${reason.replace(/"/g,'""')}","${description.replace(/"/g,'""')}","${status}","${initiator}","${date}"`].join("\n");
     const rows = [];
     document.querySelectorAll("#changes-body tr").forEach(tr => {
       const cells = tr.querySelectorAll("input, select");

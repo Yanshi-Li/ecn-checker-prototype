@@ -9,6 +9,13 @@
 | PART-001 | Proposed part must exist in part master | Ensures traceability and valid part data | Blocker |
 | PART-004 | Proposed part must be ACTIVE | Prevents introduction of obsolete or blocked components | Blocker |
 | REG-001 | Safety-critical change requires Quality approval | Ensures controlled review of higher-risk changes | Warning |
+| ID-001 | Name of Change must be completed (marked with *) | Required to save and reserve an ECN/PCN number | Blocker |
+| ID-002 | Avoid special characters `>, <, :, ", /, \, |, ?, *` in the Name of Change | Prevents system errors or file naming conflicts | Blocker |
+| ID-003 | Project must be selected from the drop-down list | Makes it clear to Procurement and others which project is affected | Blocker |
+| ID-004 | Product Group must be selected from the drop-down list | Identifies which product group is affected by the change | Blocker |
+| ID-005 | Associated A3 field must be completed (Yes or No) | Ensures traceability of supporting A3 documents | Blocker |
+| ID-006 | If Associated A3 is Yes, the A3 number(s) must be entered | Links the ECN/PCN to its supporting A3 document for traceability | Warning |
+
 
 ## Severity definitions
 
