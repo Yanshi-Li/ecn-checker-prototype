@@ -1,23 +1,18 @@
-import json
+import html as html_lib
+import importlib.util
 from pathlib import Path
 from typing import Any, Dict, List
+
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ecn_checker import check_description_issues
 
 
 def build_plugin_payload(dashboard: Dict[str, Any]) -> Dict[str, Any]:
     plugin_ecns: List[Dict[str, Any]] = []
     for ecn in dashboard.get("ecns", []):
         description = ecn.get("description", "") or ""
-        issues = []
-        if not description.strip():
-            issues.append("ECN description is empty.")
-        elif len(description.split()) < 8:
-            issues.append("ECN description is too short for proper review.")
-
-        if "assembly" not in description.lower() and ecn.get("affectedAssembly"):
-            issues.append("Description does not mention the affected assembly.")
-
-        if "change" not in description.lower() and "replace" not in description.lower() and "remove" not in description.lower():
-            issues.append("Description does not clearly describe the requested change.")
+        issues = check_description_issues(ecn)
 
         audit_required = ecn.get("blockerCount", 0) > 0 or ecn.get("warningCount", 0) > 0
         plugin_ecns.append(
@@ -49,9 +44,9 @@ def build_plugin_payload(dashboard: Dict[str, Any]) -> Dict[str, Any]:
 def write_plugin_dashboard(payload: Dict[str, Any], output_path: Path | str) -> None:
     output_path = Path(output_path)
     html = """<!DOCTYPE html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\" />
+  <meta charset="utf-8" />
   <title>Windchill Plugin Workflow</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 24px; background: #f6f8fb; color: #1f2937; }
@@ -65,27 +60,25 @@ def write_plugin_dashboard(payload: Dict[str, Any], output_path: Path | str) -> 
     .pill.review { background: #fef3c7; color: #92400e; }
     .pill.blocker { background: #fee2e2; color: #991b1b; }
     .pill.approve { background: #dcfce7; color: #166534; }
-    .actions button { margin-right: 8px; padding: 8px 12px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; }
+    .actions button { margin-right: 8px; padding: 8px 12px; border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; }
     .actions .approve { background: #047857; }
     .actions .request { background: #b45309; }
     .actions .block { background: #b91c1c; }
   </style>
 </head>
 <body>
-  <h1>Windchill ECN Plugin Review Panel</h1>
-  <p>This view mirrors a Windchill-side reviewer experience with description checks, validation results, and BOM coordinator actions.</p>
+  <h1>Windchill Plugin Workflow Dashboard</h1>
 """
     for ecn in payload.get("ecns", []):
         summary = ecn.get("validationSummary", {})
-        html += f"<div class=\"card\"><h2>{ecn['ecnId']} - {ecn.get('title', '')}</h2>"
-        html += f"<p><strong>Affected assembly:</strong> {ecn.get('affectedAssembly', '')}</p>"
-        html += f"<p><strong>Decision:</strong> <span class=\"pill {summary.get('decision','review').lower()}\">{summary.get('decision', 'REVIEW').upper()}</span></p>"
-        html += "<div class=\"grid\">"
-        html += "<div class=\"panel\"><h3>Description</h3><p>" + (ecn.get("description") or "(empty)") + "</p>"
+        html += f"<div class=\"card\"><h2>{html_lib.escape(str(ecn.get('ecnId')))}: {html_lib.escape(str(ecn.get('title')))}</h2>"
+        html += f"<p><strong>Assembly:</strong> {html_lib.escape(str(ecn.get('affectedAssembly')))}</p><div class=\"grid\">"
+        
+        html += f"<div class=\"panel\"><h3>Description analysis</h3><p>{html_lib.escape(ecn.get('description') or '(empty)')}</p>"
         if ecn.get("descriptionIssues"):
-            html += "<p class=\"warning\"><strong>Issues:</strong></p><ul>"
+            html += "<p class=\"warning\">Issues:</p><ul>"
             for issue in ecn["descriptionIssues"]:
-                html += f"<li>{issue}</li>"
+                html += f"<li>{html_lib.escape(issue)}</li>"
             html += "</ul>"
         else:
             html += "<p class=\"ok\">No description issues detected.</p>"
@@ -94,8 +87,8 @@ def write_plugin_dashboard(payload: Dict[str, Any], output_path: Path | str) -> 
         html += "<div class=\"panel\"><h3>Validation findings</h3>"
         html += f"<p>Pass: {summary.get('passCount', 0)} | Warning: {summary.get('warningCount', 0)} | Blocker: {summary.get('blockerCount', 0)}</p>"
         for result in ecn.get("results", []):
-            severity = result.get("severity", "")
-            html += f"<p><strong>{severity}</strong>: {result.get('ruleId', '')} - {result.get('message', '')}</p>"
+            severity = html_lib.escape(result.get("severity", ""))
+            html += f"<p><strong>{severity}</strong>: {html_lib.escape(result.get('ruleId', ''))} - {html_lib.escape(result.get('message', ''))}</p>"
         html += "</div>"
 
         html += "<div class=\"panel\"><h3>BOM coordinator actions</h3>"
@@ -109,8 +102,8 @@ def write_plugin_dashboard(payload: Dict[str, Any], output_path: Path | str) -> 
         html += "<button class=\"block\">Block</button>"
         html += "</div><ul>"
         for action in ecn.get("reviewActions", []):
-            html += f"<li>{action}</li>"
-        html += "</ul></div>"
-        html += "</div></div>"
+            html += f"<li>{html_lib.escape(action)}</li>"
+        html += "</ul></div></div></div>"
+
     html += "</body></html>"
     output_path.write_text(html, encoding="utf-8")

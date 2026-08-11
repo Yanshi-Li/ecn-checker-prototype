@@ -1,0 +1,4 @@
+part_number,description,status,lifecycle_state,revision
+AB-1001,Capacitor 10uF 16V,OBSOLETE,End-of-Life,C
+AB-1002,Capacitor 10uF 25V,ACTIVE,Production,A
+AB-2001,Resistor 100ohm,ACTIVE,Production,B

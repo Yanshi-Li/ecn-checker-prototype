@@ -1,10 +1,10 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
+from ecn_checker import run_checker
 from ecn_intake import build_input_files, load_ecns_from_imap, load_ecn_from_path, normalize_ecn_text
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("input_path", nargs="?", help="Optional path to a .txt, .pdf, or .eml ECN intake file")
     parser.add_argument("--imap-host", default=os.getenv("ECN_IMAP_HOST"), help="IMAP server host")
     parser.add_argument("--imap-user", default=os.getenv("ECN_IMAP_USER"), help="IMAP username")
-    parser.add_argument("--imap-password", default=os.getenv("ECN_IMAP_PASSWORD"), help="IMAP password")
+    parser.add_argument("--imap-password", default=os.getenv("ECN_IMAP_PASSWORD"), help="IMAP password (prefer ECN_IMAP_PASSWORD env var; avoid passing secrets as CLI arguments)")
     parser.add_argument("--imap-folder", default=os.getenv("ECN_IMAP_FOLDER", "INBOX"), help="IMAP folder")
     parser.add_argument("--imap-limit", type=int, default=int(os.getenv("ECN_IMAP_LIMIT", "5")), help="Number of recent messages to process")
     args = parser.parse_args(argv)
@@ -48,8 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     build_input_files(normalized, OUT_DIR, ROOT / "data")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["javac", "-d", str(OUT_DIR), "src/EcnCheckerSimulation.java"], cwd=ROOT, check=True)
-    subprocess.run(["java", "-cp", str(OUT_DIR), "EcnCheckerSimulation", str(OUT_DIR)], cwd=ROOT, check=True)
+    run_checker(OUT_DIR, OUT_DIR)
 
     print(json.dumps(normalized, indent=2))
     return 0

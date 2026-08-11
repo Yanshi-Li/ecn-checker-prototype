@@ -1,0 +1,648 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ECN Checker - Upload</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f3f4f6; color: #1f2937; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem; }
+    header { width: 100%; max-width: 800px; margin-bottom: 2rem; }
+    header h1 { font-size: 1.6rem; font-weight: 700; color: #1d4ed8; }
+    header p { margin-top: .25rem; color: #6b7280; font-size: .95rem; }
+    .card { background: #fff; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.1); padding: 2rem; width: 100%; max-width: 800px; margin-bottom: 1.5rem; }
+
+    /* role */
+    .role-row { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+    .role-btn { flex: 1; min-width: 160px; padding: .75rem 1rem; border: 2px solid #d1d5db; border-radius: 8px; background: #fff; cursor: pointer; font-size: .95rem; font-weight: 500; color: #374151; transition: border-color .15s, background .15s, color .15s; text-align: center; }
+    .role-btn.active { border-color: #1d4ed8; background: #eff6ff; color: #1d4ed8; }
+
+    /* tabs */
+    .tab-row { display: flex; gap: 0; margin-bottom: 1.5rem; border-bottom: 2px solid #e5e7eb; }
+    .tab-btn { padding: .6rem 1.2rem; border: none; background: none; cursor: pointer; font-size: .95rem; font-weight: 500; color: #6b7280; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: color .15s, border-color .15s; }
+    .tab-btn.active { color: #1d4ed8; border-bottom-color: #1d4ed8; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* form */
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .form-group { display: flex; flex-direction: column; gap: .3rem; }
+    .form-group.full { grid-column: 1 / -1; }
+    label { font-size: .85rem; font-weight: 600; color: #374151; }
+    input[type="text"], input[type="date"], select, textarea {
+      padding: .55rem .75rem; border: 1px solid #d1d5db; border-radius: 6px;
+      font-size: .9rem; font-family: inherit; color: #1f2937;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    input[type="text"]:focus, input[type="date"]:focus, select:focus, textarea:focus {
+      outline: none; border-color: #1d4ed8; box-shadow: 0 0 0 3px rgba(29,78,216,.1);
+    }
+    input.invalid, select.invalid { border-color: #dc2626; box-shadow: 0 0 0 3px rgba(220,38,38,.1); }
+    .field-hint { font-size: .75rem; color: #9ca3af; }
+    .field-error { font-size: .75rem; color: #dc2626; display: none; }
+    .field-error.show { display: block; }
+
+    /* change table */
+    .change-table-wrap { overflow-x: auto; margin-top: .5rem; }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th { background: #f9fafb; padding: .5rem .6rem; text-align: left; font-weight: 600; border: 1px solid #e5e7eb; color: #374151; }
+    td { padding: .4rem .6rem; border: 1px solid #e5e7eb; }
+    td input, td select { width: 100%; border: none; background: transparent; font-size: .85rem; font-family: inherit; padding: .2rem; }
+    td input:focus, td select:focus { outline: 1px solid #1d4ed8; border-radius: 3px; }
+    .add-row-btn { margin-top: .5rem; padding: .4rem .9rem; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px; color: #1d4ed8; font-size: .85rem; cursor: pointer; font-weight: 500; }
+    .add-row-btn:hover { background: #dbeafe; }
+    .del-row { cursor: pointer; color: #ef4444; background: none; border: none; font-size: 1rem; padding: 0 .3rem; }
+
+    /* upload */
+    .drop-zone { border: 2px dashed #93c5fd; border-radius: 10px; padding: 2.5rem 1.5rem; text-align: center; cursor: pointer; transition: background .15s, border-color .15s; position: relative; }
+    .drop-zone.dragover { background: #eff6ff; border-color: #1d4ed8; }
+    .drop-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+    .drop-zone .icon { font-size: 2rem; margin-bottom: .5rem; }
+    .drop-zone p { color: #6b7280; font-size: .95rem; }
+    .drop-zone .hint { margin-top: .5rem; font-size: .8rem; color: #9ca3af; }
+    #file-list { margin-top: 1rem; display: flex; flex-direction: column; gap: .5rem; }
+    .file-chip { display: flex; align-items: center; gap: .5rem; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: .4rem .75rem; font-size: .875rem; }
+    .file-chip .remove { margin-left: auto; cursor: pointer; color: #ef4444; font-size: 1rem; background: none; border: none; padding: 0; }
+
+    /* submit */
+    #submit-btn { margin-top: 1.25rem; width: 100%; padding: .85rem; background: #1d4ed8; color: #fff; font-size: 1rem; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; transition: background .15s; }
+    #submit-btn:hover:not(:disabled) { background: #1e40af; }
+    #submit-btn:disabled { background: #93c5fd; cursor: not-allowed; }
+    .spinner { display: none; width: 18px; height: 18px; border: 3px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: .4rem; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* results */
+    #results { width: 100%; max-width: 800px; display: none; }
+    .results-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; flex-wrap: wrap; gap: .5rem; }
+    .results-header h2 { font-size: 1.1rem; font-weight: 700; color: #1f2937; }
+    #download-btn { padding: .5rem 1.1rem; background: #fff; border: 1px solid #d1d5db; border-radius: 6px; font-size: .875rem; font-weight: 500; cursor: pointer; color: #374151; transition: background .15s; }
+    #download-btn:hover { background: #f9fafb; }
+    .summary-bar { display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .stat { flex: 1; min-width: 120px; background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); padding: 1rem; text-align: center; }
+    .stat .num { font-size: 2rem; font-weight: 700; }
+    .stat .label { font-size: .8rem; color: #6b7280; margin-top: .2rem; }
+    .stat.errors .num { color: #dc2626; }
+    .stat.warnings .num { color: #d97706; }
+    .stat.files .num { color: #1d4ed8; }
+    .all-clear { background: #d1fae5; border: 1px solid #6ee7b7; border-radius: 10px; padding: 1.5rem; text-align: center; margin-bottom: 1rem; }
+    .all-clear .check { font-size: 2.5rem; }
+    .all-clear p { color: #065f46; font-weight: 600; margin-top: .4rem; font-size: 1rem; }
+    .file-result { margin-bottom: 1rem; }
+    .file-result summary { cursor: pointer; background: #fff; border-radius: 8px; padding: .75rem 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); display: flex; align-items: center; gap: .5rem; font-weight: 600; list-style: none; user-select: none; }
+    .file-result summary::-webkit-details-marker { display: none; }
+    .badge { font-size: .72rem; font-weight: 600; border-radius: 999px; padding: .15rem .55rem; }
+    .badge.error { background: #fee2e2; color: #dc2626; }
+    .badge.warning { background: #fef3c7; color: #d97706; }
+    .badge.ok { background: #d1fae5; color: #059669; }
+    .badge.type { background: #e0e7ff; color: #4338ca; }
+    .severity-group { margin-top: .5rem; }
+    .severity-label { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: .3rem .75rem; color: #6b7280; }
+    .issue-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .4rem; }
+    .issue-item { display: flex; align-items: flex-start; gap: .6rem; background: #fff; border-left: 4px solid #e5e7eb; border-radius: 0 6px 6px 0; padding: .55rem .75rem; font-size: .875rem; }
+    .issue-item.error { border-left-color: #dc2626; }
+    .issue-item.warning { border-left-color: #f59e0b; }
+    .issue-item .rule-id { font-family: monospace; font-size: .78rem; color: #6b7280; white-space: nowrap; padding-top: .05rem; min-width: 80px; }
+    .fix-hint { font-size: .75rem; color: #6b7280; margin-top: .2rem; font-style: italic; }
+    .no-issues { background: #d1fae5; color: #065f46; border-radius: 6px; padding: .6rem .9rem; font-size: .875rem; margin-top: .5rem; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>ECN Checker</h1>
+  <p>Validate your ECN or BOM data before submission.</p>
+</header>
+
+<div class="card">
+  <!-- Role -->
+  <div class="role-row">
+    <button class="role-btn active" data-role="ecn_creator" onclick="selectRole(this)">ECN Creator</button>
+    <button class="role-btn" data-role="bom_coordinator" onclick="selectRole(this)">BOM Coordinator</button>
+  </div>
+  <input type="hidden" id="role-input" value="ecn_creator" />
+
+  <!-- Tabs -->
+  <div class="tab-row">
+    <button class="tab-btn active" onclick="selectTab('manual')" id="tab-manual">Manual Entry</button>
+    <button class="tab-btn" onclick="selectTab('upload')" id="tab-upload">Upload CSV</button>
+  </div>
+
+  <!-- ECN MANUAL ENTRY -->
+  <div class="tab-panel active" id="panel-manual">
+    <div id="ecn-form" style="display:block">
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="ecn-number">ECN Number <span style="color:#ef4444">*</span></label>
+          <input type="text" id="ecn-number" placeholder="ECN-0001" />
+          <span class="field-hint">Format: ECN-NNNN</span>
+          <span class="field-error" id="err-ecn-number">ECN Number is required (format: ECN-0001)</span>
+        </div>
+        <div class="form-group">
+          <label for="ecn-status">Status <span style="color:#ef4444">*</span></label>
+          <select id="ecn-status">
+            <option value="">-- select --</option>
+            <option value="draft">Draft</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="released">Released</option>
+          </select>
+          <span class="field-error" id="err-ecn-status">Status is required</span>
+        </div>
+        <div class="form-group full">
+          <label for="ecn-title">Title <span style="color:#ef4444">*</span></label>
+          <input type="text" id="ecn-title" placeholder="Brief description of the change" />
+          <span class="field-hint">Avoid special characters &gt;, &lt;, :, &quot;, /, \, |, ?, *</span>
+          <span class="field-error" id="err-ecn-title">Title is required</span>
+        </div>
+        <div class="form-group full">
+          <label for="ecn-reason">Reason for Change <span style="color:#ef4444">*</span></label>
+          <textarea id="ecn-reason" rows="2" placeholder="e.g. Cost Reduction — explain in plain English why this change is needed"></textarea>
+          <span class="field-hint">State why the change is being made so non-technical people can understand.</span>
+          <span class="field-error" id="err-ecn-reason">Reason for Change is required</span>
+        </div>
+        <div class="form-group full">
+          <label for="ecn-description">Description of Change <span style="color:#ef4444">*</span></label>
+          <textarea id="ecn-description" rows="4" placeholder="First paragraph: general description of the change.&#10;Subsequent paragraphs: detail each part of the change so future reviewers can understand the history."></textarea>
+          <span class="field-hint">First paragraph: general overview. Subsequent paragraphs: detail each part of the change.</span>
+          <span class="field-error" id="err-ecn-description">Description of Change is required</span>
+        </div>
+        <div class="form-group">
+          <label for="ecn-initiator">Initiator <span style="color:#ef4444">*</span></label>
+          <input type="text" id="ecn-initiator" placeholder="Your name or employee ID" />
+          <span class="field-error" id="err-ecn-initiator">Initiator is required</span>
+        </div>
+        <div class="form-group">
+          <label for="ecn-date">Date Initiated <span style="color:#ef4444">*</span></label>
+          <input type="date" id="ecn-date" />
+          <span class="field-error" id="err-ecn-date">Date is required</span>
+        </div>
+      </div>
+      <div style="margin-top:1.5rem;">
+        <label style="font-size:.9rem;font-weight:600;color:#374151;">Change Lines</label>
+        <div class="change-table-wrap">
+          <table id="changes-table">
+            <thead>
+              <tr>
+                <th>Part Number</th>
+                <th>Change Type</th>
+                <th>Old Value</th>
+                <th>New Value</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="changes-body">
+              <tr>
+                <td><input type="text" placeholder="PN-001" /></td>
+                <td><select>
+                  <option value="">--</option>
+                  <option value="add">Add</option>
+                  <option value="remove">Remove</option>
+                  <option value="modify">Modify</option>
+                  <option value="replace">Replace</option>
+                </select></td>
+                <td><input type="text" placeholder="old value" /></td>
+                <td><input type="text" placeholder="new value" /></td>
+                <td><button class="del-row" onclick="delRow(this)">x</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <button class="add-row-btn" onclick="addRow()">+ Add Change Line</button>
+      </div>
+    </div>
+
+    <!-- BOM MANUAL ENTRY (hidden until BOM Coordinator selected) -->
+    <div id="bom-form" style="display:none">
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="bom-part">Part Number <span style="color:#ef4444">*</span></label>
+          <input type="text" id="bom-part" placeholder="PN-001" />
+          <span class="field-error" id="err-bom-part">Part Number is required</span>
+        </div>
+        <div class="form-group">
+          <label for="bom-parent">Parent Part <span style="color:#ef4444">*</span></label>
+          <input type="text" id="bom-parent" placeholder="PN-000" />
+          <span class="field-error" id="err-bom-parent">Parent Part is required</span>
+        </div>
+        <div class="form-group">
+          <label for="bom-qty">Quantity <span style="color:#ef4444">*</span></label>
+          <input type="text" id="bom-qty" placeholder="1" />
+          <span class="field-error" id="err-bom-qty">Quantity is required and must be a positive number</span>
+        </div>
+        <div class="form-group">
+          <label for="bom-uom">Unit of Measure <span style="color:#ef4444">*</span></label>
+          <select id="bom-uom">
+            <option value="">-- select --</option>
+            <option value="ea">Each (ea)</option>
+            <option value="ft">Feet (ft)</option>
+            <option value="m">Meters (m)</option>
+            <option value="kg">Kilograms (kg)</option>
+            <option value="lb">Pounds (lb)</option>
+            <option value="in">Inches (in)</option>
+            <option value="mm">Millimeters (mm)</option>
+            <option value="cm">Centimeters (cm)</option>
+            <option value="l">Liters (l)</option>
+            <option value="ml">Milliliters (ml)</option>
+            <option value="lot">Lot</option>
+          </select>
+          <span class="field-error" id="err-bom-uom">Unit of Measure is required</span>
+        </div>
+      </div>
+
+      <!-- BOM rows table -->
+      <div style="margin-top:1.5rem;">
+        <label style="font-size:.9rem;font-weight:600;color:#374151;">Additional BOM Lines</label>
+        <div class="change-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Part Number</th>
+                <th>Parent Part</th>
+                <th>Quantity</th>
+                <th>Unit of Measure</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="bom-body"></tbody>
+          </table>
+        </div>
+        <button class="add-row-btn" onclick="addBomRow()">+ Add BOM Line</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- UPLOAD CSV -->
+  <div class="tab-panel" id="panel-upload">
+    <div class="drop-zone" id="drop-zone">
+      <input type="file" id="file-input" multiple accept=".csv" />
+      <div class="icon">Upload</div>
+      <p><strong>Click to browse</strong> or drag and drop CSV files here</p>
+      <p class="hint" id="role-hint">Accepts: ecn_header, ecn_changes CSV files</p>
+    </div>
+    <div id="file-list"></div>
+  </div>
+
+  <button id="submit-btn" onclick="submitAll()">
+    <span class="spinner" id="spinner"></span>
+    Check My Input
+  </button>
+</div>
+
+<!-- Results -->
+<section id="results">
+  <div class="results-header">
+    <h2>Validation Results</h2>
+    <button id="download-btn" onclick="downloadReport()">Download Report</button>
+  </div>
+  <div class="summary-bar">
+    <div class="stat files"><div class="num" id="stat-files">0</div><div class="label">Files Checked</div></div>
+    <div class="stat errors"><div class="num" id="stat-errors">0</div><div class="label">Errors</div></div>
+    <div class="stat warnings"><div class="num" id="stat-warnings">0</div><div class="label">Warnings</div></div>
+  </div>
+  <div id="all-clear" class="all-clear" style="display:none">
+    <div class="check">&#10003;</div>
+    <p>All files passed validation. Ready to submit!</p>
+  </div>
+  <div id="file-results"></div>
+</section>
+
+<script>
+  // fix hints per rule
+  const FIX_HINTS = {
+    "GEN001": "The file appears to be empty. Check that the correct file was selected.",
+    "GEN002": "Add at least one data row below the header.",
+    "GEN003": "Remove or rename duplicate column headers.",
+    "GEN004": "Delete any blank rows from the file.",
+    "ECN-H-001": "Add the missing columns to your CSV header row.",
+    "ECN-H-002": "Use the format ECN-0001 (ECN- followed by at least 4 digits).",
+    "ECN-H-003": "Status must be one of: draft, pending, approved, rejected, released.",
+    "ECN-H-004": "Enter the date as YYYY-MM-DD, e.g. 2025-07-15.",
+    "ECN-H-005": "Enter the name or employee ID of the person initiating the ECN.",
+    "ECN-C-001": "Add the missing columns to your changes CSV header row.",
+    "ECN-C-002": "Use the format ECN-0001 (ECN- followed by at least 4 digits).",
+    "ECN-C-003": "Change type must be one of: add, remove, modify, replace.",
+    "ECN-C-004": "Every change line must have a part number.",
+    "ECN-C-005": "Old value and new value are the same — update one of them.",
+    "BOM-001": "Add the missing columns to your BOM CSV header row.",
+    "BOM-002": "Quantity must be a number greater than zero.",
+    "BOM-003": "Quantity must be a valid number (e.g. 1, 2.5).",
+    "BOM-004": "Use a standard unit: ea, ft, m, kg, lb, in, mm, cm, l, ml, lot.",
+    "BOM-005": "A part cannot be its own parent — check the part and parent part numbers.",
+    "PRT-001": "Add the missing columns to your parts CSV header row.",
+    "PRT-002": "Every row must have a part number.",
+    "PRT-003": "Remove or merge the duplicate part number.",
+    "PRT-004": "Add a description for this part.",
+    "FILE001": "Rename the file to include ecn_header, ecn_changes, bom, or parts.",
+    "UPLOAD": "Only CSV files are accepted.",
+  };
+
+  let lastResults = null;
+
+  // ── Role ──────────────────────────────────────────────────────────
+  const ROLE_HINTS = {
+    ecn_creator:     "Accepts: ecn_header, ecn_changes CSV files",
+    bom_coordinator: "Accepts: bom, parts CSV files",
+  };
+  function selectRole(btn) {
+    document.querySelectorAll(".role-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const role = btn.dataset.role;
+    document.getElementById("role-input").value = role;
+    document.getElementById("role-hint").textContent = ROLE_HINTS[role];
+    const manualTab = document.getElementById("tab-manual");
+    if (role === "bom_coordinator") {
+      manualTab.style.display = "";
+      document.getElementById("ecn-form").style.display = "none";
+      document.getElementById("bom-form").style.display = "block";
+      selectTab("manual");
+    } else {
+      manualTab.style.display = "";
+      document.getElementById("ecn-form").style.display = "block";
+      document.getElementById("bom-form").style.display = "none";
+      selectTab("manual");
+    }
+  }
+
+  // ── Tabs ──────────────────────────────────────────────────────────
+  function selectTab(name) {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+    document.getElementById("tab-" + name).classList.add("active");
+    document.getElementById("panel-" + name).classList.add("active");
+  }
+
+  // ── ECN change lines ──────────────────────────────────────────────
+  function addRow() {
+    const tbody = document.getElementById("changes-body");
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="text" placeholder="PN-001" /></td>
+      <td><select><option value="">--</option><option value="add">Add</option><option value="remove">Remove</option><option value="modify">Modify</option><option value="replace">Replace</option></select></td>
+      <td><input type="text" placeholder="old value" /></td>
+      <td><input type="text" placeholder="new value" /></td>
+      <td><button class="del-row" onclick="delRow(this)">x</button></td>`;
+    tbody.appendChild(tr);
+  }
+  function delRow(btn) {
+    const tbody = document.getElementById("changes-body");
+    if (tbody.rows.length > 1) btn.closest("tr").remove();
+  }
+
+  // ── BOM lines ────────────────────────────────────────────────────
+  function addBomRow() {
+    const tbody = document.getElementById("bom-body");
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="text" placeholder="PN-001" /></td>
+      <td><input type="text" placeholder="PN-000" /></td>
+      <td><input type="text" placeholder="1" /></td>
+      <td><select><option value="">--</option><option value="ea">ea</option><option value="ft">ft</option><option value="m">m</option><option value="kg">kg</option><option value="lb">lb</option><option value="in">in</option><option value="mm">mm</option><option value="cm">cm</option><option value="l">l</option><option value="ml">ml</option><option value="lot">lot</option></select></td>
+      <td><button class="del-row" onclick="delBomRow(this)">x</button></td>`;
+    tbody.appendChild(tr);
+  }
+  function delBomRow(btn) { btn.closest("tr").remove(); }
+
+  // ── Form validation ───────────────────────────────────────────────
+  function clearErrors() {
+    document.querySelectorAll(".invalid").forEach(el => el.classList.remove("invalid"));
+    document.querySelectorAll(".field-error").forEach(el => el.classList.remove("show"));
+  }
+  function showError(inputId, errorId) {
+    const el = document.getElementById(inputId);
+    if (el) el.classList.add("invalid");
+    const err = document.getElementById(errorId);
+    if (err) err.classList.add("show");
+  }
+  function validateECNForm() {
+    clearErrors();
+    let valid = true;
+    const ecnNum = document.getElementById("ecn-number").value.trim();
+    if (!ecnNum || !/^ECN-\d{4,}$/i.test(ecnNum)) { showError("ecn-number","err-ecn-number"); valid = false; }
+    if (!document.getElementById("ecn-status").value) { showError("ecn-status","err-ecn-status"); valid = false; }
+    if (!document.getElementById("ecn-title").value.trim()) { showError("ecn-title","err-ecn-title"); valid = false; }
+    if (!document.getElementById("ecn-reason").value.trim()) { showError("ecn-reason","err-ecn-reason"); valid = false; }
+    if (!document.getElementById("ecn-description").value.trim()) { showError("ecn-description","err-ecn-description"); valid = false; }
+    if (!document.getElementById("ecn-initiator").value.trim()) { showError("ecn-initiator","err-ecn-initiator"); valid = false; }
+    if (!document.getElementById("ecn-date").value) { showError("ecn-date","err-ecn-date"); valid = false; }
+    return valid;
+  }
+  function validateBOMForm() {
+    clearErrors();
+    let valid = true;
+    if (!document.getElementById("bom-part").value.trim()) { showError("bom-part","err-bom-part"); valid = false; }
+    if (!document.getElementById("bom-parent").value.trim()) { showError("bom-parent","err-bom-parent"); valid = false; }
+    const qty = document.getElementById("bom-qty").value.trim();
+    if (!qty || isNaN(qty) || parseFloat(qty) <= 0) { showError("bom-qty","err-bom-qty"); valid = false; }
+    if (!document.getElementById("bom-uom").value) { showError("bom-uom","err-bom-uom"); valid = false; }
+    return valid;
+  }
+
+  // ── Build CSVs ────────────────────────────────────────────────────
+  function buildECNCSVs() {
+    const ecnNum      = document.getElementById("ecn-number").value.trim();
+    const status      = document.getElementById("ecn-status").value.trim();
+    const title       = document.getElementById("ecn-title").value.trim();
+    const reason      = document.getElementById("ecn-reason").value.trim();
+    const description = document.getElementById("ecn-description").value.trim();
+    const initiator   = document.getElementById("ecn-initiator").value.trim();
+    const date        = document.getElementById("ecn-date").value.trim();
+    const headerCSV = ["ecn_number,title,reason_for_change,description,status,initiator,date_initiated",
+      `"${ecnNum}","${title}","${reason.replace(/"/g,'""')}","${description.replace(/"/g,'""')}","${status}","${initiator}","${date}"`].join("\n");
+    const rows = [];
+    document.querySelectorAll("#changes-body tr").forEach(tr => {
+      const cells = tr.querySelectorAll("input, select");
+      const pn = cells[0].value.trim(), ct = cells[1].value.trim();
+      const old = cells[2].value.trim(), nw = cells[3].value.trim();
+      if (pn || ct) rows.push(`"${ecnNum}","${pn}","${ct}","${old}","${nw}"`);
+    });
+    const changesCSV = ["ecn_number,part_number,change_type,old_value,new_value", ...rows].join("\n");
+    return { ecnNum, headerCSV, changesCSV };
+  }
+  function buildBOMCSV() {
+    const part   = document.getElementById("bom-part").value.trim();
+    const parent = document.getElementById("bom-parent").value.trim();
+    const qty    = document.getElementById("bom-qty").value.trim();
+    const uom    = document.getElementById("bom-uom").value.trim();
+    const rows   = [`"${part}","${parent}","${qty}","${uom}"`];
+    document.querySelectorAll("#bom-body tr").forEach(tr => {
+      const cells = tr.querySelectorAll("input, select");
+      const p = cells[0].value.trim(), par = cells[1].value.trim();
+      const q = cells[2].value.trim(), u = cells[3].value.trim();
+      if (p) rows.push(`"${p}","${par}","${q}","${u}"`);
+    });
+    const csv = ["part_number,parent_part,quantity,unit_of_measure", ...rows].join("\n");
+    return csv;
+  }
+
+  // ── File upload ───────────────────────────────────────────────────
+  let selectedFiles = [];
+  const fileInput = document.getElementById("file-input");
+  const dropZone  = document.getElementById("drop-zone");
+  const fileList  = document.getElementById("file-list");
+  fileInput.addEventListener("change", () => addFiles(fileInput.files));
+  dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("dragover"); });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
+  dropZone.addEventListener("drop", e => { e.preventDefault(); dropZone.classList.remove("dragover"); addFiles(e.dataTransfer.files); });
+  function addFiles(list) {
+    for (const f of list) {
+      if (!f.name.toLowerCase().endsWith(".csv")) continue;
+      if (selectedFiles.some(x => x.name === f.name)) continue;
+      selectedFiles.push(f);
+    }
+    renderFileList();
+  }
+  function removeFile(name) { selectedFiles = selectedFiles.filter(f => f.name !== name); renderFileList(); }
+  function renderFileList() {
+    fileList.innerHTML = "";
+    for (const f of selectedFiles) {
+      const chip = document.createElement("div");
+      chip.className = "file-chip";
+      chip.innerHTML = `<span>File:</span><span>${escHtml(f.name)}</span><span style="color:#9ca3af;font-size:.8rem">${(f.size/1024).toFixed(1)} KB</span><button class="remove" onclick="removeFile('${escHtml(f.name)}')">X</button>`;
+      fileList.appendChild(chip);
+    }
+  }
+
+  // ── Submit ────────────────────────────────────────────────────────
+  async function submitAll() {
+    const role      = document.getElementById("role-input").value;
+    const activeTab = document.querySelector(".tab-btn.active").id.replace("tab-", "");
+    const formData  = new FormData();
+    formData.append("role", role);
+
+    if (activeTab === "manual") {
+      if (role === "ecn_creator") {
+        if (!validateECNForm()) return;
+        const { ecnNum, headerCSV, changesCSV } = buildECNCSVs();
+        formData.append("files", new Blob([headerCSV],  { type: "text/csv" }), `${ecnNum}_ecn_header.csv`);
+        formData.append("files", new Blob([changesCSV], { type: "text/csv" }), `${ecnNum}_ecn_changes.csv`);
+      } else {
+        if (!validateBOMForm()) return;
+        const bomCSV = buildBOMCSV();
+        formData.append("files", new Blob([bomCSV], { type: "text/csv" }), `bom_entry.csv`);
+      }
+    } else {
+      if (selectedFiles.length === 0) { alert("Please select at least one CSV file."); return; }
+      selectedFiles.forEach(f => formData.append("files", f));
+    }
+
+    const btn = document.getElementById("submit-btn");
+    btn.disabled = true;
+    document.getElementById("spinner").style.display = "inline-block";
+    try {
+      const resp = await fetch("/upload", { method: "POST", body: formData });
+      const data = await resp.json();
+      lastResults = data;
+      renderResults(data);
+    } catch (err) {
+      alert("Upload failed: " + err.message);
+    } finally {
+      btn.disabled = false;
+      document.getElementById("spinner").style.display = "none";
+    }
+  }
+
+  // ── Render results ────────────────────────────────────────────────
+  function renderResults(data) {
+    if (data.error) { alert(data.error); return; }
+    const s = data.summary;
+    document.getElementById("stat-files").textContent    = s.total_files;
+    document.getElementById("stat-errors").textContent   = s.errors;
+    document.getElementById("stat-warnings").textContent = s.warnings;
+
+    const allClear = s.errors === 0 && s.warnings === 0;
+    document.getElementById("all-clear").style.display = allClear ? "block" : "none";
+
+    const container = document.getElementById("file-results");
+    container.innerHTML = "";
+
+    for (const r of data.results) {
+      const issues   = r.issues || [];
+      const errors   = issues.filter(i => i.severity === "error");
+      const warnings = issues.filter(i => i.severity === "warning");
+
+      const detail = document.createElement("details");
+      detail.className = "file-result";
+      detail.open = issues.length > 0;
+
+      const errBadge  = errors.length   ? `<span class="badge error">${errors.length} error${errors.length>1?"s":""}</span>` : "";
+      const warnBadge = warnings.length ? `<span class="badge warning">${warnings.length} warning${warnings.length>1?"s":""}</span>` : "";
+      const okBadge   = issues.length === 0 ? `<span class="badge ok">OK</span>` : "";
+      const typeBadge = r.file_type && r.file_type !== "unknown" ? `<span class="badge type">${r.file_type}</span>` : "";
+
+      detail.innerHTML = `<summary>${escHtml(r.file)} ${typeBadge}${errBadge}${warnBadge}${okBadge}</summary>`;
+
+      if (issues.length === 0) {
+        const ok = document.createElement("p");
+        ok.className = "no-issues";
+        ok.textContent = "No issues found - this file looks good!";
+        detail.appendChild(ok);
+      } else {
+        // errors first, then warnings
+        [["error", errors], ["warning", warnings]].forEach(([sev, group]) => {
+          if (!group.length) return;
+          const groupDiv = document.createElement("div");
+          groupDiv.className = "severity-group";
+          const lbl = document.createElement("div");
+          lbl.className = "severity-label";
+          lbl.textContent = sev === "error" ? "Errors" : "Warnings";
+          groupDiv.appendChild(lbl);
+          const ul = document.createElement("ul");
+          ul.className = "issue-list";
+          for (const issue of group) {
+            const li = document.createElement("li");
+            li.className = `issue-item ${issue.severity}`;
+            const hint = FIX_HINTS[issue.rule] || "";
+            li.innerHTML = `
+              <span class="rule-id">${escHtml(issue.rule)}</span>
+              <span>
+                ${escHtml(issue.message)}
+                ${hint ? `<div class="fix-hint">Fix: ${escHtml(hint)}</div>` : ""}
+              </span>`;
+            ul.appendChild(li);
+          }
+          groupDiv.appendChild(ul);
+          detail.appendChild(groupDiv);
+        });
+      }
+      container.appendChild(detail);
+    }
+
+    document.getElementById("results").style.display = "block";
+    document.getElementById("results").scrollIntoView({ behavior: "smooth" });
+  }
+
+  // ── Download report ───────────────────────────────────────────────
+  function downloadReport() {
+    if (!lastResults) return;
+    const lines = ["ECN Checker Validation Report", "=".repeat(40), ""];
+    const s = lastResults.summary;
+    lines.push(`Files Checked : ${s.total_files}`);
+    lines.push(`Errors        : ${s.errors}`);
+    lines.push(`Warnings      : ${s.warnings}`);
+    lines.push("");
+    for (const r of lastResults.results) {
+      lines.push(`File: ${r.file} [${r.file_type || "unknown"}]`);
+      const issues = r.issues || [];
+      if (issues.length === 0) {
+        lines.push("  No issues found.");
+      } else {
+        for (const i of issues) {
+          lines.push(`  [${i.severity.toUpperCase()}] ${i.rule}: ${i.message}`);
+          if (FIX_HINTS[i.rule]) lines.push(`    Fix: ${FIX_HINTS[i.rule]}`);
+        }
+      }
+      lines.push("");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `ecn_validation_report_${new Date().toISOString().slice(0,10)}.txt`;
+    a.click();
+  }
+
+  function escHtml(str) {
+    return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+</script>
+</body>
+</html>
