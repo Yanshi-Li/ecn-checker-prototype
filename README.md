@@ -10,7 +10,8 @@ The prototype demonstrates ECN checks before an ECN is submitted, approved,
 implemented, or completed.
 
 This Version 1 prototype does not require Windchill access. It uses CSV files
-to simulate data that may later be retrieved from Windchill, a PLM, or an ERP.
+and PDF/email intake sources to simulate data that may later be retrieved from
+Windchill, a PLM, or an ERP.
 
 ## Architecture
 

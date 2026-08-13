@@ -1,12 +1,23 @@
 # ECN Checker — Architecture
 
+## Prototype workflow scope
+
+The prototype is designed to handle a mix of intake sources commonly seen in ECN and BOM workflows:
+
+- email-based ECN submissions (.eml / plain-text messages)
+- form-style ECN text captured from a web form or internal intake template
+- uploaded document files such as PDF and text exports
+- CSV / Excel BOM or parts data supplied alongside the ECN
+
+The intake layer normalises these inputs into a common ECN packet before the rule engine runs.
+
 ## Pipeline Overview
 
-Engineer submits ECN + BOM File
+Engineer submits ECN + BOM File from email / form / upload
         │
         ▼
 ┌─────────────────────┐
-│  Stage 1: Intake    │  CSV / Excel / PDF → Structured ECN Packet
+│  Stage 1: Intake    │  Email / PDF / Form / CSV → Structured ECN Packet
 └────────┬────────────┘
          │ Structured Data
          ▼

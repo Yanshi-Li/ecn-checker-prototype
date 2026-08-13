@@ -440,3 +440,109 @@ def _is_iso_date(value: str) -> bool:
 
 def _issue(rule: str, severity: str, message: str) -> dict[str, str]:
     return {"rule": rule, "severity": severity, "message": message}
+
+
+def run_checker(data_dir: str | "os.PathLike[str]", output_dir: str | "os.PathLike[str]" | None = None) -> dict[str, Any]:
+    """Run the checker against a directory of ECN CSV samples and write the dashboard JSON."""
+    import json
+    from os import PathLike
+    from pathlib import Path
+
+    data_path = Path(data_dir)
+    out_path = Path(output_dir) if output_dir is not None else data_path
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    file_data: dict[str, str] = {}
+    for csv_name in ["ecn_header.csv", "ecn_changes.csv", "parts.csv", "bom.csv"]:
+        csv_path = data_path / csv_name
+        if csv_path.exists():
+            file_data[csv_name] = csv_path.read_text(encoding="utf-8")
+
+    results = run_checks(file_data)
+    header_rows = list(csv.DictReader(io.StringIO(file_data.get("ecn_header.csv", "")))) if "ecn_header.csv" in file_data else []
+    change_rows = list(csv.DictReader(io.StringIO(file_data.get("ecn_changes.csv", "")))) if "ecn_changes.csv" in file_data else []
+
+    parts_lookup: dict[str, str] = {}
+    if "parts.csv" in file_data:
+        for row in csv.DictReader(io.StringIO(file_data["parts.csv"])):
+            pn = (row.get("partNumber") or row.get("part_number") or "").strip()
+            if pn:
+                parts_lookup[pn.lower()] = pn
+
+    dashboard_rows: list[dict[str, Any]] = []
+    for row in header_rows:
+        ecn_id = (row.get("ecnId") or row.get("ecn_number") or "").strip()
+        if not ecn_id:
+            continue
+
+        blocker_count = 0
+        warning_count = 0
+
+        description = (row.get("description") or "").strip()
+        if not description:
+            warning_count += 1
+        if "<script>" in description.lower():
+            blocker_count += 1
+
+        effective_date = (row.get("effectiveDate") or row.get("date_initiated") or "").strip()
+        if not effective_date:
+            warning_count += 1
+        elif not re.match(r"^\d{4}-\d{2}-\d{2}$", effective_date):
+            warning_count += 1
+
+        title = (row.get("title") or "").strip()
+        if not title or len(title.split()) < 2:
+            blocker_count += 1
+
+        status = (row.get("status") or "").strip().lower()
+        if status and status not in {"draft", "pending", "approved", "rejected", "released"}:
+            warning_count += 1
+
+        for change_row in change_rows:
+            change_ecn = (change_row.get("ecnId") or change_row.get("ecn_number") or "").strip()
+            if change_ecn != ecn_id:
+                continue
+
+            action = (change_row.get("action") or change_row.get("change_type") or "").strip().lower()
+            if action not in {"add", "remove", "modify", "replace", "change_quantity"}:
+                blocker_count += 1
+
+            new_part = (change_row.get("newPartNumber") or change_row.get("new_value") or change_row.get("Part_Number") or "").strip()
+            if action in {"add", "replace"} and not new_part:
+                blocker_count += 1
+
+            qty_raw = (change_row.get("newQuantity") or change_row.get("new_value") or change_row.get("quantity") or "").strip()
+            if qty_raw:
+                try:
+                    qty = float(qty_raw)
+                    if qty <= 0:
+                        blocker_count += 1
+                except ValueError:
+                    blocker_count += 1
+
+            if new_part and new_part.lower() not in parts_lookup and action in {"add", "replace"}:
+                blocker_count += 1
+
+            if action == "remove" and not (change_row.get("oldPartNumber") or change_row.get("old_value")):
+                blocker_count += 1
+
+        if blocker_count > 0:
+            decision = "BLOCKER"
+        elif warning_count > 0:
+            decision = "WARNING"
+        else:
+            decision = "PASS"
+
+        dashboard_rows.append({
+            "ecnId": ecn_id,
+            "title": title,
+            "status": row.get("status") or "DRAFT",
+            "blockerCount": blocker_count,
+            "warningCount": warning_count,
+            "decision": decision,
+        })
+
+    payload = {"ecns": dashboard_rows, "generatedBy": "ecn_checker.run_checker"}
+    json_path = out_path / "ecn-dashboard.json"
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
