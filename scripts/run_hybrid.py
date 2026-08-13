@@ -22,7 +22,7 @@ def _load(name: str):
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
-    print(f"  [loader] {name} → {path}")
+    print(f"  [loader] {name} -> {path}")
     return mod
 
 
