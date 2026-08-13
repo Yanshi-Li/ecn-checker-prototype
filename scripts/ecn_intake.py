@@ -51,7 +51,7 @@ def normalize_ecn_text(raw_text: str) -> Dict[str, Any]:
         "affectedAssembly": affected_assembly,
         "effectiveDate": "2026-09-01",
         "qualityApproval": quality_approval,
-        "description": description or "ECN captured from intake source.",
+        "description": description,
         "changes": changes,
     }
 
@@ -133,6 +133,13 @@ def parse_change_line(change_text: str) -> Dict[str, Any]:
     }
 
 
+def _looks_like_ecn_text(text: str) -> bool:
+    if not text:
+        return False
+    normalized = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+    return bool(re.search(r"\bECN\b|\bTitle\b|Affected assembly|Quality approval|Change \d+:", normalized, flags=re.IGNORECASE))
+
+
 def extract_text_from_path(input_path: Path | str) -> str:
     path = Path(input_path)
     suffix = path.suffix.lower()
@@ -150,18 +157,23 @@ def extract_text_from_path(input_path: Path | str) -> str:
             if importlib.util.find_spec(module_name):
                 try:
                     module = __import__(module_name)
-                    if module_name == "pypdf":
+                    if module_name in {"pypdf", "PyPDF2"}:
                         reader = module.PdfReader(str(path))
-                        return "\n".join(page.extract_text() or "" for page in reader.pages)
-                    if module_name == "PyPDF2":
-                        reader = module.PdfReader(str(path))
-                        return "\n".join(page.extract_text() or "" for page in reader.pages)
+                        extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+                        if _looks_like_ecn_text(extracted):
+                            return extracted
                     if module_name == "pdfplumber":
                         with module.open(str(path)) as handle:
-                            return "\n".join(page.extract_text() or "" for page in handle.pages)
+                            extracted = "\n".join(page.extract_text() or "" for page in handle.pages)
+                            if _looks_like_ecn_text(extracted):
+                                return extracted
                 except Exception:
                     continue
-        return _extract_text_from_pdf_bytes(raw_bytes)
+
+        fallback = _extract_text_from_pdf_bytes(raw_bytes)
+        if _looks_like_ecn_text(fallback):
+            return fallback
+        return ""
 
     raise ValueError(f"Unsupported input file type: {suffix}")
 

@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+from fpdf import FPDF
+
 
 spec = importlib.util.spec_from_file_location("ecn_intake", "scripts/ecn_intake.py")
 ecn_intake = importlib.util.module_from_spec(spec)
@@ -43,7 +45,7 @@ def test_load_ecn_from_text_and_pdf_files(tmp_path):
     assert normalized_text["affectedAssembly"] == "A-100"
     assert len(normalized_text["changes"]) == 1
 
-        pdf_path = tmp_path / "sample_ecn.pdf"
+    pdf_path = tmp_path / "sample_ecn.pdf"
     pdf_path.write_bytes(
         b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 100 >>\nstream\n"
         b"ECN ID: ECN-2026-003\nTitle: Stock Shortage C-200 Concession\nAffected assembly: A-100\nQuality approval: no\n"
@@ -54,6 +56,31 @@ def test_load_ecn_from_text_and_pdf_files(tmp_path):
     assert normalized_pdf["ecnId"] == "ECN-2026-003"
     # ECN-2026-003 has a blank description — description should be empty or missing
     assert normalized_pdf.get("description", "").strip() == ""
+
+
+def test_load_ecn_from_generated_pdf_file(tmp_path):
+    pdf_path = tmp_path / "generated_ecn.pdf"
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12)
+    pdf.multi_cell(
+        0,
+        8,
+        "ECN ID: ECN-2026-999\n"
+        "Title: PDF Extraction Test\n"
+        "Affected assembly: A-100\n"
+        "Quality approval: no\n"
+        "Description: Replace obsolete capacitor with approved alternative.\n"
+        "Change 1: Replace component C-200 with C-250 quantity 1",
+    )
+    pdf.output(str(pdf_path))
+
+    normalized_pdf = ecn_intake.load_ecn_from_path(pdf_path)
+    assert normalized_pdf["ecnId"] == "ECN-2026-999"
+    assert normalized_pdf["title"] == "PDF Extraction Test"
+    assert normalized_pdf["affectedAssembly"] == "A-100"
+    assert normalized_pdf["description"] == "Replace obsolete capacitor with approved alternative."
+    assert len(normalized_pdf["changes"]) == 1
 
 
 def test_load_ecn_from_eml_file(tmp_path):
