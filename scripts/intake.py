@@ -10,6 +10,7 @@ import logging
 import re
 from email import policy
 from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
 from html import unescape
 from pathlib import Path
 
@@ -257,6 +258,18 @@ def _extract_email_body(raw_bytes: bytes) -> str:
     return combined.strip()
 
 
+def _normalize_email_date(value: str) -> str:
+    """Convert RFC 2822 email dates to YYYY-MM-DD when possible."""
+    if not value:
+        return ""
+    cleaned = value.strip().strip("\"'")
+    try:
+        dt = parsedate_to_datetime(cleaned)
+        return dt.strftime("%Y-%m-%d")
+    except (TypeError, ValueError, IndexError):
+        return cleaned
+
+
 def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
     """Normalize an email body into the same ECN header schema used by the pipeline."""
     text = (email_text or "").strip()
@@ -307,7 +320,7 @@ def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
         "title": fields.get("title") or "ECN from email",
         "description": fields.get("description") or "",
         "author": fields.get("author") or from_header or "email-submitter",
-        "date": fields.get("date") or "",
+        "date": _normalize_email_date(fields.get("date") or ""),
         "affected_parts": fields.get("affected_parts") or "",
         "change_type": (fields.get("change_type") or "modify").strip().lower(),
     }
@@ -338,7 +351,7 @@ def load_email(filepath: str) -> dict:
 
     header = _parse_email_header_fields(email_text, from_header=from_header)
     if not header.get("date") and date_header:
-        header["date"] = date_header
+        header["date"] = _normalize_email_date(date_header)
     if not header.get("title") and subject_header:
         header["title"] = subject_header
     return header

@@ -112,4 +112,5 @@ def test_load_html_email_body(tmp_path):
     assert data["ecn_id"] == "ECN-2026-008"
     assert data["title"] == "HTML Email Intake"
     assert data["change_type"] == "replace"
+    assert data["date"] == "2026-08-12"
     assert "legacy voltage regulator" in data["description"].lower()
