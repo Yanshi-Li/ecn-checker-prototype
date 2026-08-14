@@ -18,6 +18,20 @@ Each scenario validates the same downstream flow:
 5. run context checks against lifecycle / historical ECN data
 6. generate a reviewer summary and recommended decision
 
+## Node 3 semantic advisory test matrix
+
+The AI advisory stage now tracks the semantic checks defined in the ECN intake mapping:
+
+| Rule | Semantic expectation | Test focus |
+|---|---|---|
+| A01 | Description semantically aligns to BOM change intent | Flag missing BOM context when BOM parts are not described |
+| A02 | Parts mentioned in description appear in BOM rows | Flag description-only parts not present in BOM |
+| A03 | Description verbs align with BOM task/action | Flag contradiction between "replace/add/remove" language and BOM action |
+| A04 | Products affected align with BOM parent assemblies | Flag mismatch between `affected_parts` and BOM parent assembly fields |
+| A05 | Part description starts with naming noun | Flag part descriptions that start with action verbs (for example "Replace ...") |
+
+Coverage is implemented in [test_ai_advisory.py](C:/Users/liy/FPA-Internship/repo/ecn-checker-prototype.worktrees/ai-advisory-module-testing/tests/test_ai_advisory.py) and pipeline-level validation is covered in [test_run_hybrid_pipeline.py](C:/Users/liy/FPA-Internship/repo/ecn-checker-prototype.worktrees/ai-advisory-module-testing/tests/test_run_hybrid_pipeline.py).
+
 ## Initial failure scenario
 
 The supplied `ecn_changes.csv` intentionally includes invalid data.

@@ -78,18 +78,29 @@ The workflow includes an optional AI-assisted summary step:
 
 ### Optional LLM configuration
 
-**OpenAI:**
+Prefer storing keys in a local `.env` file and keeping it out of Git.
+
+```bash
+copy .env.example .env
+```
+
+Then fill in the keys in `.env`:
+
+```dotenv
+OPENAI_API_KEY=your_key
+OPENAI_MODEL=gpt-4o-mini
+
+GEMINI_API_KEY=your_key
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+The app automatically reads `.env` from the repo root at startup.
+
+**Manual environment variables:**
 
 ```bash
 export OPENAI_API_KEY=your_key
 export OPENAI_MODEL=gpt-4o-mini
-```
-
-**Ollama:**
-
-```bash
-export OLLAMA_BASE_URL=http://localhost:11434
-export OLLAMA_MODEL=llama3.2:latest
 ```
 
 If no credentials are configured, the assistant uses the built-in
