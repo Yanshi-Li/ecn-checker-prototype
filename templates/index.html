@@ -123,7 +123,18 @@
   <!-- Tabs -->
   <div class="tab-row">
     <button class="tab-btn active" onclick="selectTab('manual')" id="tab-manual">Manual Entry</button>
-    <button class="tab-btn" onclick="selectTab('upload')" id="tab-upload">Upload CSV</button>
+    <button class="tab-btn" onclick="selectTab('upload')" id="tab-upload">Upload Files</button>
+  </div>
+
+  <div class="card" style="margin:0 0 1.25rem 0; padding:1rem 1.25rem; width:100%; background:#f8fafc; border:1px solid #dbeafe;">
+    <strong style="display:block; margin-bottom:.5rem; color:#1d4ed8;">Validation rules in scope</strong>
+    <div style="display:flex; flex-wrap:wrap; gap:.5rem; font-size:.8rem; color:#374151;">
+      <span class="badge type">ECN-H-001..005</span>
+      <span class="badge type">ECN-C-001..006</span>
+      <span class="badge type">BOM-001..005</span>
+      <span class="badge type">PRT-001..004</span>
+      <span class="badge type">FILE001</span>
+    </div>
   </div>
 
   <!-- ECN MANUAL ENTRY -->
@@ -167,9 +178,33 @@
           <span class="field-error" id="err-ecn-description">Description of Change is required</span>
         </div>
         <div class="form-group">
+          <label for="ecn-project">Project</label>
+          <input type="text" id="ecn-project" placeholder="Project code or name" />
+        </div>
+        <div class="form-group">
+          <label for="ecn-product-group">Product Group</label>
+          <input type="text" id="ecn-product-group" placeholder="e.g. Electrical / Mechanical" />
+        </div>
+        <div class="form-group">
+          <label for="ecn-associated-a3">Associated A3</label>
+          <select id="ecn-associated-a3">
+            <option value="">-- select --</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="ecn-a3-number">A3 Number</label>
+          <input type="text" id="ecn-a3-number" placeholder="A3-####" />
+        </div>
+        <div class="form-group">
           <label for="ecn-initiator">Initiator <span style="color:#ef4444">*</span></label>
           <input type="text" id="ecn-initiator" placeholder="Your name or employee ID" />
           <span class="field-error" id="err-ecn-initiator">Initiator is required</span>
+        </div>
+        <div class="form-group">
+          <label for="ecn-approver">Approver</label>
+          <input type="text" id="ecn-approver" placeholder="Reviewer / approver" />
         </div>
         <div class="form-group">
           <label for="ecn-date">Date Initiated <span style="color:#ef4444">*</span></label>
@@ -274,9 +309,9 @@
   <!-- UPLOAD CSV -->
   <div class="tab-panel" id="panel-upload">
     <div class="drop-zone" id="drop-zone">
-      <input type="file" id="file-input" multiple accept=".csv" />
+      <input type="file" id="file-input" multiple accept=".csv,.xls,.xlsx,.xlsm,.pdf,.eml,.txt,.xl" />
       <div class="icon">Upload</div>
-      <p><strong>Click to browse</strong> or drag and drop CSV files here</p>
+      <p><strong>Click to browse</strong> or drag and drop files here</p>
       <p class="hint" id="role-hint">Accepts: ecn_header, ecn_changes CSV files</p>
     </div>
     <div id="file-list"></div>
@@ -340,8 +375,12 @@
 
   // ── Role ──────────────────────────────────────────────────────────
   const ROLE_HINTS = {
-    ecn_creator:     "Accepts: ecn_header, ecn_changes CSV files",
-    bom_coordinator: "Accepts: bom, parts CSV files",
+    ecn_creator:     "Accepts: CSV, PDF, XLS, XLSX, XLSM, EML, TXT files",
+    bom_coordinator: "Accepts: CSV, XL, XLS, XLSX files only",
+  };
+  const ROLE_ACCEPTED_EXTENSIONS = {
+    ecn_creator: [".csv", ".xls", ".xlsx", ".xlsm", ".pdf", ".eml", ".txt", ".xl"],
+    bom_coordinator: [".csv", ".xls", ".xlsx", ".xlsm", ".xl"],
   };
   function selectRole(btn) {
     document.querySelectorAll(".role-btn").forEach(b => b.classList.remove("active"));
@@ -349,6 +388,8 @@
     const role = btn.dataset.role;
     document.getElementById("role-input").value = role;
     document.getElementById("role-hint").textContent = ROLE_HINTS[role];
+    const fileInput = document.getElementById("file-input");
+    fileInput.accept = ROLE_ACCEPTED_EXTENSIONS[role].join(",");
     const manualTab = document.getElementById("tab-manual");
     if (role === "bom_coordinator") {
       manualTab.style.display = "";
@@ -444,10 +485,15 @@
     const title       = document.getElementById("ecn-title").value.trim();
     const reason      = document.getElementById("ecn-reason").value.trim();
     const description = document.getElementById("ecn-description").value.trim();
+    const project     = document.getElementById("ecn-project").value.trim();
+    const productGroup= document.getElementById("ecn-product-group").value.trim();
+    const associatedA3 = document.getElementById("ecn-associated-a3").value.trim();
+    const a3Number    = document.getElementById("ecn-a3-number").value.trim();
     const initiator   = document.getElementById("ecn-initiator").value.trim();
+    const approver    = document.getElementById("ecn-approver").value.trim();
     const date        = document.getElementById("ecn-date").value.trim();
-    const headerCSV = ["ecn_number,title,reason_for_change,description,status,initiator,date_initiated",
-      `"${ecnNum}","${title}","${reason.replace(/"/g,'""')}","${description.replace(/"/g,'""')}","${status}","${initiator}","${date}"`].join("\n");
+    const headerCSV = ["ecn_number,title,reason_for_change,description,status,initiator,date_initiated,project,product_group,associated_a3,a3_number,approver",
+      `"${ecnNum}","${title}","${reason.replace(/"/g,'""')}","${description.replace(/"/g,'""')}","${status}","${initiator}","${date}","${project}","${productGroup}","${associatedA3}","${a3Number}","${approver}"`].join("\n");
     const rows = [];
     document.querySelectorAll("#changes-body tr").forEach(tr => {
       const cells = tr.querySelectorAll("input, select");
@@ -484,8 +530,14 @@
   dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover"));
   dropZone.addEventListener("drop", e => { e.preventDefault(); dropZone.classList.remove("dragover"); addFiles(e.dataTransfer.files); });
   function addFiles(list) {
+    const role = document.getElementById("role-input").value || "ecn_creator";
+    const allowed = ROLE_ACCEPTED_EXTENSIONS[role] || [".csv"];
     for (const f of list) {
-      if (!f.name.toLowerCase().endsWith(".csv")) continue;
+      const ext = f.name.slice(f.name.lastIndexOf(".")).toLowerCase();
+      if (!allowed.includes(ext)) {
+        alert(`This role only accepts: ${allowed.join(", ")}.`);
+        continue;
+      }
       if (selectedFiles.some(x => x.name === f.name)) continue;
       selectedFiles.push(f);
     }
