@@ -10,6 +10,7 @@ import logging
 import re
 from email import policy
 from email.parser import BytesParser
+from html import unescape
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -200,6 +201,22 @@ def _normalize_email_key(value: str) -> str:
     return normalized.strip()
 
 
+def _flatten_email_body(raw_text: str) -> str:
+    """Convert HTML content into plain text with a readable line structure."""
+    if not raw_text:
+        return ""
+    cleaned = unescape(raw_text)
+    cleaned = re.sub(r"<br\s*/?>", "\n", cleaned, flags=re.I)
+    cleaned = re.sub(r"</p>|</div>|</li>|</tr>|</table>", "\n", cleaned, flags=re.I)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = re.sub(r"&nbsp;", " ", cleaned)
+    cleaned = re.sub(r"\r\n?", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"\s*\n\s*", "\n", cleaned)
+    return cleaned.strip()
+
+
 def _extract_email_body(raw_bytes: bytes) -> str:
     """Return the readable text body from an .eml message."""
     message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
@@ -213,92 +230,92 @@ def _extract_email_body(raw_bytes: bytes) -> str:
                 if payload is None:
                     payload = part.get_payload()
                 if isinstance(payload, bytes):
-                    text = payload.decode("utf-8", errors="ignore")
+                    try:
+                        text = payload.decode("utf-8")
+                    except UnicodeDecodeError:
+                        text = payload.decode("latin-1", errors="ignore")
                 else:
                     text = str(payload)
                 if text.strip():
-                    body_parts.append(text)
+                    body_parts.append(_flatten_email_body(text) if part.get_content_subtype() == "html" else text)
     else:
         payload = message.get_payload(decode=True)
         if payload is not None:
-            text = payload.decode("utf-8", errors="ignore")
+            try:
+                text = payload.decode("utf-8")
+            except UnicodeDecodeError:
+                text = payload.decode("latin-1", errors="ignore")
         else:
             text = str(message.get_payload())
-        if text.strip():
-            body_parts.append(text)
-    return "\n".join(body_parts).strip()
+        body_parts.append(_flatten_email_body(text) if message.get_content_subtype() == "html" else text)
+
+    combined = "\n".join(part for part in body_parts if part).strip()
+    if not combined:
+        raw = message.get_payload()
+        if isinstance(raw, str):
+            combined = _flatten_email_body(raw)
+    return combined.strip()
 
 
 def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
     """Normalize an email body into the same ECN header schema used by the pipeline."""
-    text = email_text or ""
-    lines = [line.strip() for line in text.splitlines()]
+    text = (email_text or "").strip()
+    if not text:
+        return {
+            "ecn_id": "",
+            "title": "ECN from email",
+            "description": "",
+            "author": from_header or "email-submitter",
+            "date": "",
+            "affected_parts": "",
+            "change_type": "modify",
+        }
+
+    normalized_text = re.sub(r"\s+", " ", text)
+    labels = [
+        ("ecn_id", r"(?:ECN\s*ID|ECN\s*NUMBER|ECN)"),
+        ("title", r"Title"),
+        ("affected_parts", r"Affected\s+assembly|Affected\s+part|Affected\s+parts"),
+        ("change_type", r"Change\s+type|Action|Request\s+type"),
+        ("description", r"Description|Summary|Change\s+summary|Change\s+request"),
+        ("date", r"Date|Effective\s+date|Submitted\s+date|Request\s+date"),
+        ("author", r"Author|Submitted\s+by|Requested\s+by|From"),
+    ]
     fields: dict[str, str] = {}
-    description_lines: list[str] = []
-    current_key = None
 
-    recognized = {
-        "ecn_id": ["ecn id", "ecn", "ecn number", "change notice id"],
-        "title": ["title", "subject"],
-        "description": ["description", "summary", "change summary", "change request"],
-        "date": ["date", "effective date", "submitted date", "request date"],
-        "affected_parts": ["affected parts", "affected assembly", "affected part", "assembly"],
-        "change_type": ["change type", "action", "request type"],
-        "author": ["author", "submitted by", "requested by", "from"],
-    }
+    for idx, (field_name, label_regex) in enumerate(labels):
+        next_label = "|".join(rf"(?:{regex})" for _, regex in labels[idx + 1:])
+        pattern = rf"(?is)(?:{label_regex})\s*[:\-]?\s*(.*?)(?=(?:{next_label})|$)"
+        match = re.search(pattern, normalized_text)
+        if match:
+            value = match.group(1).strip().strip(" \t\n\r:*#-")
+            if value:
+                fields[field_name] = value
 
-    def assign_field(key: str, value: str) -> None:
-        if not value:
-            return
-        fields[key] = value.strip()
+    if not fields.get("ecn_id"):
+        match = re.search(r"(?i)\bECN[-: ]*([A-Z0-9-]+)\b", normalized_text)
+        if match:
+            fields["ecn_id"] = match.group(1)
 
-    for line in lines:
-        if not line:
-            if current_key == "description":
-                description_lines.append("")
-            continue
-
-        matched = re.match(r"^([A-Za-z0-9 /-]+?)\s*:\s*(.*)$", line)
-        if matched:
-            raw_key = matched.group(1).strip()
-            raw_value = matched.group(2).strip()
-            normalized = _normalize_email_key(raw_key)
-            found = None
-            for field_name, aliases in recognized.items():
-                if normalized in aliases:
-                    found = field_name
-                    break
-            if found:
-                if found == "description":
-                    if description_lines:
-                        assign_field("description", " ".join(part for part in description_lines if part).strip())
-                    description_lines = []
-                current_key = found
-                assign_field(found, raw_value)
-                continue
-
-        if current_key == "description":
-            description_lines.append(line)
-
-    if description_lines:
-        assign_field("description", " ".join(part for part in description_lines if part).strip())
+    if not fields.get("title"):
+        match = re.search(r"(?is)Title\s*[:\-]?\s*(.*?)(?=(?:\bAffected\s+assembly\b|\bChange\s+type\b|\bDescription\b|\bDate\b|\bRequested\s+by\b)|$)", normalized_text)
+        if match:
+            fields["title"] = match.group(1).strip().strip(" \t\n\r:*#-")
 
     header = {
         "ecn_id": fields.get("ecn_id") or "",
-        "title": fields.get("title") or "",
+        "title": fields.get("title") or "ECN from email",
         "description": fields.get("description") or "",
-        "author": fields.get("author") or from_header or "",
+        "author": fields.get("author") or from_header or "email-submitter",
         "date": fields.get("date") or "",
         "affected_parts": fields.get("affected_parts") or "",
         "change_type": (fields.get("change_type") or "modify").strip().lower(),
     }
 
-    if not header["title"]:
-        header["title"] = "ECN from email"
     if not header["change_type"]:
         header["change_type"] = "modify"
-    if not header["author"]:
-        header["author"] = "email-submitter"
+    if header["ecn_id"] and header["ecn_id"].lower().startswith("id:"):
+        header["ecn_id"] = header["ecn_id"].split(":", 1)[1].strip()
 
     return header
 

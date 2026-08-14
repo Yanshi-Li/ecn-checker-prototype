@@ -86,3 +86,30 @@ def test_load_email_into_header_dict(tmp_path):
     assert data["title"] == "Sample email intake"
     assert "obsolete capacitor" in data["description"].lower()
     assert data["change_type"] == "modify"
+
+
+def test_load_html_email_body(tmp_path):
+    eml_path = tmp_path / "html_email.eml"
+    eml_path.write_bytes(
+        b"Content-Type: multipart/alternative; boundary=abc\n"
+        b"From: coordinator@example.com\n"
+        b"Subject: ECN-2026-008\n"
+        b"Date: Tue, 12 Aug 2026 13:00:00 +1200\n"
+        b"\n"
+        b"--abc\n"
+        b"Content-Type: text/html; charset=utf-8\n"
+        b"\n"
+        b"<html><body><p><strong>ECN ID:</strong> ECN-2026-008</p>"
+        b"<p><strong>Title:</strong> HTML Email Intake</p>"
+        b"<p><strong>Affected assembly:</strong> A-100</p>"
+        b"<p><strong>Change type:</strong> replace</p>"
+        b"<p><strong>Description:</strong> Replace the legacy voltage regulator with an approved variant.</p>"
+        b"<p><strong>Requested by:</strong> Sam Tester</p></body></html>\n"
+        b"--abc--\n"
+    )
+
+    data = __import__("intake").load_file(str(eml_path))
+    assert data["ecn_id"] == "ECN-2026-008"
+    assert data["title"] == "HTML Email Intake"
+    assert data["change_type"] == "replace"
+    assert "legacy voltage regulator" in data["description"].lower()
