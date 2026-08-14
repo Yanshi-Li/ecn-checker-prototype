@@ -1,5 +1,9 @@
 line_number,part_number,description,quantity,unit
-1,AB-1001,Capacitor 10uF 16V,0,EA
-2,AB-1002,Capacitor 10uF 25V,2,EA
-3,XY-BADPN,Resistor 100ohm,1,EA
-4,AB-1001,Capacitor 10uF 16V,1,EA
+1,1001234,"Support bracket assembly",1,EA
+2,1001235,"Stop bracket, revised",2,EA
+3,1001236,"Connector, removed from drawing",1,EA
+4,1001237,"Bad cover assembly",0,EA
+5,1001238,"Clamp plate",1,EA
+6,1001239,"Spring loaded latch",1,EA
+7,1001240,"Left hinge, no good",1,EA
+8,1001241,"Approved terminal block",1,EA
