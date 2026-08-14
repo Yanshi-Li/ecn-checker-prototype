@@ -79,9 +79,11 @@ Engineer submits ECN + BOM File from email / form / upload
 
 ## Environment Variables
 
-| Variable        | Purpose                            |
-|-----------------|------------------------------------|
-| `OPENAI_API_KEY`| Enables AI Advisory (Stage 3)      |
+| Variable         | Purpose                                                         |
+|------------------|-----------------------------------------------------------------|
+| `GEMINI_API_KEY` | Enables AI Advisory (Stage 3) via Gemini OpenAI-compatible API |
+| `GEMINI_MODEL`   | Optional Gemini model override (default: `gemini-2.5-flash`)   |
+| `OPENAI_API_KEY` | Enables AI Advisory (Stage 3) via OpenAI API                   |
+| `OPENAI_MODEL`   | Optional OpenAI model override (default: `gpt-4o-mini`)        |
 
 ## Running
-

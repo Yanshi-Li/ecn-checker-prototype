@@ -2,13 +2,15 @@ import pytest
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from ai_advisory import _rule_based_advisory
+from ai_advisory import _build_prompt, _resolve_llm_config, _rule_based_advisory
 from intake import build_ecn_packet, REQUIRED_ECN_FIELDS
 
 
-def _packet(description="", bom=None):
+def _packet(description="", bom=None, header_overrides=None):
     header = {f: "val" for f in REQUIRED_ECN_FIELDS}
     header["description"] = description
+    if header_overrides:
+        header.update(header_overrides)
     return build_ecn_packet([header], bom or [])
 
 
@@ -95,3 +97,85 @@ def test_ecn_2026_003_unmentioned_parts_flagged():
     )
     result = _rule_based_advisory(packet)
     assert any(f["type"] == "MISSING_CONTEXT" for f in result["flags"])
+
+
+def test_prompt_contains_node3_semantic_rules():
+    prompt = _build_prompt(_packet(description="replace AB-1001 with AB-1002"))
+    assert "A01" in prompt
+    assert "A02" in prompt
+    assert "A03" in prompt
+    assert "A04" in prompt
+    assert "A05" in prompt
+
+
+def test_semantic_A02_description_parts_must_exist_in_bom():
+    packet = _packet(
+        description="Replace HE-1021 with C-350 due to quality drift.",
+        bom=[{"part_number": "C-350", "quantity": "1", "line_number": "1"}],
+    )
+    result = _rule_based_advisory(packet)
+    assert any(f.get("rule_id") == "A02" for f in result["flags"])
+
+
+def test_semantic_A03_action_mismatch_flagged():
+    packet = _packet(
+        description="Replace C-300 with C-350 to reduce cost.",
+        bom=[{"part_number": "C-350", "quantity": "1", "line_number": "1", "action": "ADD"}],
+        header_overrides={"change_type": "add"},
+    )
+    result = _rule_based_advisory(packet)
+    assert any(f.get("rule_id") == "A03" and f["type"] == "CONTRADICTION" for f in result["flags"])
+    assert result["description_quality"] == "CONTRADICTING"
+
+
+def test_semantic_A04_products_affected_vs_parent_assembly():
+    packet = _packet(
+        description="Add AB-2001 to DW900 assembly for reliability improvement.",
+        bom=[
+            {
+                "part_number": "AB-2001",
+                "quantity": "1",
+                "line_number": "1",
+                "action": "ADD",
+                "parent_part_no": "DW900",
+            }
+        ],
+        header_overrides={"affected_parts": "RF600"},
+    )
+    result = _rule_based_advisory(packet)
+    assert any(f.get("rule_id") == "A04" for f in result["flags"])
+
+
+def test_semantic_A05_part_description_naming_word_check():
+    packet = _packet(
+        description="Add AB-2001 to improve assembly robustness.",
+        bom=[
+            {
+                "part_number": "AB-2001",
+                "description": "Replace connector harness",
+                "quantity": "1",
+                "line_number": "2",
+                "action": "ADD",
+            }
+        ],
+    )
+    result = _rule_based_advisory(packet)
+    assert any(f.get("rule_id") == "A05" for f in result["flags"])
+
+
+def test_llm_config_prefers_gemini_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    config = _resolve_llm_config()
+    assert config["provider"] == "gemini"
+    assert config["model"] == "gemini-2.5-flash"
+
+
+def test_llm_config_uses_openai_when_gemini_missing(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    config = _resolve_llm_config()
+    assert config["provider"] == "openai"
+    assert config["model"] == "gpt-4o-mini"
