@@ -8,6 +8,8 @@ Outputs structured data for the Rule Engine.
 import csv
 import logging
 import re
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -192,6 +194,139 @@ def _parse_pdf_fields(text: str) -> dict:
 
 
 # ── Dispatching loader ───────────────────────────────────────────────────────
+def _normalize_email_key(value: str) -> str:
+    """Normalize email field names such as 'ECN ID' or 'Affected Assembly'."""
+    normalized = re.sub(r"[^a-z0-9]+", " ", (value or "").strip().lower())
+    return normalized.strip()
+
+
+def _extract_email_body(raw_bytes: bytes) -> str:
+    """Return the readable text body from an .eml message."""
+    message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+    body_parts = []
+    if message.is_multipart():
+        for part in message.walk():
+            content_type = part.get_content_maintype()
+            disposition = part.get_content_disposition()
+            if content_type == "text" and disposition != "attachment":
+                payload = part.get_payload(decode=True)
+                if payload is None:
+                    payload = part.get_payload()
+                if isinstance(payload, bytes):
+                    text = payload.decode("utf-8", errors="ignore")
+                else:
+                    text = str(payload)
+                if text.strip():
+                    body_parts.append(text)
+    else:
+        payload = message.get_payload(decode=True)
+        if payload is not None:
+            text = payload.decode("utf-8", errors="ignore")
+        else:
+            text = str(message.get_payload())
+        if text.strip():
+            body_parts.append(text)
+    return "\n".join(body_parts).strip()
+
+
+def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
+    """Normalize an email body into the same ECN header schema used by the pipeline."""
+    text = email_text or ""
+    lines = [line.strip() for line in text.splitlines()]
+    fields: dict[str, str] = {}
+    description_lines: list[str] = []
+    current_key = None
+
+    recognized = {
+        "ecn_id": ["ecn id", "ecn", "ecn number", "change notice id"],
+        "title": ["title", "subject"],
+        "description": ["description", "summary", "change summary", "change request"],
+        "date": ["date", "effective date", "submitted date", "request date"],
+        "affected_parts": ["affected parts", "affected assembly", "affected part", "assembly"],
+        "change_type": ["change type", "action", "request type"],
+        "author": ["author", "submitted by", "requested by", "from"],
+    }
+
+    def assign_field(key: str, value: str) -> None:
+        if not value:
+            return
+        fields[key] = value.strip()
+
+    for line in lines:
+        if not line:
+            if current_key == "description":
+                description_lines.append("")
+            continue
+
+        matched = re.match(r"^([A-Za-z0-9 /-]+?)\s*:\s*(.*)$", line)
+        if matched:
+            raw_key = matched.group(1).strip()
+            raw_value = matched.group(2).strip()
+            normalized = _normalize_email_key(raw_key)
+            found = None
+            for field_name, aliases in recognized.items():
+                if normalized in aliases:
+                    found = field_name
+                    break
+            if found:
+                if found == "description":
+                    if description_lines:
+                        assign_field("description", " ".join(part for part in description_lines if part).strip())
+                    description_lines = []
+                current_key = found
+                assign_field(found, raw_value)
+                continue
+
+        if current_key == "description":
+            description_lines.append(line)
+
+    if description_lines:
+        assign_field("description", " ".join(part for part in description_lines if part).strip())
+
+    header = {
+        "ecn_id": fields.get("ecn_id") or "",
+        "title": fields.get("title") or "",
+        "description": fields.get("description") or "",
+        "author": fields.get("author") or from_header or "",
+        "date": fields.get("date") or "",
+        "affected_parts": fields.get("affected_parts") or "",
+        "change_type": (fields.get("change_type") or "modify").strip().lower(),
+    }
+
+    if not header["title"]:
+        header["title"] = "ECN from email"
+    if not header["change_type"]:
+        header["change_type"] = "modify"
+    if not header["author"]:
+        header["author"] = "email-submitter"
+
+    return header
+
+
+def load_email(filepath: str) -> dict:
+    """Load an `.eml` message, extract its readable body, and normalize it to the ECN header schema."""
+    raw_bytes = Path(filepath).read_bytes()
+    email_text = _extract_email_body(raw_bytes)
+    msg = None
+    from_header = ""
+    date_header = ""
+    subject_header = ""
+    try:
+        msg = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+        from_header = msg.get("from", "")
+        date_header = msg.get("date", "")
+        subject_header = msg.get("subject", "")
+    except Exception:
+        pass
+
+    header = _parse_email_header_fields(email_text, from_header=from_header)
+    if not header.get("date") and date_header:
+        header["date"] = date_header
+    if not header.get("title") and subject_header:
+        header["title"] = subject_header
+    return header
+
+
 def load_file(filepath: str) -> list[dict] | dict:
     """Auto-detect file type and load accordingly."""
     ext = Path(filepath).suffix.lower()
@@ -201,6 +336,8 @@ def load_file(filepath: str) -> list[dict] | dict:
         return load_excel(filepath)
     elif ext == ".pdf":
         return load_pdf(filepath)
+    elif ext == ".eml":
+        return load_email(filepath)
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 

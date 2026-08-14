@@ -64,3 +64,25 @@ def test_pdf_dict_input():
     header = _make_header()
     packet = build_ecn_packet(header, [])  # dict, not list
     assert packet["header"] == header
+
+
+def test_load_email_into_header_dict(tmp_path):
+    eml_path = tmp_path / "sample_ecn.eml"
+    eml_path.write_bytes(
+        b"Subject: ECN-2026-007 Sample email update\n"
+        b"From: coordinator@example.com\n"
+        b"Date: 2026-08-10\n"
+        b"\n"
+        b"ECN ID: ECN-2026-007\n"
+        b"Title: Sample email intake\n"
+        b"Affected assembly: A-100\n"
+        b"Change type: modify\n"
+        b"Description: Replace the obsolete capacitor with an approved alternative and update the documentation.\n"
+        b"Requested by: Jane Reviewer\n"
+    )
+
+    data = __import__("intake").load_file(str(eml_path))
+    assert data["ecn_id"] == "ECN-2026-007"
+    assert data["title"] == "Sample email intake"
+    assert "obsolete capacitor" in data["description"].lower()
+    assert data["change_type"] == "modify"
