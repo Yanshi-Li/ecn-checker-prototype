@@ -1,7 +1,10 @@
-# Java compiled files
-*.class
+# Python cache / tooling
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
 
-# Java build output
+# Build output
 out/
 target/
 build/
@@ -20,4 +23,3 @@ Thumbs.db
 # Local configuration / secrets
 .env
 config-local.properties
-scripts/__pycache__/ecn_checker.cpython-313.pyc
