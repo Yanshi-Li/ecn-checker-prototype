@@ -67,6 +67,13 @@ This will:
 
 Outputs are written to `out/`.
 
+Context Engine (Stage 4) also materializes testable context data under
+`out/context_engine/`:
+
+- `parts_master_database.csv`
+- `ecn_conflict_log.csv` (appends new run entries every test execution)
+- `bom_structure_records.csv` (appends new run entries every test execution)
+
 ## AI usage
 
 The workflow includes an optional AI-assisted summary step:
@@ -117,6 +124,17 @@ deterministic fallback.
 | `out/` | Generated dashboard and AI summary outputs |
 | `docs/` | Architecture, rule, and test documentation |
 | `tests/` | Regression tests |
+
+### Repository structure (clean layout)
+
+```text
+scripts/    # pipeline stages and orchestration code
+data/       # sample ECN/BOM/parts/history input files
+tests/      # regression and module tests
+docs/       # architecture/rules/test scenario docs
+templates/  # web UI templates
+out/        # generated outputs (ignored in git)
+```
 
 ## Running tests
 

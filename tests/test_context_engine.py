@@ -1,8 +1,12 @@
-import pytest
+import csv
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from context_engine import check_part_status, check_historical_conflicts
+from context_engine import (
+    check_part_status,
+    check_historical_conflicts,
+    run_context_engine,
+)
 
 
 MOCK_PARTS = {
@@ -105,3 +109,93 @@ def test_ecn_2026_003_no_self_conflict():
     # ECN-2026-003 should not conflict with itself
     conflicts = check_historical_conflicts("ECN-2026-003", "C-200", MOCK_HISTORY)
     assert conflicts == []
+
+
+def _csv_rows(path: Path) -> list[dict]:
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _packet() -> dict:
+    return {
+        "header": {
+            "ecn_id": "ECN-NEW-CTX-001",
+            "change_type": "replace",
+            "date": "2026-12-01",
+        },
+        "bom": [
+            {
+                "line_number": "1",
+                "part_number": "C-300",
+                "description": "Resistor 100 Ohm",
+                "quantity": "1",
+                "unit": "EA",
+                "action": "REPLACE",
+                "parent_part_no": "DW900",
+            },
+            {
+                "line_number": "2",
+                "part_number": "C-350",
+                "description": "Resistor 100 Ohm Low-Cost",
+                "quantity": "1",
+                "unit": "EA",
+                "action": "ADD",
+                "parent_part_no": "DW900",
+            },
+        ],
+        "validation": {
+            "missing_fields": [],
+            "rule_violations": [],
+            "ai_flags": [],
+            "context_flags": [],
+        },
+    }
+
+
+def test_context_engine_creates_required_databases(tmp_path):
+    packet = _packet()
+    root = Path(__file__).parent.parent
+
+    result = run_context_engine(
+        packet,
+        parts_db_path=root / "data" / "parts_master.csv",
+        history_db_path=root / "data" / "ecn_history.csv",
+        context_db_dir=tmp_path / "context_db",
+    )
+
+    artifacts = result["validation"]["context_artifacts"]
+    parts_db_path = Path(artifacts["parts_master_database"])
+    conflict_log_path = Path(artifacts["ecn_conflict_log"])
+    bom_records_path = Path(artifacts["bom_structure_records"])
+
+    assert parts_db_path.exists()
+    assert conflict_log_path.exists()
+    assert bom_records_path.exists()
+
+    assert len(_csv_rows(parts_db_path)) == 3
+    assert len(_csv_rows(conflict_log_path)) == 6  # 4 seeded history rows + 2 test BOM rows
+    assert len(_csv_rows(bom_records_path)) == 2
+
+
+def test_context_logs_append_for_each_test_run(tmp_path):
+    root = Path(__file__).parent.parent
+    context_dir = tmp_path / "context_db"
+
+    run_context_engine(
+        _packet(),
+        parts_db_path=root / "data" / "parts_master.csv",
+        history_db_path=root / "data" / "ecn_history.csv",
+        context_db_dir=context_dir,
+    )
+    run_context_engine(
+        _packet(),
+        parts_db_path=root / "data" / "parts_master.csv",
+        history_db_path=root / "data" / "ecn_history.csv",
+        context_db_dir=context_dir,
+    )
+
+    conflict_log_rows = _csv_rows(context_dir / "ecn_conflict_log.csv")
+    bom_structure_rows = _csv_rows(context_dir / "bom_structure_records.csv")
+
+    assert len(conflict_log_rows) == 8  # 4 seeded history rows + 2 runs * 2 BOM rows
+    assert len(bom_structure_rows) == 4  # 2 runs * 2 BOM rows

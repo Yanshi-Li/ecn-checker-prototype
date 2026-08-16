@@ -164,6 +164,8 @@ def run_pipeline(args: argparse.Namespace) -> dict:
 
     # Stage 5: Dashboard
     logger.info("── Stage 5: Dashboard ──")
+    if hasattr(dashboard_mod, "_impl") and hasattr(dashboard_mod, "OUT_DIR"):
+        dashboard_mod._impl.OUT_DIR = dashboard_mod.OUT_DIR
     dashboard_path = run_dashboard(packet)
     write_ai_summary(packet, ROOT / "out")
 
