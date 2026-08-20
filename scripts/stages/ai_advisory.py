@@ -10,6 +10,8 @@ import re
 import json
 import logging
 from pathlib import Path
+import httpx
+
 
 
 def _load_local_env() -> None:
@@ -61,6 +63,7 @@ VERB_FIRST_WORDS = {"replace", "add", "remove", "update", "change", "fix", "modi
 
 # ── Prompt builder ───────────────────────────────────────────────────────────
 def _build_prompt(packet: dict) -> str:
+    bom_lines = packet.get("bom", [])[:BOM_CAP]  #  ensure cap is applied
     header = packet.get("header", {})
     bom = packet.get("bom", [])
     truncated = len(bom) > BOM_CAP
@@ -212,6 +215,21 @@ def _try_parse_json(raw: str) -> dict:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
+    #  NEW: strip incomplete last line (truncated string) then re-close
+    lines = cleaned.splitlines()
+    while lines:
+        try:
+            candidate = "\n".join(lines)
+            # Remove trailing comma/incomplete field and close the object
+            candidate = re.sub(r',\s*"[^"]*"?\s*:\s*"[^"]*$', "", candidate)
+            candidate = re.sub(r',\s*$', "", candidate)
+            if not candidate.endswith("}"):
+                candidate += "}"
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            lines.pop()  # drop last line and retry
+
+    raise json.JSONDecodeError("Could not repair truncated JSON", raw, 0)
 
     start = cleaned.find("{")
     if start == -1:
@@ -253,7 +271,7 @@ def _call_openai(prompt: str, config: dict) -> dict:
         ],
         response_format={"type": "json_object"},
         temperature=0.2,
-        max_tokens=800,
+        max_tokens=1500,
     )
     raw = response.choices[0].message.content.strip()
     return _try_parse_json(raw)
@@ -392,38 +410,27 @@ def _rule_based_advisory(packet: dict) -> dict:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 def run_ai_advisory(packet: dict) -> dict:
-    """
-    Run AI advisory on the ECN packet.
-    Appends ai_flags to packet['validation']['ai_flags'].
-    Returns updated packet.
-    """
+    config = _resolve_llm_config()
     ai_result = None
-    ai_available = False
-    llm_config = _resolve_llm_config()
 
-    if HAS_OPENAI and llm_config:
+    if HAS_OPENAI and config:
         try:
             prompt = _build_prompt(packet)
-            ai_result = _call_openai(prompt, llm_config)
+            ai_result = _call_openai(prompt, config)
             ai_result["ai_available"] = True
-            ai_available = True
-            logger.info(
-                "AI Advisory complete (%s:%s) — risk: %s, quality: %s",
-                llm_config["provider"],
-                llm_config["model"],
-                ai_result.get("overall_risk"),
-                ai_result.get("description_quality"),
-            )
+            logger.info("AI Advisory complete — risk: %s", ai_result.get("overall_risk"))
         except Exception as exc:
             logger.warning("AI Advisory failed (%s) — falling back to rule-based.", exc)
-    elif HAS_OPENAI:
-        logger.warning(
-            "No GEMINI_API_KEY or OPENAI_API_KEY set — falling back to rule-based advisory."
-        )
+            ai_result = None  #  explicitly reset so fallback triggers below
+    else:
+        logger.warning("No API key or openai package — falling back to rule-based.")
 
-    if not ai_available:
+    #  Fallback always produces a valid dict
+    if ai_result is None:
         ai_result = _rule_based_advisory(packet)
         logger.info("AI Advisory: using rule-based fallback.")
 
+    # Single unconditional write — dashboard always gets a dict
     packet["validation"]["ai_flags"] = ai_result
+
     return packet

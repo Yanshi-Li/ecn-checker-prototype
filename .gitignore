@@ -23,3 +23,5 @@ Thumbs.db
 # Local configuration / secrets
 .env
 config-local.properties
+.continue/config.yaml
+

@@ -128,16 +128,20 @@ def _render_ai_flags(ai_flags: dict) -> str:
 # ── Summary bar ───────────────────────────────────────────────────────────────
 def _summary_counts(packet: dict) -> tuple[int, int]:
     violations = packet["validation"].get("rule_violations", [])
-    context = packet["validation"].get("context_flags", [])
-    ai = packet["validation"].get("ai_flags", {})
+    context    = packet["validation"].get("context_flags", [])
+    ai         = packet["validation"].get("ai_flags", {})
+
+    # Guard: if ai_flags was accidentally stored as a list, wrap it
+    if isinstance(ai, list):
+        ai = {"flags": ai}
 
     errors = (
         sum(1 for v in violations if v.get("severity") == "ERROR") +
-        sum(1 for f in context if f.get("severity") == "ERROR")
+        sum(1 for f in context    if f.get("severity") == "ERROR")
     )
     warnings = (
         sum(1 for v in violations if v.get("severity") == "WARNING") +
-        sum(1 for f in context if f.get("severity") == "WARNING") +
+        sum(1 for f in context    if f.get("severity") == "WARNING") +
         len(ai.get("flags", []))
     )
     return errors, warnings

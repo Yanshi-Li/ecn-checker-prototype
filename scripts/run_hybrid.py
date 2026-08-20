@@ -58,7 +58,15 @@ def write_ai_summary(packet: dict, out_dir: Path) -> None:
     ai_flags = packet["validation"].get("ai_flags", {})
     rule_violations = packet["validation"].get("rule_violations", [])
     context_flags = packet["validation"].get("context_flags", [])
-
+        # Guard: wrap bare list into expected dict shape
+    if isinstance(ai_flags, list):
+        ai_flags = {
+            "overall_risk": "UNKNOWN",
+            "description_quality": "UNKNOWN",
+            "flags": ai_flags,
+            "recommendation": "ai_flags was stored as a raw list — check ai_advisory.py.",
+            "ai_available": False,
+        }
     lines = [
         f"# ECN AI Summary — {header.get('ecn_id', 'N/A')}",
         f"**Title:** {header.get('title', '')}  ",
