@@ -86,6 +86,7 @@ def _render_context_flags(flags: list[dict]) -> str:
 
 
 def _render_ai_flags(ai_flags: dict) -> str:
+    logger.info("_render_ai_flags received: %s", ai_flags)
     if not ai_flags:
         return '<p>AI Advisory did not run.</p>'
 
@@ -99,23 +100,29 @@ def _render_ai_flags(ai_flags: dict) -> str:
     flag_rows = ""
     for flag in ai_flags.get("flags", []):
         flag_rows += f"""
-        <tr>
-          <td>{flag.get('type','')}</td>
-          <td>{flag.get('detail','')}</td>
-          <td>{flag.get('line_number') or '—'}</td>
-        </tr>"""
+    <tr>
+      <td><code>{flag.get('rule_id', '—')}</code></td>
+      <td>{flag.get('type', '')}</td>
+      <td>{flag.get('detail', '')}</td>
+      <td>{flag.get('line_number') or '—'}</td>
+    </tr>"""
 
-    flag_table = f"""
+    #  Build table if there are flags, show green tick only if truly empty
+    if ai_flags.get("flags"):
+        flag_table = f"""
     <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
       <thead>
         <tr style="background:#f0f0f0;">
+          <th style="padding:6px;text-align:left;">Rule</th>
           <th style="padding:6px;text-align:left;">Flag Type</th>
           <th style="padding:6px;text-align:left;">Detail</th>
           <th style="padding:6px;text-align:left;">Line</th>
         </tr>
       </thead>
-      <tbody>{flag_rows if flag_rows else '<tr><td colspan="3">No flags.</td></tr>'}</tbody>
-    </table>""" if ai_flags.get("flags") else '<p style="color:green;">✅ No AI flags.</p>'
+      <tbody>{flag_rows}</tbody>
+    </table>"""
+    else:
+        flag_table = '<p style="color:green;"> No AI flags.</p>'
 
     return f"""
     <p><strong>{ai_label}</strong></p>

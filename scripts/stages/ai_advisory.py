@@ -63,17 +63,25 @@ VERB_FIRST_WORDS = {"replace", "add", "remove", "update", "change", "fix", "modi
 
 # ── Prompt builder ───────────────────────────────────────────────────────────
 def _build_prompt(packet: dict) -> str:
-    bom_lines = packet.get("bom", [])[:BOM_CAP]  #  ensure cap is applied
     header = packet.get("header", {})
     bom = packet.get("bom", [])
     truncated = len(bom) > BOM_CAP
+
+    # Map PDF-parsed keys to prompt-friendly values
+    ecn_id      = header.get("change_notice_number") or header.get("ecn_id", "N/A")
+    title       = header.get("name_of_change") or header.get("title", "N/A")
+    description = header.get("description_of_change") or header.get("description", "")
+    change_type = header.get("change_type", "N/A")
+    author      = header.get("author", "N/A")
+    date        = header.get("date", "N/A")
+    affected    = header.get("products_affected") or header.get("affected_parts", "N/A")
+    reason      = header.get("reason_for_change", "N/A")
 
     bom_summary = "\n".join(
         f"  Line {r.get('line_number','?')}: {r.get('part_number','?')} — "
         f"{r.get('description','?')} (qty: {r.get('quantity','?')})"
         for r in bom[:BOM_CAP]
     )
-
     if truncated:
         bom_summary += f"\n  ... ({len(bom) - BOM_CAP} additional lines truncated)"
         logger.warning(
@@ -82,32 +90,34 @@ def _build_prompt(packet: dict) -> str:
         )
 
     prompt = f"""You are an ECN (Engineering Change Notice) quality reviewer.
- 
-ECN ID      : {header.get('ecn_id', 'N/A')}
-Title       : {header.get('title', 'N/A')}
-Change Type : {header.get('change_type', 'N/A')}
-Author      : {header.get('author', 'N/A')}
-Date        : {header.get('date', 'N/A')}
- 
+
+ECN ID            : {ecn_id}
+Title             : {title}
+Change Type       : {change_type}
+Author            : {author}
+Date              : {date}
+Products Affected : {affected}
+Reason for Change : {reason}
+
 ECN Description:
-\"\"\"{header.get('description', '')}\"\"\"
- 
+\"\"\"{description}\"\"\"
+
 BOM Changes:
 {bom_summary}
- 
+
 Review tasks:
 1. Does the ECN description clearly explain WHY this change is being made?
 2. Are there BOM line items that CONTRADICT or are NOT mentioned in the description?
 3. Is the description vague, ambiguous, or missing critical engineering context?
 4. Are there any obvious risks or missing approvals implied by the changes?
- 
+
 Validate semantic advisory rules:
 - A01: Description must semantically align with BOM actions.
 - A02: Parts mentioned in the description must appear in BOM rows.
 - A03: Action verbs in description must align with BOM task/action values.
 - A04: Products affected must align with BOM parent assemblies when parent fields exist.
 - A05: Part descriptions should begin with a noun-like naming word, not an action verb.
- 
+
 Return only a single compact JSON object. No markdown fences, no prose, no comments.
 Use this exact structure:
 {{
@@ -194,8 +204,8 @@ def _resolve_llm_config() -> dict | None:
         return {
             "provider": "openai",
             "api_key": openai_key,
-            "base_url": os.environ.get("OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com/v1"),
-            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            "base_url": os.environ.get("OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"),
+            "model": os.environ.get("OPENAI_MODEL", "GPT-5.6-luna"),
         }
 
     return None
@@ -285,7 +295,14 @@ def _rule_based_advisory(packet: dict) -> dict:
     As per flowchart: 'System continues with Rule Engine checks only'.
     """
     flags = []
-    description = packet["header"].get("description", "")
+    description = (
+        packet["header"].get("description_of_change")
+        or packet["header"].get("description", "")
+    )
+    affected_products = _split_csv_values(
+        packet.get("header", {}).get("products_affected")
+        or packet.get("header", {}).get("affected_parts", "")
+    )
     description_actions = _extract_actions(description)
     bom_actions = _extract_bom_actions(packet)
 
@@ -425,12 +442,10 @@ def run_ai_advisory(packet: dict) -> dict:
     else:
         logger.warning("No API key or openai package — falling back to rule-based.")
 
-    #  Fallback always produces a valid dict
+    # Single unconditional write — dashboard always gets a dict
     if ai_result is None:
         ai_result = _rule_based_advisory(packet)
         logger.info("AI Advisory: using rule-based fallback.")
-
-    # Single unconditional write — dashboard always gets a dict
+        logger.info("ai_flags stored: %s", ai_result)
     packet["validation"]["ai_flags"] = ai_result
-
     return packet

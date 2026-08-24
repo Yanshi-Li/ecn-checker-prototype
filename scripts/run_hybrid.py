@@ -169,7 +169,19 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     # Stage 4: Context Engine
     logger.info("── Stage 4: Context Engine (RAG) ──")
     packet = run_context_engine(packet)
-
+    #  Safety net — ensure ai_flags is always a valid dict before dashboard
+    ai_flags = packet["validation"].get("ai_flags", {})
+    if not isinstance(ai_flags, dict) or not ai_flags:
+        logger.warning("ai_flags missing or wrong type — injecting empty advisory dict.")
+        packet["validation"]["ai_flags"] = {
+            "overall_risk":        "UNKNOWN",
+            "description_quality": "UNKNOWN",
+            "flags":               [],
+            "recommendation":      "AI Advisory result was lost — check pipeline logs.",
+            "ai_available":        False,
+        }
+    logger.info("ai_flags at dashboard: %s", packet["validation"].get("ai_flags"))
+    
     # Stage 5: Dashboard
     logger.info("── Stage 5: Dashboard ──")
     if hasattr(dashboard_mod, "_impl") and hasattr(dashboard_mod, "OUT_DIR"):

@@ -149,6 +149,8 @@ _SKIP_ZONES = {
     "fisher & paykel | enterprise",
     "generated for ecn",
     "handout v1",
+    "enterprise change handout",      
+    "enterprise change notice",       
 }
 def _should_skip_line(line: str) -> bool:
     """Return True if line is a header, section label, table row, or footer."""
@@ -158,79 +160,139 @@ def _should_skip_line(line: str) -> bool:
     if re.match(r"^[─\-=*#|]{3,}$", lower):
         return True
     return any(zone in lower for zone in _SKIP_ZONES)
+    # Skip MBOM table data rows (start with part/assembly number pattern)
+    # e.g. 'ASM-451-TOP Induction Top Assembly Replace...'
+    # e.g. 'HE-2045 Heating Element Pro 01 ELECMAN...'
+    if re.match(r"^[A-Z]{2,}[-_][A-Z0-9]", line.strip()):
+        return True
+
+    return False
+    # ── Sentinel values that mean "empty" in the PDF ─────────────────────────────
+_EMPTY_SENTINELS = {
+    "*** missing / error ***",
+    "*** missing ***",
+    "*** error ***",
+    "n/a",
+    "none",
+    "-",
+    "--",
+    "tbd",
+    "tbc",
+}
+
+def _is_empty_value(value: str) -> bool:
+    """Return True if the value is a sentinel placeholder meaning empty."""
+    return value.strip().lower() in _EMPTY_SENTINELS
 
 def _parse_pdf_fields(text: str) -> dict:
     """
     Line-by-line ECN field parser.
     Strategy:
-      - Preserves \n from layout=True extraction (do NOT join pages with space).
+      - Preserves \\n from layout=True extraction.
       - Uses 1+ space gap between label and value (no colon needed).
       - Skips error note, section headers, table rows, and footers.
-      - De-duplicates markers (e.g. 'Name of Change' in error note vs real field).
-      - Accumulates multi-line values until the next known field marker.
+      - Accumulates multi-line values only for known multi-line fields.
+      - Para N: lines are always routed to description_of_change, stripped of prefix.
     """
+    _SINGLE_LINE_FIELDS = {
+        "change_notice_number",
+        "name_of_change",
+        "project",
+        "product_group",
+        "change_category",
+        "associated_a3",
+        "a3_number",
+        "products_affected",
+        "change_actions",
+        "date",
+        "checker",
+        "reviewer",
+        "chief_engineer",
+        "bom_coordinator",
+    }
+
     fields = {}
     lines = text.splitlines()
 
-    # Pre-compute sorted markers (longest first) for regex
     marker_pattern = "|".join(
         re.escape(m) for m in sorted(_FIELD_MARKERS, key=len, reverse=True)
     )
 
     current_key = None
     current_value_parts = []
+    #  Separate bucket for description paragraphs collected anywhere
+    description_parts = []
+
+    def _strip_para_prefix(line: str) -> str:
+        """Remove 'Para N:' prefix and return clean value."""
+        return re.sub(r"^Para\s+\d+\s*:\s*", "", line, flags=re.IGNORECASE).strip()
 
     def _flush(key, parts):
         if not key:
             return
         value = " ".join(p.strip() for p in parts if p.strip())
         value = re.sub(r"\s+", " ", value).strip().strip(".,|")
-        if value:
+        # Store empty string for sentinel values — key still appears in output
+        if _is_empty_value(value):
+            fields[key] = ""
+        elif value:
             fields[key] = value
 
     for raw_line in lines:
         line = raw_line.strip()
 
-        # ── Skip blank, decorative, section headers, footers ─────────────────
         if _should_skip_line(line):
             continue
 
-        # ── Try to match a known field marker at start of line ────────────────
+        # ── Detect Para N: lines — always goes to description_of_change ───────
+        if re.match(r"^Para\s+\d+\s*:", line, re.IGNORECASE):
+            description_parts.append(_strip_para_prefix(line))
+            continue
+
+        # ── Try to match a known field marker ─────────────────────────────────
         marker_match = re.match(
-            rf"^({marker_pattern})\s+(.*)",  # 1+ spaces between label & value
+            rf"^({marker_pattern})\s+(.*)",
             line,
             re.IGNORECASE,
         )
 
         if marker_match:
-            # Save previous field before starting new one
+            #  Flush previous field
             _flush(current_key, current_value_parts)
             current_value_parts = []
 
             raw_key = marker_match.group(1).strip()
             raw_value = marker_match.group(2).strip()
 
-            #  Normalize and alias the key
             normalized_key = _normalize_pdf_key(raw_key)
             current_key = KEY_ALIASES.get(
                 normalized_key,
                 normalized_key.replace(" ", "_")
             )
 
-            #  Save the value on the same line
-            if raw_value:
+            #  If value on same line starts with Para N: send to description
+            if re.match(r"^Para\s+\d+\s*:", raw_value, re.IGNORECASE):
+                description_parts.append(_strip_para_prefix(raw_value))
+            elif raw_value:
                 current_value_parts.append(raw_value)
 
         else:
-            #  Continuation line — append to current field value
-            if current_key and line:
+            #  Continuation — only for multi-line fields
+            if current_key and line and current_key not in _SINGLE_LINE_FIELDS:
                 current_value_parts.append(line)
 
-    #  Flush the very last field
+    #  Flush the last field
     _flush(current_key, current_value_parts)
 
-    return fields
+    #  Merge all description paragraphs into description_of_change
+    if description_parts:
+        existing = fields.get("description_of_change", "")
+        merged = " ".join(description_parts)
+        fields["description_of_change"] = (
+            (existing + " " + merged).strip() if existing else merged
+        )
 
+    return fields
 
 # ── PDF Loader ────────────────────────────────────────────────────────────────
 def load_pdf(filepath: str) -> dict:
@@ -615,7 +677,7 @@ def run_intake(ecn_filepath: str, bom_filepath: str) -> dict:
         "validation": {
             "missing_fields":  [],
             "rule_violations": [],
-            "ai_flags":        [],
+            "ai_flags":        {},
             "context_flags":   [],
         },
         "source_files": {
