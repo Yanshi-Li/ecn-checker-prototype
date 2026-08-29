@@ -25,3 +25,4 @@
 ## Notes for agents
 - Use the existing documentation in [README.md](README.md) and [docs/](docs/) as the source of truth before introducing new conventions.
 - Avoid duplicating documentation; link to the existing docs when adding guidance.
+- Avoid py file with similar function in different folders.

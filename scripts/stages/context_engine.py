@@ -1,7 +1,7 @@
 """
 Stage 4: Context Engine (RAG-lite)
 Compares BOM parts against a reference parts database.
-Flags unknown parts, discontinued parts, and quantity anomalies.
+Flags unknown parts, discontinued parts, missing suppliers, UoM mismatches, and quantity anomalies.
 Also persists context test databases/logs for repeatable module testing.
 """
 
@@ -111,6 +111,8 @@ def create_context_databases(
         "status",
         "lifecycle_state",
         "revision",
+        "supplier",
+        "unit_of_measure",
     ]
     normalized_parts_rows = []
     for row in parts_rows:
@@ -123,6 +125,8 @@ def create_context_databases(
             "status": row.get("status", "").strip(),
             "lifecycle_state": row.get("lifecycle_state", "").strip(),
             "revision": row.get("revision", "").strip(),
+            "supplier": row.get("supplier", "").strip(),
+            "unit_of_measure": row.get("unit_of_measure", "").strip(),
         })
     _write_csv_rows(parts_master_db_path, parts_fieldnames, normalized_parts_rows)
 
@@ -211,6 +215,7 @@ def create_context_databases(
         "ecn_conflict_log": str(ecn_conflict_log_path),
         "bom_structure_records": str(bom_structure_records_path),
     }
+
 
 
 def check_part_status(part_number: str, parts_db: dict) -> dict:
@@ -389,6 +394,45 @@ def _check_discontinued_parts(bom: list[dict], parts_db: dict) -> list[dict]:
     return flags
 
 
+def _check_missing_supplier(bom: list[dict], parts_db: dict) -> list[dict]:
+    """Flag known BOM parts that have no supplier in the reference database."""
+    flags = []
+    for row in bom:
+        pn = row.get("part_number", "").strip()
+        ref = parts_db.get(pn)
+        if pn and ref is not None and not ref.get("supplier", "").strip():
+            flags.append({
+                "flag_type": "MISSING_SUPPLIER",
+                "severity": "ERROR",
+                "part_number": pn,
+                "line_number": row.get("line_number", "?"),
+                "message": f"Part '{pn}' has no supplier recorded in the Parts Master DB.",
+            })
+    return flags
+
+
+def _check_uom_mismatch(bom: list[dict], parts_db: dict) -> list[dict]:
+    """Flag known BOM parts whose unit differs from the reference database."""
+    flags = []
+    for row in bom:
+        pn = row.get("part_number", "").strip()
+        ref = parts_db.get(pn)
+        bom_unit = row.get("unit", "").strip()
+        db_unit = ref.get("unit_of_measure", "").strip() if ref else ""
+        if pn and ref is not None and bom_unit and db_unit and bom_unit.lower() != db_unit.lower():
+            flags.append({
+                "flag_type": "UOM_MISMATCH",
+                "severity": "ERROR",
+                "part_number": pn,
+                "line_number": row.get("line_number", "?"),
+                "message": (
+                    f"Part '{pn}' unit '{bom_unit}' does not match Parts Master DB unit "
+                    f"'{db_unit}'."
+                ),
+            })
+    return flags
+
+
 def _check_quantity_anomalies(bom: list[dict], parts_db: dict) -> list[dict]:
     """Flag BOM lines where quantity exceeds the reference max quantity."""
     flags = []
@@ -477,6 +521,8 @@ def run_context_engine(
     all_flags += _check_unknown_parts(bom, parts_db)
     all_flags += _check_part_status_flags(bom, parts_db)
     all_flags += _check_discontinued_parts(bom, parts_db)
+    all_flags += _check_missing_supplier(bom, parts_db)
+    all_flags += _check_uom_mismatch(bom, parts_db)
     all_flags += _check_quantity_anomalies(bom, parts_db)
     all_flags += _check_description_mismatch(bom, parts_db)
 
@@ -497,13 +543,16 @@ def run_context_engine(
                 ),
             })
 
-    packet["validation"]["context_flags"] = all_flags
-    packet["validation"]["context_artifacts"] = artifacts
+    packet["validation"]["context_flags"] = all_flags; packet["validation"]["context_artifacts"] = artifacts
+
 
     error_count = sum(1 for f in all_flags if f["severity"] == "ERROR")
     warn_count = sum(1 for f in all_flags if f["severity"] == "WARNING")
     logger.info(
-        "Context Engine complete — %d error(s), %d warning(s)", error_count, warn_count
+        "Context Engine complete — %d error(s), %d warning(s), flag types: %s",
+        error_count,
+        warn_count,
+        sorted({flag["flag_type"] for flag in all_flags}),
     )
 
     return packet

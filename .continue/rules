@@ -1,0 +1,64 @@
+# Project Architecture
+This repository is a standalone Python prototype for validating Engineering Change Notice (ECN) data against sample CSV data for parts, released BOMs, ECN headers, and ECN changes.
+
+- `scripts/` contains the application and pipeline code.
+- `scripts/run_hybrid.py` is the main end-to-end workflow entry point.
+- `scripts/intake.py` handles email, PDF, form, and CSV intake normalization.
+- `scripts/rule_engine.py` and `scripts/ecn_checker.py` contain deterministic validation logic.
+- `scripts/ai_advisory.py` provides optional AI-assisted checks with a deterministic fallback.
+- `scripts/context_engine.py` performs parts lifecycle and historical ECN context checks.
+- `scripts/dashboard.py` generates reviewer-facing HTML/dashboard output.
+- `scripts/approval_workflow.py` handles approval/rejection workflow behavior.
+- `data/` contains sample CSV inputs and reference data.
+- `templates/` contains web UI templates used by `scripts/app.py`.
+- `tests/` contains regression and module tests.
+- `docs/` contains architecture, rules, and test-scenario documentation.
+- `out/` contains generated workflow outputs and should not be treated as source code.
+
+## Core Workflow
+The normal pipeline is:
+
+1. Normalize ECN, BOM, and parts inputs.
+2. Run deterministic structural and business-rule validation.
+3. Run optional AI advisory checks; never make AI a required dependency.
+4. Run parts-master and historical-context checks.
+5. Generate dashboard and reviewer summary outputs.
+6. Produce an approval-oriented recommendation for human review.
+
+Preserve this stage order and the existing JSON, CSV, HTML, and dashboard output structures unless the task explicitly requires a format change.
+
+## Coding Standards
+- Use Python for new application and test code.
+- Keep changes small, focused, and compatible with the existing CSV-driven workflow.
+- Follow the existing naming and module organization conventions.
+- Prefer standard-library solutions unless an existing dependency or a clearly justified new dependency is needed.
+- Keep parsing, validation, AI advisory, context lookup, presentation, and orchestration responsibilities separated.
+- Make file paths portable across Windows and other platforms; do not hard-code local absolute paths.
+- Do not commit secrets, API keys, `.env` files, generated `out/` artifacts, caches, or virtual-environment files.
+- Preserve useful error messages and deterministic fallback behavior when optional services are unavailable.
+
+## Validation Rules
+- Keep rule IDs, severity names, and result shapes consistent across scripts, tests, and documentation.
+- Treat deterministic validation as authoritative. AI output is advisory and must not replace rule-engine checks or human review.
+- Existing rule families include BOM, PART, REG, and ID rules; consult `docs/rule-catalogue.md` before adding or changing a rule.
+- Use the documented severities: `PASS`, `WARNING`, and `BLOCKER`.
+- Blockers prevent an ECN from proceeding; warnings require reviewer attention but do not automatically reject it.
+- Do not silently change validation semantics, input field names, or output keys. Update all consumers when a schema change is necessary.
+- When changing a rule or behavior, update the relevant file in `docs/` and add or adjust regression coverage in `tests/`.
+
+## Testing and Verification
+- Run the full test suite with `pytest -q`.
+- Run the end-to-end workflow with `python scripts/run_hybrid.py` or `py scripts/run_hybrid.py` on Windows.
+- Add tests for new rules, intake formats, pipeline stages, and failure cases.
+- Test both valid and invalid inputs, including missing fields, duplicate lines, invalid quantities, unknown parts, obsolete parts, and conflicting actions where relevant.
+- Verify generated outputs contain the expected statuses, rule IDs, affected parts, summaries, and next actions.
+- Do not weaken or remove a regression test merely to make an implementation pass.
+
+## Documentation and Repository Awareness
+- Read `README.md` and the relevant files in `docs/` before introducing new conventions or changing behavior.
+- Keep documentation aligned with the implementation; avoid duplicating guidance that already exists elsewhere.
+- Explain assumptions when sample data or prototype limitations affect a decision.
+- Prefer backward-compatible changes and preserve existing public function behavior unless a breaking change is explicitly requested.
+- Before finishing, review the diff, run relevant tests, and mention any checks that could not be run.
+
+

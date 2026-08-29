@@ -1,4 +1,8 @@
-part_number,description,status,lifecycle_state,revision
-AB-1001,Capacitor 10uF 16V,OBSOLETE,End-of-Life,C
-AB-1002,Capacitor 10uF 25V,ACTIVE,Production,A
-AB-2001,Resistor 100ohm,ACTIVE,Production,B
+part_number,description,status,lifecycle_state,revision,supplier,unit_of_measure
+AB-1001,Capacitor 10uF 16V,OBSOLETE,End-of-Life,C,Capacitor Supply Co.,EA
+AB-1002,Capacitor 10uF 25V,ACTIVE,Production,A,Electro Components Ltd.,EA
+AB-2001,Resistor 100ohm,ACTIVE,Production,B,Resistor Solutions Inc.,EA
+1001234,Support bracket assembly,ACTIVE,Production,A,Fabrication Partners,EA
+1001235,"Stop bracket, revised",ACTIVE,Production,A,,EA
+1001236,"Connector, removed from drawing",ACTIVE,Production,B,Connector Supply Group,BOX
+
