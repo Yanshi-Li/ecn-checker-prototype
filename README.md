@@ -1,162 +1,145 @@
-# ECN Checker Prototype — Version 1
+# ECN Checker
 
-A standalone Python prototype that validates Engineering Change Notice (ECN)
-change lines against simulated master part and released Bill of Materials (BOM)
-data.
+## Overview
 
-## Purpose
-
-The prototype demonstrates ECN checks before an ECN is submitted, approved,
-implemented, or completed.
-
-This Version 1 prototype does not require Windchill access. It uses CSV files
-and PDF/email intake sources to simulate data that may later be retrieved from
-Windchill, a PLM, or an ERP.
-
-## Stage 1 intake formats
-
-The Stage 1 intake loader normalises source files into a common ECN packet for
-the downstream rule engine. It supports the following role-specific formats:
-
-| Input role | Supported formats | Result |
-|---|---|---|
-| ECN form | `.csv`, `.xlsx`, `.xls`, `.pdf`, `.html`, `.htm`, `.eml` | ECN header fields |
-
-| BOM | `.csv`, `.xlsx`, `.xls`, `.pdf` | Normalized BOM rows |
-
-PDF routing is role-aware: an ECN PDF is parsed as form fields, while a BOM PDF
-is parsed as an MBOM table. The checked-in Windchill HTML ECN and MBOM PDF
-examples in `data/` are covered by regression tests. See
-[the intake scenarios](docs/test-scenarios.md#stage-1-intake-regression-scenarios)
-for expected extraction results and limitations.
+ECN Checker is a Python prototype for ECN creators, BOM coordinators, and Chief Engineers. It ingests an Engineering Change Notice (ECN) and a Bill of Materials (BOM), validates them with deterministic rules and part-master/history context, adds an AI-assisted (or rule-based fallback) review, makes a gate decision, presents the findings, and notifies the appropriate reviewers by email.
 
 ## Architecture
 
+The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the current stage implementations live in `scripts/stages/` (with compatibility wrappers in `scripts/`).
 
-All validation is handled in pure Python — no Java required.
+1. **Intake** — parses the submitted ECN and BOM and normalizes them into one packet.
+2. **Rule Engine** — applies deterministic checks for required ECN fields, part-number format, duplicate BOM lines, quantity, change type, and date format.
+3. **AI Advisory** — reviews ECN/BOM semantics using Gemini or OpenAI when configured; otherwise it uses deterministic advisory heuristics.
+4. **Context Engine** — checks BOM parts against `data/parts_master.csv` and ECN history, and writes context artifacts under `out/context_engine/`.
+5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors, selected part issues, and historical conflicts close the gate, while warnings and AI notes remain advisory.
+6. **Dashboard** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; the Streamlit app renders the gate findings directly.
+7. **Email Notification** — sends or dry-runs a gate-specific notification through SendGrid.
 
-```text
-ECN CSV + Master BOM CSV + Part Master CSV
-                ↓
-     Python validation rules (ecn_checker.py)
-                ↓
-      JSON dashboard results
-                ↓
-      Python assistant (LLM or fallback)
-                ↓
-      Reviewer summary + next actions
-```
+See [docs/architecture.md](docs/architecture.md) for the workflow and rule reference. The README reflects the current code where it differs from that document.
 
-## Web Upload UI
+## Supported file formats
 
-ECN Creators and BOM Coordinators can validate their CSV files through a
-browser interface before submission.
+| Submission role | Supported extensions | Handling |
+|---|---|---|
+| ECN | `.csv`, `.xlsx`, `.xls`, `.pdf`, `.html`, `.htm`, `.eml` | CSV/Excel use the first row as the header; PDF forms, HTML forms, and email bodies are parsed into ECN header fields. |
+| BOM | `.csv`, `.xlsx`, `.xls`, `.pdf` | CSV/Excel produce row dictionaries; template-style Excel and PDF MBOM data are normalized to BOM rows. |
 
-### Start the server
+PDF routing is role-aware: an ECN PDF is parsed as fields, while a BOM PDF is parsed as MBOM tables. PDF BOM extraction looks for a table header containing **Part Number** and **Action**, then maps recognized columns such as description, quantity, unit, action, and source. The checked-in HTML ECN and MBOM PDF examples in `data/` have regression coverage.
+
+## Setup — local
+
+1. Clone the repository and enter it.
+
+   ```bash
+   git clone <repository-url>
+   cd ECN-Checker
+   ```
+
+2. Create and activate a virtual environment.
+
+      ```bash
+   python -m venv .venv
+   # Windows, if `python` is not on PATH: py -m venv .venv
+   # Windows PowerShell: .venv\Scripts\Activate.ps1
+   # macOS/Linux: source .venv/bin/activate
+   ```
+
+3. Install the project dependencies.
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Copy `.env.example` to `.env`, then replace placeholder values with approved credentials as needed. Keep `.env` out of source control.
+
+   ```bash
+   copy .env.example .env
+   ```
+
+   On macOS/Linux, use `cp .env.example .env`. An LLM key is optional because the pipeline falls back to rule-based advisory checks. SendGrid settings are only needed for live email delivery.
+
+5. Run the CLI pipeline. Defaults are `data/ecn_intake.csv` and `data/bom.csv`.
+
+      ```bash
+   python scripts/run_hybrid.py
+   python scripts/run_hybrid.py --ecn "data/ECN 4078575 DD PH12 Motor Controller - PCB 519123 rev B1 Modules Update.html" --bom data/4078575-MBOM_xlsx.pdf --engineer-email engineer@example.com --ce-email chief.engineer@example.com
+   # Windows, if `python` is not on PATH: py scripts/run_hybrid.py
+   ```
+
+   The CLI accepts `--ecn`, `--bom`, `--engineer-email`, and `--ce-email`. `DRY_RUN` is an environment/secret setting, not a CLI option. CLI output includes `out/dashboard.html`, `out/ai_summary.md`, and context-engine CSV artifacts.
+
+6. Run the Streamlit interface locally.
+
+   ```bash
+   streamlit run streamlit_app.py
+   # Windows, if `streamlit` is not on PATH: py -m streamlit run streamlit_app.py
+   ```
+
+   Upload one ECN and one BOM, select **Run Checks**, then use the separate notification control if appropriate. The Streamlit page does not generate the CLI HTML dashboard or summary file.
+
+### Dependencies
+
+`requirements.txt` currently installs: `streamlit`, `pandas`, `openpyxl`, `pdfplumber`, `httpx`, `openai`, `sendgrid`, and `pytest` (for the test suite).
+
+## Setup — Streamlit Cloud deployment
+
+Push the repository to GitHub, create an app at [Streamlit Community Cloud](https://share.streamlit.io/), select the repository and branch, and set `streamlit_app.py` as the entry point. Add the real secrets in the app dashboard under **Settings → Secrets** rather than committing them; Community Cloud installs `requirements.txt` automatically. Keep `DRY_RUN=true` until live delivery is approved. Before enabling SendGrid, verify the sender domain/address used by `EMAIL_FROM_ADDRESS` (domain authentication is the intended production setup; single-sender verification is suitable for limited testing). See [docs/streamlit-deploy.md](docs/streamlit-deploy.md) for the complete deployment steps.
+
+## Environment variables / secrets
+
+For local CLI use, the AI advisory reads a repository-root `.env` file; process environment values take precedence. In Streamlit, configured secrets are read first. Do not commit real credentials.
+
+| Variable | Purpose | Used by | Example/default |
+|---|---|---|---|
+| `GEMINI_API_KEY` | Enables Gemini AI advisory; preferred when both AI keys are set. | CLI and Streamlit | `your-gemini-api-key` |
+| `GEMINI_MODEL` | Gemini model override. | CLI and Streamlit | `gemini-2.5-flash` |
+| `GEMINI_BASE_URL` | Gemini OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://generativelanguage.googleapis.com/v1beta/openai/` |
+| `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory when no Gemini key is configured. | CLI and Streamlit | `your-openai-api-key` |
+| `OPENAI_MODEL` | OpenAI model override. | CLI and Streamlit | `gpt-4o-mini` |
+| `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://gateway.aitools.corp.fisherpaykel.com` |
+| `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Streamlit | `your-sendgrid-api-key` |
+| `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address. Required only when live email is enabled. | CLI and Streamlit | `verified-sender@example.com` |
+| `DRY_RUN` | Controls whether notifications are only logged rather than sent. | CLI and Streamlit | `true` (default); set `false`, `0`, `no`, or `off` to enable delivery |
+
+## Running tests
 
 ```bash
-pip install flask
-python scripts/app.py
+python -m pytest -q
+# Windows, if `python` is not on PATH: py -m pytest -q
 ```
 
-Then open **http://localhost:5000** in your browser.
+The test suite covers intake (including sample HTML ECN and PDF MBOM extraction), deterministic rules, AI fallback/configuration, part-master and history checks, merge/gate behavior, Node 6 notification rendering, the hybrid pipeline, and the legacy CSV checker.
 
-### How to use it
+## Email notifications
 
-1. Select your role — **ECN Creator** (for `ecn_header` / `ecn_changes` files)
-   or **BOM Coordinator** (for `bom` / `parts` files).
-2. Drag-and-drop or click to browse and select one or more `.csv` files.
-3. Click **Check My Files**.
-4. Review per-file errors and warnings inline — fix any issues and re-upload.
+Node **6a** is the `FAIL` path: it notifies only the engineer with blockers, part issues, and conflict alerts so the ECN can be fixed and resubmitted. Node **6b** is the `PASS` path: it notifies the engineer and Chief Engineer that the ECN is ready for CE review, including advisory warnings and AI notes. `DRY_RUN` defaults to `true`, so no email is sent unless it is explicitly disabled and valid SendGrid credentials plus a verified sender address are configured.
 
-## Command-line workflow
+## Known limitations / TODO
 
-Run the full pipeline with:
-
-```bash
-python scripts/run_hybrid.py
-```
-
-This will:
-- run the Python validation rules against the CSV files in `data/`,
-- generate the reviewer dashboard,
-- produce a structured AI summary JSON file,
-- and create a simple hybrid HTML view.
-
-Outputs are written to `out/`.
-
-Context Engine (Stage 4) also materializes testable context data under
-`out/context_engine/`:
-
-- `parts_master_database.csv`
-- `ecn_conflict_log.csv` (appends new run entries every test execution)
-- `bom_structure_records.csv` (appends new run entries every test execution)
-
-## AI usage
-
-The workflow includes an optional AI-assisted summary step:
-
-- `ecn_checker.py` is the deterministic rules engine.
-- The Python assistant generates reviewer-friendly summaries and next actions
-  from the checker output.
-- If no model is configured, the system falls back to deterministic guidance.
-
-### Optional LLM configuration
-
-Prefer storing keys in a local `.env` file and keeping it out of Git.
-
-```bash
-copy .env.example .env
-```
-
-Then fill in the keys in `.env`:
-
-```dotenv
-OPENAI_API_KEY=your_key
-OPENAI_MODEL=gpt-4o-mini
-
-GEMINI_API_KEY=your_key
-GEMINI_MODEL=gemini-2.5-flash
-```
-
-The app automatically reads `.env` from the repo root at startup.
-
-**Manual environment variables:**
-
-```bash
-export OPENAI_API_KEY=your_key
-export OPENAI_MODEL=gpt-4o-mini
-```
-
-If no credentials are configured, the assistant uses the built-in
-deterministic fallback.
+- Intake is template- and label-driven. ECN PDF parsing relies on known field labels; HTML parsing is designed for label/value tables (including the checked-in Windchill export); and email parsing expects recognizable labels such as ECN ID, Title, Description, and Change Type.
+- PDF BOM extraction only recognizes extractable tables with MBOM-like **Part Number** and **Action** headers. Scanned PDFs and differently structured tables may yield no rows or need a parser enhancement.
+- The Streamlit uploader currently offers every intake extension for both upload controls, even though HTML is ECN-only and BOM parsing is supported only for CSV, Excel, and PDF. The low-level loader also accepts `.eml` for the BOM role but returns an ECN-style dictionary, which results in an empty BOM rather than a valid BOM import.
+- AI review is advisory only and is limited to the first 20 BOM lines sent to the model. If no usable provider/key is available, the rule-based fallback is used.
+- The gate does not fail for every context warning. It closes for rule-engine `ERROR`s, `DISCONTINUED_PART`, `MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`; other context flags, rule warnings, and AI findings are advisory.
+- Context logs and BOM structure records append on each run under `out/context_engine/`; clean or manage those generated artifacts as appropriate for repeatable local work.
+- This remains a CSV/reference-data prototype: it does not connect directly to Windchill, PLM, or ERP systems.
 
 ## Key locations
 
 | Path | Description |
 |---|---|
-| `scripts/app.py` | Flask web server — upload UI and validation endpoint |
-| `scripts/ecn_checker.py` | Core validation rule engine |
-| `scripts/run_hybrid.py` | End-to-end CLI pipeline |
-| `data/` | Sample CSV, HTML ECN, PDF BOM, and supporting inputs |
-| `out/` | Generated dashboard and AI summary outputs |
+| `scripts/run_hybrid.py` | CLI orchestration of all stages and notifications |
+| `scripts/stages/` | Intake, rule, AI, context, merge, dashboard, and email stage implementations |
+| `streamlit_app.py` | Streamlit upload, gate-results, and explicit notification interface |
+| `data/` | Sample ECN/BOM inputs, parts master, and ECN history |
+| `docs/` | Architecture, deployment, rule, and intake-test documentation |
+| `tests/` | Regression and pipeline tests |
+| `out/` | Generated CLI dashboard, summary, and context artifacts |
 
-| `docs/` | Architecture, rule, and test documentation |
-| `tests/` | Regression tests |
+## Documentation
 
-### Repository structure (clean layout)
-
-```text
-scripts/    # pipeline stages and orchestration code
-data/       # sample ECN/BOM/parts/history input files
-tests/      # regression and module tests
-docs/       # architecture/rules/test scenario docs
-templates/  # web UI templates
-out/        # generated outputs (ignored in git)
-```
-
-## Running tests
-
-```bash
-pytest -q
-```
+- [Architecture and rules](docs/architecture.md)
+- [Streamlit Cloud deployment](docs/streamlit-deploy.md)
+- [Intake scenarios and regression expectations](docs/test-scenarios.md)
+- [Rule catalogue](docs/rule-catalogue.md)
