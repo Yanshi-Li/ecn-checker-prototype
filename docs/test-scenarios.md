@@ -4,10 +4,12 @@
 
 The prototype is evaluated using sample ECN submissions across the main intake channels:
 
-- PDF ECN form intake
+- PDF and HTML ECN form intake
 - email-based ECN text export
 - form-generated ECN text
-- upload-based BOM / part master CSV files
+- upload-based BOM / part master CSV and Excel files
+- MBOM table extraction from PDF
+
 
 Each scenario validates the same downstream flow:
 
@@ -18,7 +20,25 @@ Each scenario validates the same downstream flow:
 5. run context checks against lifecycle / historical ECN data
 6. generate a reviewer summary and recommended decision
 
+## Stage 1 intake regression scenarios
+
+`tests/test_intake.py` includes integration-style regression coverage for the
+checked-in Windchill source documents under `data/`:
+
+| Source | Role and loader behavior | Expected result |
+|---|---|---|
+| `ECN 4078575 DD PH12 Motor Controller - PCB 519123 rev B1 Modules Update.html` | ECN; standalone HTML table fields are normalized into the ECN header schema | ECN `4078575`; all required header fields present |
+| `4078575-MBOM_xlsx.pdf` | BOM; PDF tables are normalized using the MBOM column aliases | Four sequential `ADD` rows, parts `567953`–`567956` |
+| `4078575-MBOM_xlsx.pdf` | ECN; same PDF dispatched through the ECN PDF-form loader | A header dictionary, confirming PDF dispatch is role-aware |
+
+The end-to-end intake scenario runs `run_intake()` with the HTML ECN and PDF
+BOM, then verifies there are no missing required ECN fields, four BOM rows, and
+both source paths in the packet. Tests also reject unsupported `load_file()`
+roles. These document-based tests depend on the corresponding files remaining
+in `data/`.
+
 ## Node 3 semantic advisory test matrix
+
 
 The AI advisory stage now tracks the semantic checks defined in the ECN intake mapping:
 
@@ -64,7 +84,8 @@ The reviewer-facing dashboard should show:
 
 The prototype intentionally focuses on a controlled, rule-based validation layer rather than a full PLM integration. Current limitations include:
 
-- PDF extraction depends on clean, text-based layouts and may require OCR or form-specific parsing for messy scans
+- PDF extraction depends on clean, text-based layouts and may require OCR or form-specific parsing for messy scans; BOM PDF table extraction is currently tailored to the supplied MBOM header structure
+
 - email intake works best when standard ECN fields are labelled explicitly
 - AI advisory is advisory only and must not replace human review
 - historical conflict checks are limited to the sample history data and do not yet cover full enterprise lifecycle records

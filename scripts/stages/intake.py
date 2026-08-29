@@ -12,7 +12,9 @@ from email import policy
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
+
 
 logger = logging.getLogger(__name__)
 
@@ -351,47 +353,49 @@ def _lookup_value(mapping: dict, *candidates: str) -> str:
     return ""
 
 
-def _coerce_mbom_rows(rows: list[dict]) -> list[dict]:
-    """Normalize the MBOM spreadsheet template into the project BOM schema."""
-    parsed_rows = []
-    for idx, row in enumerate(rows, start=1):
-        if not row:
-            continue
-        normalized = {
-            _normalize_excel_key(k): ("" if v is None else str(v).strip())
-            for k, v in row.items()
-        }
+def _normalize_mbom_row(row: dict) -> dict | None:
+    """Normalize one MBOM row using the common Excel/PDF column aliases."""
+    normalized = {
+        _normalize_excel_key(k): ("" if v is None else str(v).strip())
+        for k, v in row.items()
+    }
+    part_number = _lookup_value(
+        normalized,
+        "part number",
+        "component part number",
+        "existing child part number",
+        "new child part number",
+    )
+    if not part_number:
+        return None
 
-        part_number = _lookup_value(
-            normalized,
-            "part number",
-            "component part number",
-            "existing child part number",
-            "new child part number",
-        )
-        if not part_number:
-            continue
-
-        quantity = _lookup_value(normalized, "qty", "quantity") or "1"
-        unit = _lookup_value(normalized, "select unit of measure") or "EA"
-        description = _lookup_value(
+    return {
+        "part_number": part_number,
+        "description": _lookup_value(
             normalized,
             "part description",
             "description",
             "new child part description",
-        )
+        ),
+        "quantity": _lookup_value(normalized, "qty", "quantity") or "1",
+        "unit": _lookup_value(normalized, "select unit of measure") or "EA",
+        "action": _lookup_value(normalized, "select action", "action"),
+        "source": _lookup_value(normalized, "select bom database"),
+    }
 
-        parsed_rows.append({
-            "line_number": str(idx),
-            "part_number": part_number,
-            "description": description,
-            "quantity": quantity,
-            "unit": unit,
-            "action": _lookup_value(normalized, "select action", "action"),
-            "source": _lookup_value(normalized, "select bom database"),
-        })
 
+def _coerce_mbom_rows(rows: list[dict]) -> list[dict]:
+    """Normalize the MBOM spreadsheet template into the project BOM schema."""
+    parsed_rows = []
+    for row in rows:
+        if not row:
+            continue
+        parsed = _normalize_mbom_row(row)
+        if parsed:
+            parsed["line_number"] = str(len(parsed_rows) + 1)
+            parsed_rows.append(parsed)
     return parsed_rows
+
 
 
 # ── Excel Loader ──────────────────────────────────────────────────────────────
@@ -437,8 +441,55 @@ def load_excel(filepath: str) -> list[dict]:
     ):
         rows = _coerce_mbom_rows(rows)
 
-    logger.info("Excel loaded: %s (%d rows)", filepath, len(rows))
+        logger.info("Excel loaded: %s (%d rows)", filepath, len(rows))
     return rows
+
+
+def _is_mbom_header(row: list[str | None]) -> bool:
+    """Return whether a PDF table row is an MBOM column-header row."""
+    headers = [_normalize_excel_key(cell) for cell in row]
+    return any("part number" in header for header in headers) and any(
+        "action" in header for header in headers
+    )
+
+
+def load_pdf_bom(filepath: str) -> list[dict]:
+    """Extract and normalize MBOM tables from a PDF (requires pdfplumber)."""
+    if not HAS_PDF:
+        raise ImportError("pdfplumber is required: pip install pdfplumber")
+
+    parsed_rows = []
+    header = None
+    with pdfplumber.open(filepath) as pdf:
+        for page in pdf.pages:
+            for table in page.extract_tables():
+                for row in table:
+                    if _is_mbom_header(row):
+                        header = row
+                        continue
+                    row_keys = [_normalize_excel_key(cell) for cell in row]
+                    if (
+                        "select bom database" in row_keys
+                        and any("action" in key for key in row_keys)
+                    ):
+                        header = None
+                        continue
+                    if header is None or not any(cell for cell in row):
+                        continue
+
+                    raw_row = {
+                        str(column): value
+                        for column, value in zip(header, row)
+                        if column is not None
+                    }
+                    parsed = _normalize_mbom_row(raw_row)
+                    if parsed:
+                        parsed["line_number"] = str(len(parsed_rows) + 1)
+                        parsed_rows.append(parsed)
+
+    logger.info("PDF BOM loaded: %s (%d rows)", filepath, len(parsed_rows))
+    return parsed_rows
+
 
 
 # ── Email Helpers ─────────────────────────────────────────────────────────────
@@ -464,7 +515,83 @@ def _flatten_email_body(raw_text: str) -> str:
     return cleaned.strip()
 
 
+class _HTMLTableParser(HTMLParser):
+    """Collect text cells from HTML table rows without an external dependency."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows: list[list[str]] = []
+        self._row: list[str] | None = None
+        self._cell_parts: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "tr":
+            self._row = []
+        elif tag in {"td", "th"} and self._row is not None:
+            self._cell_parts = []
+        elif tag == "br" and self._cell_parts is not None:
+            self._cell_parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._cell_parts is not None:
+            self._cell_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"td", "th"} and self._cell_parts is not None and self._row is not None:
+            self._row.append("".join(self._cell_parts))
+            self._cell_parts = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+
+
+def _parse_html_table_fields(raw_html: str) -> dict:
+    """Extract label/value ECN fields from the Windchill HTML table layout."""
+    parser = _HTMLTableParser()
+    parser.feed(raw_html)
+    parser.close()
+
+    html_aliases = {
+        "number": "change_notice_number",
+        "name": "name_of_change",
+        "created on": "date",
+        }
+    fields = {}
+    pending_key = None
+
+    for row in parser.rows:
+        cells = [_flatten_email_body(cell) for cell in row]
+        if not cells:
+            continue
+
+        label = _normalize_pdf_key(cells[0].rstrip(":"))
+        key = KEY_ALIASES.get(label) or html_aliases.get(label)
+        if key:
+            if len(cells) > 1:
+                value = " ".join(cell for cell in cells[1:] if cell).strip()
+                if value:
+                    fields[key] = value
+                pending_key = None
+            else:
+                pending_key = key
+        elif pending_key and cells[0]:
+            fields[pending_key] = cells[0]
+            pending_key = None
+
+    return fields
+
+
+def load_html(filepath: str) -> dict:
+    """Load an HTML ECN form into the standard PDF-form ECN header schema."""
+    raw_html = Path(filepath).read_text(encoding="utf-8", errors="replace")
+    fields = _parse_pdf_fields(_flatten_email_body(raw_html))
+    fields.update(_parse_html_table_fields(raw_html))
+    logger.info("HTML ECN loaded: %s (%d fields extracted)", filepath, len(fields))
+    return fields
+
+
 def _extract_email_body(raw_bytes: bytes) -> str:
+
     """Return the readable text body from an .eml message."""
     message = BytesParser(policy=policy.default).parsebytes(raw_bytes)
     body_parts = []
@@ -628,19 +755,24 @@ def validate_ecn_header(header: dict) -> dict:
 
 
 # ── Auto-detect File Loader ───────────────────────────────────────────────────
-def load_file(filepath: str) -> list[dict] | dict:
-    """Auto-detect file type and load accordingly."""
+def load_file(filepath: str, role: str = "ecn") -> list[dict] | dict:
+    """Auto-detect file type and load it for the supplied ECN or BOM role."""
+    if role not in {"ecn", "bom"}:
+        raise ValueError(f"Unsupported file role: {role}")
+
     ext = Path(filepath).suffix.lower()
     if ext == ".csv":
         return load_csv(filepath)
-    elif ext in (".xlsx", ".xls"):
+    if ext in (".xlsx", ".xls"):
         return load_excel(filepath)
-    elif ext == ".pdf":
-        return load_pdf(filepath)
-    elif ext == ".eml":
+    if ext == ".pdf":
+        return load_pdf_bom(filepath) if role == "bom" else load_pdf(filepath)
+    if ext in (".html", ".htm") and role == "ecn":
+        return load_html(filepath)
+    if ext == ".eml":
         return load_email(filepath)
-    else:
-        raise ValueError(f"Unsupported file type: {ext}")
+    raise ValueError(f"Unsupported file type: {ext}")
+
 
 # ── Packet builder ────────────────────────────────────────────────────────────
 def build_ecn_packet(ecn_data, bom_data, source_files=None) -> dict:
@@ -688,10 +820,13 @@ def build_ecn_packet(ecn_data, bom_data, source_files=None) -> dict:
 def run_intake(ecn_filepath: str, bom_filepath: str) -> dict:
     """
     Main intake entry point called by the orchestrator (run_hybrid.py).
-    Returns a fully structured ECN packet.
+        Returns a fully structured ECN packet.
     """
-    ecn_data = load_file(ecn_filepath)
-    bom_data = load_file(bom_filepath)
+
+    ecn_data = load_file(ecn_filepath, role="ecn")
+    bom_data = load_file(bom_filepath, role="bom")
+
+
     packet = build_ecn_packet(
         ecn_data,
         bom_data,

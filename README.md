@@ -13,7 +13,25 @@ This Version 1 prototype does not require Windchill access. It uses CSV files
 and PDF/email intake sources to simulate data that may later be retrieved from
 Windchill, a PLM, or an ERP.
 
+## Stage 1 intake formats
+
+The Stage 1 intake loader normalises source files into a common ECN packet for
+the downstream rule engine. It supports the following role-specific formats:
+
+| Input role | Supported formats | Result |
+|---|---|---|
+| ECN form | `.csv`, `.xlsx`, `.xls`, `.pdf`, `.html`, `.htm`, `.eml` | ECN header fields |
+
+| BOM | `.csv`, `.xlsx`, `.xls`, `.pdf` | Normalized BOM rows |
+
+PDF routing is role-aware: an ECN PDF is parsed as form fields, while a BOM PDF
+is parsed as an MBOM table. The checked-in Windchill HTML ECN and MBOM PDF
+examples in `data/` are covered by regression tests. See
+[the intake scenarios](docs/test-scenarios.md#stage-1-intake-regression-scenarios)
+for expected extraction results and limitations.
+
 ## Architecture
+
 
 All validation is handled in pure Python — no Java required.
 
@@ -120,8 +138,9 @@ deterministic fallback.
 | `scripts/app.py` | Flask web server — upload UI and validation endpoint |
 | `scripts/ecn_checker.py` | Core validation rule engine |
 | `scripts/run_hybrid.py` | End-to-end CLI pipeline |
-| `data/` | Sample CSV inputs used by the prototype |
+| `data/` | Sample CSV, HTML ECN, PDF BOM, and supporting inputs |
 | `out/` | Generated dashboard and AI summary outputs |
+
 | `docs/` | Architecture, rule, and test documentation |
 | `tests/` | Regression tests |
 

@@ -2,7 +2,20 @@ import pytest
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from intake import build_ecn_packet, load_csv, load_excel, REQUIRED_ECN_FIELDS
+from intake import (
+    REQUIRED_ECN_FIELDS,
+    build_ecn_packet,
+    load_excel,
+    load_file,
+    run_intake,
+    validate_ecn_header,
+)
+
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+HTML_ECN_PATH = DATA_DIR / "ECN 4078575 DD PH12 Motor Controller - PCB 519123 rev B1 Modules Update.html"
+PDF_BOM_PATH = DATA_DIR / "4078575-MBOM_xlsx.pdf"
+
 
 
 def test_load_excel_mbom_template(tmp_path):
@@ -88,7 +101,61 @@ def test_load_email_into_header_dict(tmp_path):
     assert data["change_type"] == "modify"
 
 
+def test_load_sample_html_ecn_form():
+    data = load_file(str(HTML_ECN_PATH), role="ecn")
+
+    assert data["change_notice_number"] == "4078575"
+    assert data["name_of_change"] == "DD PH12 Motor Controller - PCB 519123 rev B1 Modules Update"
+    for field in (
+        "reason_for_change",
+        "description_of_change",
+        "products_affected",
+        "change_actions",
+        "date",
+    ):
+        assert data[field]
+    assert validate_ecn_header(data)["validation"]["missing_fields"] == []
+
+
+def test_load_sample_pdf_bom():
+    rows = load_file(str(PDF_BOM_PATH), role="bom")
+
+    assert len(rows) == 4
+    assert [row["line_number"] for row in rows] == ["1", "2", "3", "4"]
+    assert rows[0] == {
+        "part_number": "567953",
+        "description": "MOD MC DD RX24T PH12J 230V DBL",
+        "quantity": "1",
+        "unit": "EA",
+        "action": "ADD",
+        "source": "Thailand",
+        "line_number": "1",
+    }
+
+
+def test_pdf_loading_is_role_aware():
+    assert isinstance(load_file(str(PDF_BOM_PATH), role="ecn"), dict)
+    assert isinstance(load_file(str(PDF_BOM_PATH), role="bom"), list)
+
+
+def test_load_file_rejects_unknown_role():
+    with pytest.raises(ValueError, match="Unsupported file role"):
+        load_file(str(HTML_ECN_PATH), role="review")
+
+
+def test_run_intake_with_sample_html_ecn_and_pdf_bom():
+    packet = run_intake(str(HTML_ECN_PATH), str(PDF_BOM_PATH))
+
+    assert packet["validation"]["missing_fields"] == []
+    assert len(packet["bom"]) == 4
+    assert packet["source_files"] == {
+        "ecn": str(HTML_ECN_PATH),
+        "bom": str(PDF_BOM_PATH),
+    }
+
+
 def test_load_html_email_body(tmp_path):
+
     eml_path = tmp_path / "html_email.eml"
     eml_path.write_bytes(
         b"Content-Type: multipart/alternative; boundary=abc\n"
