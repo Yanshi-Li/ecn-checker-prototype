@@ -9,7 +9,7 @@ import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
 STAGES = ROOT / "scripts" / "stages"
-SUPPORTED_FILE_TYPES = ["csv", "xlsx", "xls", "pdf", "eml"]
+SUPPORTED_FILE_TYPES = ["csv", "xlsx", "xls", "pdf", "html", "htm", "eml"]
 
 
 def _load(name: str):
@@ -105,13 +105,13 @@ def main() -> None:
         ecn_file = st.file_uploader(
             "Step 1 — Upload ECN file",
             type=SUPPORTED_FILE_TYPES,
-            help="CSV, Excel, PDF, or EML files are supported by the intake stage.",
+            help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
         )
     with bom_column:
         bom_file = st.file_uploader(
             "Step 2 — Upload BOM file",
             type=SUPPORTED_FILE_TYPES,
-            help="CSV, Excel, PDF, or EML files are supported by the intake stage.",
+            help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
         )
 
     if st.button("Run Checks", type="primary", disabled=not (ecn_file and bom_file)):

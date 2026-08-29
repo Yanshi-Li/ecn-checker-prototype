@@ -155,9 +155,7 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     logger.info("── Stage 2: Rule Engine ──")
     packet = run_rule_engine(packet)
 
-   SENDGRID_API_KEY=your-sendgrid-api-key
-EMAIL_FROM_ADDRESS=verified-sender@example.com
-DRY_RUN=true # Early exit if critical errors and no AI needed
+   
     errors = [
         v for v in packet["validation"]["rule_violations"]
         if v["severity"] == "ERROR"
