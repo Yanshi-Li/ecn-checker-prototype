@@ -3,10 +3,11 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from context_engine import (
-    check_part_status,
     check_historical_conflicts,
+    check_part_status,
     run_context_engine,
 )
+from stages.context_engine import _check_missing_supplier, _check_uom_mismatch
 
 
 MOCK_PARTS = {
@@ -111,6 +112,60 @@ def test_ecn_2026_003_no_self_conflict():
     assert conflicts == []
 
 
+def test_missing_supplier_is_flagged_for_known_part():
+    bom = [{"line_number": "7", "part_number": "P-100"}]
+    parts_db = {"P-100": {"supplier": ""}}
+
+    flags = _check_missing_supplier(bom, parts_db)
+
+    assert flags == [{
+        "flag_type": "MISSING_SUPPLIER",
+        "severity": "ERROR",
+        "part_number": "P-100",
+        "line_number": "7",
+        "message": "Part 'P-100' has no supplier recorded in the Parts Master DB.",
+    }]
+
+
+def test_missing_supplier_skips_known_part_with_supplier_and_unknown_part():
+    bom = [
+        {"line_number": "1", "part_number": "P-100"},
+        {"line_number": "2", "part_number": "P-999"},
+    ]
+    parts_db = {"P-100": {"supplier": "Approved Supplier"}}
+
+    assert _check_missing_supplier(bom, parts_db) == []
+
+
+def test_uom_mismatch_is_flagged_case_insensitively():
+    bom = [{"line_number": "4", "part_number": "P-200", "unit": "EA"}]
+    parts_db = {"P-200": {"unit_of_measure": "BOX"}}
+
+    flags = _check_uom_mismatch(bom, parts_db)
+
+    assert flags == [{
+        "flag_type": "UOM_MISMATCH",
+        "severity": "ERROR",
+        "part_number": "P-200",
+        "line_number": "4",
+        "message": "Part 'P-200' unit 'EA' does not match Parts Master DB unit 'BOX'.",
+    }]
+
+
+def test_uom_mismatch_skips_matching_or_blank_units_and_unknown_parts():
+    bom = [
+        {"line_number": "1", "part_number": "P-200", "unit": "ea"},
+        {"line_number": "2", "part_number": "P-300", "unit": ""},
+        {"line_number": "3", "part_number": "P-999", "unit": "EA"},
+    ]
+    parts_db = {
+        "P-200": {"unit_of_measure": "EA"},
+        "P-300": {"unit_of_measure": "EA"},
+    }
+
+    assert _check_uom_mismatch(bom, parts_db) == []
+
+
 def _csv_rows(path: Path) -> list[dict]:
     with open(path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
@@ -172,9 +227,12 @@ def test_context_engine_creates_required_databases(tmp_path):
     assert conflict_log_path.exists()
     assert bom_records_path.exists()
 
-    assert len(_csv_rows(parts_db_path)) == 3
+    parts_rows = _csv_rows(parts_db_path)
+    assert len(parts_rows) == 6
+    assert set(parts_rows[0]) >= {"supplier", "unit_of_measure"}
     assert len(_csv_rows(conflict_log_path)) == 6  # 4 seeded history rows + 2 test BOM rows
     assert len(_csv_rows(bom_records_path)) == 2
+
 
 
 def test_context_logs_append_for_each_test_run(tmp_path):

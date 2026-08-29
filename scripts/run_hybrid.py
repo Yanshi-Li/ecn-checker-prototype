@@ -1,6 +1,6 @@
 """
 Main Orchestrator — ECN Hybrid Checker Pipeline
-Flow: Intake → Rule Engine → AI Advisory → Context Engine → Dashboard → Approval
+Flow: Intake → Rule Engine → AI Advisory → Context Engine → Merge Step → Dashboard → Approval
 """
 
 import os
@@ -30,6 +30,7 @@ intake_mod            = _load("intake")
 rule_engine_mod       = _load("rule_engine")
 ai_advisory_mod       = _load("ai_advisory")
 context_engine_mod    = _load("context_engine")
+merge_step_mod        = _load("merge_step")
 dashboard_mod         = _load("dashboard")
 approval_workflow_mod = _load("approval_workflow")
 
@@ -37,6 +38,7 @@ run_intake         = intake_mod.run_intake
 run_rule_engine    = rule_engine_mod.run_rule_engine
 run_ai_advisory    = ai_advisory_mod.run_ai_advisory
 run_context_engine = context_engine_mod.run_context_engine
+run_merge_step     = merge_step_mod.run_merge_step
 run_dashboard      = dashboard_mod.run_dashboard
 approve_ecn        = approval_workflow_mod.approve_ecn
 reject_ecn         = approval_workflow_mod.reject_ecn
@@ -180,8 +182,13 @@ def run_pipeline(args: argparse.Namespace) -> dict:
             "recommendation":      "AI Advisory result was lost — check pipeline logs.",
             "ai_available":        False,
         }
-    logger.info("ai_flags at dashboard: %s", packet["validation"].get("ai_flags"))
-    
+        logger.info("ai_flags at dashboard: %s", packet["validation"].get("ai_flags"))
+
+    # Merge Step: Aggregation & Gate Decision
+    logger.info("── Merge Step: Aggregation & Gate Decision ──")
+    packet = run_merge_step(packet)
+    logger.info("GATE DECISION: %s", packet["gate"]["decision"])
+
     # Stage 5: Dashboard
     logger.info("── Stage 5: Dashboard ──")
     if hasattr(dashboard_mod, "_impl") and hasattr(dashboard_mod, "OUT_DIR"):
