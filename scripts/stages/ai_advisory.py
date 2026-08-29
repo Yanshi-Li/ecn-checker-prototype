@@ -35,6 +35,29 @@ _load_local_env()
 
 logger = logging.getLogger(__name__)
 
+
+def _get_config_value(key: str, default: str = "") -> str:
+    """Read Streamlit secrets first, then retain local environment support."""
+    try:
+        import streamlit as st
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx(suppress_warning=True) is not None:
+            value = st.secrets.get(key)
+            if value is not None:
+                return str(value).strip()
+    except Exception:
+        # No Streamlit runtime/secrets configured: use the established CLI path.
+        pass
+
+    return os.environ.get(key, default).strip()
+
+
+
+
+# ── Optional OpenAI dep ──────────────────────────────────────────────────────
+
+
 # ── Optional OpenAI dep ──────────────────────────────────────────────────────
 try:
     import openai
@@ -187,28 +210,31 @@ def _rule_flag(rule_id: str, flag_type: str, detail: str, line_number=None) -> d
 # ── AI call ──────────────────────────────────────────────────────────────────
 def _resolve_llm_config() -> dict | None:
     """Resolve provider config for OpenAI-compatible API clients."""
-    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    gemini_key = _get_config_value("GEMINI_API_KEY")
     if gemini_key:
         return {
             "provider": "gemini",
             "api_key": gemini_key,
-            "base_url": os.environ.get(
+            "base_url": _get_config_value(
                 "GEMINI_BASE_URL",
                 "https://generativelanguage.googleapis.com/v1beta/openai/",
             ),
-            "model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+            "model": _get_config_value("GEMINI_MODEL", "gemini-2.5-flash"),
         }
 
-    openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    openai_key = _get_config_value("OPENAI_API_KEY")
     if openai_key:
         return {
             "provider": "openai",
             "api_key": openai_key,
-            "base_url": os.environ.get("OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"),
-            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            "base_url": _get_config_value(
+                "OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"
+            ),
+            "model": _get_config_value("OPENAI_MODEL", "gpt-4o-mini"),
         }
 
     return None
+
 
 
 def _try_parse_json(raw: str) -> dict:
