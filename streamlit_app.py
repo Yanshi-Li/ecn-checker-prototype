@@ -30,12 +30,15 @@ rule_engine_mod = _load("rule_engine")
 ai_advisory_mod = _load("ai_advisory")
 context_engine_mod = _load("context_engine")
 merge_step_mod = _load("merge_step")
+email_notification_mod = _load("email_notification")
 
 run_intake = intake_mod.run_intake
 run_rule_engine = rule_engine_mod.run_rule_engine
 run_ai_advisory = ai_advisory_mod.run_ai_advisory
 run_context_engine = context_engine_mod.run_context_engine
 run_merge_step = merge_step_mod.run_merge_step
+send_fail_email = email_notification_mod.send_fail_email
+send_pass_email = email_notification_mod.send_pass_email
 
 
 def _write_upload(uploaded_file) -> str:
@@ -92,7 +95,10 @@ def main() -> None:
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
     st.title("ECN Checker")
     st.caption("Upload an Engineering Change Notice and BOM, then run the validation pipeline.")
-    st.info("This public interface runs checks only. It does not approve ECNs or send email notifications.")
+    st.info(
+        "Notifications require a separate button click after checks complete. "
+        "They remain dry runs unless DRY_RUN is explicitly disabled."
+    )
 
     upload_column, bom_column = st.columns(2)
     with upload_column:
@@ -136,6 +142,33 @@ def main() -> None:
     _render_findings("Conflict Alerts", gate.get("conflict_alerts", []))
     _render_findings("Warnings", gate.get("warnings", []))
     _render_ai_notes(gate.get("ai_notes", {}))
+
+    st.subheader("Notification Email")
+    engineer_email = st.text_input("Engineer email", key="notification_engineer_email")
+    ce_email = st.text_input("Chief Engineer email", key="notification_ce_email")
+    if st.button("Send Notification Email", type="secondary"):
+        if not engineer_email.strip():
+            st.info("Enter an engineer email address before sending a notification.")
+        elif decision == "PASS" and not ce_email.strip():
+            st.info("Enter a Chief Engineer email address for a PASS notification.")
+        else:
+            if decision == "FAIL":
+                result = send_fail_email(packet, engineer_email.strip())
+            else:
+                result = send_pass_email(
+                    packet, engineer_email.strip(), ce_email.strip()
+                )
+
+            recipients = ", ".join(result["recipients"])
+            status = "sent" if result["sent"] else "dry run" if result["dry_run"] else "not sent"
+            message = (
+                f"Notification {status}. Recipients: {recipients}. "
+                f"Subject: {result['subject']}. Dry run: {result['dry_run']}."
+            )
+            if result["sent"]:
+                st.success(message)
+            else:
+                st.info(message)
 
 
 if __name__ == "__main__":
