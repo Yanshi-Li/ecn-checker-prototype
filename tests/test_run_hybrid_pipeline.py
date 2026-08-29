@@ -28,17 +28,19 @@ def test_pipeline_runs_with_semantic_advisory_and_outputs(tmp_path, monkeypatch)
         encoding="utf-8",
     )
 
+        
     monkeypatch.setattr(run_hybrid, "ROOT", tmp_path)
     monkeypatch.setattr(run_hybrid.dashboard_mod, "OUT_DIR", out_dir)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     args = argparse.Namespace(
         ecn=str(ecn_path),
         bom=str(bom_path),
         engineer_email="engineer@example.com",
-        coordinator_email="coordinator@example.com",
-        auto_decision="none",
-        reject_reason="",
+        ce_email="ce@example.com",
     )
+
     packet = run_hybrid.run_pipeline(args)
 
     ai_flags = packet["validation"]["ai_flags"]

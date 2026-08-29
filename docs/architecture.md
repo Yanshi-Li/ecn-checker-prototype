@@ -40,15 +40,16 @@ Engineer submits ECN + BOM File from email / form / upload
          │
          ▼
 ┌─────────────────────┐
-│  Stage 5: Dashboard │  Engineer View: Fix Errors in Real-Time
-│  (HTML)             │  BOM Coordinator View: Full Audit Package
+│  Stage 5: Dashboard │  Engineer View: validation and gate results
+│  (HTML)             │  Audit package and advisory context
 └────────┬────────────┘
-         │ Audit Package Ready
+         │ Gate decision
          ▼
 ┌─────────────────────┐
-│  Stage 6: BOM       │  APPROVE → ECN Released + Email
-│  Coordinator        │  REJECT  → ECN to Draft + Feedback Email
+│  Stage 6: Email     │  FAIL → Engineer: fix and resubmit
+│  Notification       │  PASS → Engineer + CE: ready for CE review
 └─────────────────────┘
+
 
 ## Rule IDs
 
@@ -71,7 +72,8 @@ Engineer submits ECN + BOM File from email / form / upload
 | `scripts/ai_advisory.py`      | Stage 3: AI / fallback checks |
 | `scripts/context_engine.py`   | Stage 4: Parts + history RAG  |
 | `scripts/dashboard.py`        | Stage 5: HTML dashboard       |
-| `scripts/approval_workflow.py`| Stage 6: Approve/reject/email |
+| `scripts/email_notification.py`| Stage 6: gate-driven SendGrid email |
+
 | `data/parts_master.csv`       | Parts status database         |
 | `data/ecn_history.csv`        | Historical ECN records        |
 | `data/ecn_intake.csv`         | Sample ECN input              |
@@ -85,5 +87,9 @@ Engineer submits ECN + BOM File from email / form / upload
 | `GEMINI_MODEL`   | Optional Gemini model override (default: `gemini-2.5-flash`)   |
 | `OPENAI_API_KEY` | Enables AI Advisory (Stage 3) via OpenAI API                   |
 | `OPENAI_MODEL`   | Optional OpenAI model override (default: `gpt-4o-mini`)        |
+| `SENDGRID_API_KEY` | Enables SendGrid notification delivery (Stage 6)              |
+| `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address for Stage 6 notifications   |
+| `DRY_RUN` | Defaults to `true`; set explicitly false only to send email          |
+
 
 ## Running

@@ -1,6 +1,6 @@
 """
 Main Orchestrator — ECN Hybrid Checker Pipeline
-Flow: Intake → Rule Engine → AI Advisory → Context Engine → Merge Step → Dashboard → Approval
+Flow: Intake → Rule Engine → AI Advisory → Context Engine → Merge Step → Dashboard → Email Notification
 """
 
 import os
@@ -26,22 +26,22 @@ def _load(name: str):
     return mod
 
 
-intake_mod            = _load("intake")
-rule_engine_mod       = _load("rule_engine")
-ai_advisory_mod       = _load("ai_advisory")
-context_engine_mod    = _load("context_engine")
-merge_step_mod        = _load("merge_step")
-dashboard_mod         = _load("dashboard")
-approval_workflow_mod = _load("approval_workflow")
+intake_mod = _load("intake")
+rule_engine_mod = _load("rule_engine")
+ai_advisory_mod = _load("ai_advisory")
+context_engine_mod = _load("context_engine")
+merge_step_mod = _load("merge_step")
+dashboard_mod = _load("dashboard")
+email_notification_mod = _load("email_notification")
 
-run_intake         = intake_mod.run_intake
-run_rule_engine    = rule_engine_mod.run_rule_engine
-run_ai_advisory    = ai_advisory_mod.run_ai_advisory
+run_intake = intake_mod.run_intake
+run_rule_engine = rule_engine_mod.run_rule_engine
+run_ai_advisory = ai_advisory_mod.run_ai_advisory
 run_context_engine = context_engine_mod.run_context_engine
-run_merge_step     = merge_step_mod.run_merge_step
-run_dashboard      = dashboard_mod.run_dashboard
-approve_ecn        = approval_workflow_mod.approve_ecn
-reject_ecn         = approval_workflow_mod.reject_ecn
+run_merge_step = merge_step_mod.run_merge_step
+run_dashboard = dashboard_mod.run_dashboard
+send_fail_email = email_notification_mod.send_fail_email
+send_pass_email = email_notification_mod.send_pass_email
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -58,9 +58,13 @@ def write_ai_summary(packet: dict, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     header = packet["header"]
     ai_flags = packet["validation"].get("ai_flags", {})
+        
     rule_violations = packet["validation"].get("rule_violations", [])
+
     context_flags = packet["validation"].get("context_flags", [])
-        # Guard: wrap bare list into expected dict shape
+
+    # Guard: wrap bare list into expected dict shape.
+
     if isinstance(ai_flags, list):
         ai_flags = {
             "overall_risk": "UNKNOWN",
@@ -118,26 +122,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bom", default=str(ROOT / "data" / "bom.csv"),
-        help="Path to BOM file (CSV or Excel)"
+                
+        help="Path to BOM file (CSV or Excel)",
+
     )
     parser.add_argument(
+                
         "--engineer-email", default="engineer@company.com",
-        help="Engineer email for notifications"
+
+        help="Engineer email for notifications",
     )
     parser.add_argument(
-        "--coordinator-email", default="bom.coordinator@company.com",
-        help="BOM Coordinator email for notifications"
+        "--ce-email", default="chief.engineer@company.com",
+        help="Chief Engineer email for PASS gate notifications",
     )
-    parser.add_argument(
-        "--auto-decision", choices=["approve", "reject", "none"],
-        default="none",
-        help="Auto-approve or auto-reject for testing (default: none)"
-    )
-    parser.add_argument(
-        "--reject-reason", default="Issues found during automated review.",
-        help="Rejection reason (used with --auto-decision reject)"
-    )
+
     return parser.parse_args()
+
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -154,7 +155,9 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     logger.info("── Stage 2: Rule Engine ──")
     packet = run_rule_engine(packet)
 
-    # Early exit if critical errors and no AI needed
+   SENDGRID_API_KEY=your-sendgrid-api-key
+EMAIL_FROM_ADDRESS=verified-sender@example.com
+DRY_RUN=true # Early exit if critical errors and no AI needed
     errors = [
         v for v in packet["validation"]["rule_violations"]
         if v["severity"] == "ERROR"
@@ -193,32 +196,39 @@ def run_pipeline(args: argparse.Namespace) -> dict:
     logger.info("── Stage 5: Dashboard ──")
     if hasattr(dashboard_mod, "_impl") and hasattr(dashboard_mod, "OUT_DIR"):
         dashboard_mod._impl.OUT_DIR = dashboard_mod.OUT_DIR
+        
     dashboard_path = run_dashboard(packet)
+
     write_ai_summary(packet, ROOT / "out")
 
+    # Stage 6: Email Notification, driven solely by the calculated gate.
+    decision = packet["gate"]["decision"]
+    logger.info("── Stage 6: Email Notification (%s) ──", decision)
+    if decision == "FAIL":
+        notification_result = send_fail_email(packet, args.engineer_email)
+    else:
+        notification_result = send_pass_email(
+            packet, args.engineer_email, args.ce_email
+        )
+    packet["notification"] = notification_result
+    logger.info(
+        "Notification %s — recipients: %s; subject: %s",
+        "sent" if notification_result["sent"] else "dry-run" if notification_result["dry_run"] else "not sent",
+        ", ".join(notification_result["recipients"]),
+        notification_result["subject"],
+    )
+
     logger.info("=" * 60)
+        
     logger.info("PIPELINE COMPLETE")
+
     logger.info("  Dashboard : %s", dashboard_path)
     logger.info("  Summary   : %s", ROOT / "out" / "ai_summary.md")
     logger.info("=" * 60)
 
-    # Stage 6: Approval Workflow (optional / automated for testing)
-    if args.auto_decision == "approve":
-        logger.info("── Stage 6: Auto-Approve ──")
-        approve_ecn(packet, args.coordinator_email, args.engineer_email)
-    elif args.auto_decision == "reject":
-        logger.info("── Stage 6: Auto-Reject ──")
-        reject_ecn(
-            packet, args.coordinator_email,
-            args.engineer_email, args.reject_reason
-        )
-    else:
-        logger.info(
-            "── Stage 6: Awaiting BOM Coordinator decision ──\n"
-            "   Use approve_ecn() / reject_ecn() from approval_workflow.py"
-        )
-
+        
     return packet
+
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
