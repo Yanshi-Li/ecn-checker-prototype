@@ -70,7 +70,7 @@ def _build_prompt(packet: dict) -> str:
     # Map PDF-parsed keys to prompt-friendly values
     ecn_id      = header.get("change_notice_number") or header.get("ecn_id", "N/A")
     title       = header.get("name_of_change") or header.get("title", "N/A")
-    description = header.get("description_of_change") or header.get("description", "")
+    description = header.get("description") or header.get("description_of_change", "")
     change_type = header.get("change_type", "N/A")
     author      = header.get("author", "N/A")
     date        = header.get("date", "N/A")
@@ -205,7 +205,7 @@ def _resolve_llm_config() -> dict | None:
             "provider": "openai",
             "api_key": openai_key,
             "base_url": os.environ.get("OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"),
-            "model": os.environ.get("OPENAI_MODEL", "GPT-5.6-luna"),
+            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
         }
 
     return None
@@ -293,11 +293,11 @@ def _rule_based_advisory(packet: dict) -> dict:
     Fallback advisory when AI is unavailable.
     Uses simple heuristics to flag obvious issues.
     As per flowchart: 'System continues with Rule Engine checks only'.
-    """
+        """
     flags = []
     description = (
-        packet["header"].get("description_of_change")
-        or packet["header"].get("description", "")
+        packet["header"].get("description")
+        or packet["header"].get("description_of_change", "")
     )
     affected_products = _split_csv_values(
         packet.get("header", {}).get("products_affected")

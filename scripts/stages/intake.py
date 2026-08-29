@@ -642,16 +642,9 @@ def load_file(filepath: str) -> list[dict] | dict:
     else:
         raise ValueError(f"Unsupported file type: {ext}")
 
-# ── Public entry point ────────────────────────────────────────────────────────
-def run_intake(ecn_filepath: str, bom_filepath: str) -> dict:
-    """
-    Main intake entry point called by the orchestrator (run_hybrid.py).
-    Returns a fully structured ECN packet.
-    """
-    # ── Load files ────────────────────────────────────────────────────────────
-    ecn_data = load_file(ecn_filepath)
-    bom_data = load_file(bom_filepath)
-
+# ── Packet builder ────────────────────────────────────────────────────────────
+def build_ecn_packet(ecn_data, bom_data, source_files=None) -> dict:
+    """Build a normalized ECN packet from loaded ECN and BOM data."""
     # ── Normalize ECN header ──────────────────────────────────────────────────
     if isinstance(ecn_data, dict):
         header = ecn_data
@@ -680,16 +673,30 @@ def run_intake(ecn_filepath: str, bom_filepath: str) -> dict:
             "ai_flags":        {},
             "context_flags":   [],
         },
-        "source_files": {
-            "ecn": ecn_filepath,
-            "bom": bom_filepath,
-        }
+        "source_files": source_files or {},
     }
 
     # ── Pre-check for missing required fields ─────────────────────────────────
     for field in REQUIRED_ECN_FIELDS:
         if not packet["header"].get(field):
             packet["validation"]["missing_fields"].append(field)
+
+    return packet
+
+
+# ── Public entry point ────────────────────────────────────────────────────────
+def run_intake(ecn_filepath: str, bom_filepath: str) -> dict:
+    """
+    Main intake entry point called by the orchestrator (run_hybrid.py).
+    Returns a fully structured ECN packet.
+    """
+    ecn_data = load_file(ecn_filepath)
+    bom_data = load_file(bom_filepath)
+    packet = build_ecn_packet(
+        ecn_data,
+        bom_data,
+        source_files={"ecn": ecn_filepath, "bom": bom_filepath},
+    )
 
     logger.info(
         "Intake complete — %d ECN fields, %d BOM rows, %d missing fields",
