@@ -1,6 +1,8 @@
 """Public Streamlit interface for the ECN Checker pipeline."""
 
+import hmac
 import importlib.util
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -36,9 +38,69 @@ run_intake = intake_mod.run_intake
 run_rule_engine = rule_engine_mod.run_rule_engine
 run_ai_advisory = ai_advisory_mod.run_ai_advisory
 run_context_engine = context_engine_mod.run_context_engine
+log_approved_change = context_engine_mod.log_approved_change
 run_merge_step = merge_step_mod.run_merge_step
 send_fail_email = email_notification_mod.send_fail_email
 send_pass_email = email_notification_mod.send_pass_email
+
+
+def _get_config_value(key: str, default: str = "") -> str:
+    """Read Streamlit secrets first, then fall back to local environment values."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx(suppress_warning=True) is not None:
+            value = st.secrets.get(key)
+            if value is not None:
+                return str(value).strip()
+    except Exception:
+        # No Streamlit runtime/secrets configured: retain local environment support.
+        pass
+
+    return os.environ.get(key, default).strip()
+
+
+def _password_matches(submitted_password: str, configured_password: str) -> bool:
+    """Compare non-empty passwords without leaking a partial-match timing signal."""
+    return bool(configured_password) and hmac.compare_digest(
+        submitted_password, configured_password
+    )
+
+
+def _authenticate() -> None:
+    """Record a successful password entry for the current Streamlit session."""
+    configured_password = _get_config_value("APP_PASSWORD")
+    submitted_password = st.session_state.get("app_password_entry", "")
+
+    if _password_matches(submitted_password, configured_password):
+        st.session_state["app_authenticated"] = True
+        st.session_state.pop("app_auth_error", None)
+        st.session_state.pop("app_password_entry", None)
+    else:
+        st.session_state["app_authenticated"] = False
+        st.session_state["app_auth_error"] = True
+
+
+def _require_access() -> bool:
+    """Render the password gate and return whether this session is authorized."""
+    if st.session_state.get("app_authenticated", False):
+        return True
+
+    configured_password = _get_config_value("APP_PASSWORD")
+    st.title("ECN Checker Access")
+    if not configured_password:
+        st.error("APP_PASSWORD must be configured before this app can be used.")
+        return False
+
+    st.text_input(
+        "Password",
+        type="password",
+        key="app_password_entry",
+        on_change=_authenticate,
+    )
+    if st.session_state.get("app_auth_error", False):
+        st.error("Incorrect password.")
+    return False
 
 
 def _write_upload(uploaded_file) -> str:
@@ -55,7 +117,9 @@ def _run_pipeline(ecn_path: str, bom_path: str) -> dict:
     packet = run_rule_engine(packet)
     packet = run_ai_advisory(packet)
     packet = run_context_engine(packet)
-    return run_merge_step(packet)
+    packet = run_merge_step(packet)
+    log_approved_change(packet)
+    return packet
 
 
 def _finding_rows(findings: list[dict]) -> list[dict]:
@@ -93,6 +157,9 @@ def _render_ai_notes(ai_notes: dict) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
+    if not _require_access():
+        return
+
     st.title("ECN Checker")
     st.caption("Upload an Engineering Change Notice and BOM, then run the validation pipeline.")
     st.info(

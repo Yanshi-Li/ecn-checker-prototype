@@ -22,6 +22,15 @@ DEFAULT_CONTEXT_DB_DIR = ROOT / "out" / "context_engine"
 PARTS_MASTER_DB_FILENAME = "parts_master_database.csv"
 ECN_CONFLICT_LOG_FILENAME = "ecn_conflict_log.csv"
 BOM_STRUCTURE_RECORDS_FILENAME = "bom_structure_records.csv"
+CONFLICT_LOG_FIELDNAMES = [
+    "logged_at",
+    "source",
+    "ecn_id",
+    "part_number",
+    "change_type",
+    "date",
+    "status",
+]
 
 
 def _now_utc_iso() -> str:
@@ -88,8 +97,11 @@ def create_context_databases(
     """
     Create Stage 4 context databases from test/reference files and packet BOM rows.
     - Parts Master Database: recreated each run from source parts CSV.
-    - ECN Conflict Log: seeded once from history source, then appends each test run.
+    - ECN Conflict Log: seeded once from history source and read for conflict checks.
     - BOM Structure Records: appends BOM rows each test run.
+
+    Current-run ECN entries are written only after a PASS gate decision by
+    ``log_approved_change``.
     """
     parts_source = _resolve_parts_source(parts_source_path)
     history_source = Path(history_source_path) if history_source_path else DEFAULT_ECN_HISTORY_DB
@@ -125,20 +137,11 @@ def create_context_databases(
             "status": row.get("status", "").strip(),
             "lifecycle_state": row.get("lifecycle_state", "").strip(),
             "revision": row.get("revision", "").strip(),
-            "supplier": row.get("supplier", "").strip(),
+                        "supplier": row.get("supplier", "").strip(),
             "unit_of_measure": row.get("unit_of_measure", "").strip(),
         })
     _write_csv_rows(parts_master_db_path, parts_fieldnames, normalized_parts_rows)
 
-    conflict_fieldnames = [
-        "logged_at",
-        "source",
-        "ecn_id",
-        "part_number",
-        "change_type",
-        "date",
-        "status",
-    ]
     if not ecn_conflict_log_path.exists():
         history_seed_rows = []
         for row in history_rows:
@@ -154,26 +157,9 @@ def create_context_databases(
                 "date": row.get("date", "").strip(),
                 "status": row.get("status", "").strip(),
             })
-        _append_csv_rows(ecn_conflict_log_path, conflict_fieldnames, history_seed_rows)
+        _append_csv_rows(ecn_conflict_log_path, CONFLICT_LOG_FIELDNAMES, history_seed_rows)
 
-    run_conflict_rows = []
     ecn_id = str(header.get("ecn_id", "")).strip() or "UNKNOWN_ECN"
-    header_change_type = str(header.get("change_type", "")).strip()
-    header_date = str(header.get("date", "")).strip()
-    for row in bom_rows:
-        part_number = str(row.get("part_number", "")).strip()
-        if not part_number:
-            continue
-        run_conflict_rows.append({
-            "logged_at": run_timestamp,
-            "source": "context_test_run",
-            "ecn_id": ecn_id,
-            "part_number": part_number,
-            "change_type": str(row.get("action", "")).strip() or header_change_type,
-            "date": header_date,
-            "status": "PENDING_REVIEW",
-        })
-    _append_csv_rows(ecn_conflict_log_path, conflict_fieldnames, run_conflict_rows)
 
     bom_fieldnames = [
         "logged_at",
@@ -193,7 +179,7 @@ def create_context_databases(
             continue
         bom_structure_rows.append({
             "logged_at": run_timestamp,
-            "ecn_id": ecn_id,
+                        "ecn_id": ecn_id,
             "line_number": str(row.get("line_number", "")).strip(),
             "part_number": part_number,
             "description": str(row.get("description", "")).strip(),
@@ -205,17 +191,52 @@ def create_context_databases(
     _append_csv_rows(bom_structure_records_path, bom_fieldnames, bom_structure_rows)
 
     logger.info(
-        "Context databases ready — parts:%s conflict_log:+%d bom_records:+%d",
+        "Context databases ready — parts:%s conflict_log:seeded bom_records:+%d",
         parts_master_db_path,
-        len(run_conflict_rows),
         len(bom_structure_rows),
-    )
+        )
     return {
         "parts_master_database": str(parts_master_db_path),
         "ecn_conflict_log": str(ecn_conflict_log_path),
         "bom_structure_records": str(bom_structure_records_path),
     }
 
+
+def log_approved_change(packet: dict) -> bool:
+    """Persist BOM parts to the conflict log only for a final PASS decision."""
+    if packet.get("gate", {}).get("decision") != "PASS":
+        logger.info("Conflict log unchanged because gate decision is not PASS.")
+        return False
+
+    artifacts = packet.get("validation", {}).get("context_artifacts", {})
+    conflict_log = artifacts.get("ecn_conflict_log")
+    if not conflict_log:
+        logger.warning("Cannot log approved change: context conflict-log artifact is missing.")
+        return False
+
+    header = packet.get("header", {})
+    ecn_id = str(header.get("ecn_id", "")).strip() or "UNKNOWN_ECN"
+    header_change_type = str(header.get("change_type", "")).strip()
+    header_date = str(header.get("date", "")).strip()
+    logged_at = _now_utc_iso()
+    approved_rows = []
+    for row in packet.get("bom", []):
+        part_number = str(row.get("part_number", "")).strip()
+        if not part_number:
+            continue
+        approved_rows.append({
+            "logged_at": logged_at,
+            "source": "approved_change",
+            "ecn_id": ecn_id,
+            "part_number": part_number,
+            "change_type": str(row.get("action", "")).strip() or header_change_type,
+            "date": header_date,
+            "status": "PASSED",
+        })
+
+    _append_csv_rows(Path(conflict_log), CONFLICT_LOG_FIELDNAMES, approved_rows)
+    logger.info("Conflict log recorded %d passed BOM part(s).", len(approved_rows))
+    return bool(approved_rows)
 
 
 def check_part_status(part_number: str, parts_db: dict) -> dict:
@@ -533,8 +554,9 @@ def run_context_engine(
             continue
         for conflict in check_historical_conflicts(ecn_id, pn, history):
             all_flags.append({
-                "flag_type": "HISTORICAL_CONFLICT",
-                "severity": "WARNING",
+                                "flag_type": "HISTORICAL_CONFLICT",
+                # v1.2 gate-logic decision: historical conflicts close the gate.
+                "severity": "ERROR",
                 "part_number": pn,
                 "line_number": row.get("line_number", "?"),
                 "message": (

@@ -1,9 +1,19 @@
+import ast
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import pytest
 
-from merge_step import run_merge_step
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from merge_step import (
+    CONFLICT_ALERT_FLAG_TYPES,
+    PART_ISSUE_FLAG_TYPES,
+    WARNING_ONLY_FLAG_TYPES,
+    run_merge_step,
+)
+
 
 
 def _packet(rule_violations=None, context_flags=None, ai_flags=None):
@@ -74,8 +84,8 @@ def test_uom_mismatch_fails_gate_as_part_issue():
     assert result["gate"]["part_issues"] == [flag]
 
 
-def test_historical_conflict_fails_gate_despite_warning_severity():
-    flag = _context("HISTORICAL_CONFLICT", "WARNING")
+def test_historical_conflict_fails_gate_as_an_error():
+    flag = _context("HISTORICAL_CONFLICT", "ERROR")
     result = run_merge_step(_packet(context_flags=[flag]))
 
     assert result["gate"]["decision"] == "FAIL"
@@ -83,7 +93,39 @@ def test_historical_conflict_fails_gate_despite_warning_severity():
     assert flag not in result["gate"]["warnings"]
 
 
+def test_context_engine_flag_types_all_have_an_explicit_gate_classification():
+    """New Context Engine flag types must be classified before they can ship."""
+    source = (ROOT / "scripts" / "stages" / "context_engine.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    emitted_flag_types = {
+        value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Dict)
+        for key, value in zip(node.keys, node.values)
+        if isinstance(key, ast.Constant)
+        and key.value == "flag_type"
+        and isinstance(value, ast.Constant)
+        and isinstance(value.value, str)
+    }
+    registered_flag_types = (
+        PART_ISSUE_FLAG_TYPES
+        | CONFLICT_ALERT_FLAG_TYPES
+        | WARNING_ONLY_FLAG_TYPES
+    )
+
+    assert emitted_flag_types
+    assert emitted_flag_types <= registered_flag_types
+
+
+def test_unclassified_context_flag_raises_an_error():
+    with pytest.raises(ValueError, match="Unclassified context flag_type"):
+        run_merge_step(_packet(context_flags=[_context("UNREGISTERED_FLAG")]))
+
+
 def test_other_context_flags_are_advisory_warnings():
+
     unknown_part = _context("UNKNOWN_PART")
     quantity_anomaly = _context("QUANTITY_ANOMALY")
     result = run_merge_step(_packet(context_flags=[unknown_part, quantity_anomaly]))
@@ -115,7 +157,7 @@ def test_ai_notes_never_change_gate_decision():
 def test_each_gate_category_is_aggregated_together():
     blocker = _rule("ERROR")
     part_issue = _context("DISCONTINUED_PART", "ERROR")
-    conflict = _context("HISTORICAL_CONFLICT", "WARNING")
+    conflict = _context("HISTORICAL_CONFLICT", "ERROR")
     warning = _context("DESCRIPTION_MISMATCH", "WARNING")
     result = run_merge_step(
         _packet(

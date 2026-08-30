@@ -38,6 +38,7 @@ run_intake = intake_mod.run_intake
 run_rule_engine = rule_engine_mod.run_rule_engine
 run_ai_advisory = ai_advisory_mod.run_ai_advisory
 run_context_engine = context_engine_mod.run_context_engine
+log_approved_change = context_engine_mod.log_approved_change
 run_merge_step = merge_step_mod.run_merge_step
 run_dashboard = dashboard_mod.run_dashboard
 send_fail_email = email_notification_mod.send_fail_email
@@ -185,9 +186,11 @@ def run_pipeline(args: argparse.Namespace) -> dict:
         }
         logger.info("ai_flags at dashboard: %s", packet["validation"].get("ai_flags"))
 
+        
     # Merge Step: Aggregation & Gate Decision
     logger.info("── Merge Step: Aggregation & Gate Decision ──")
     packet = run_merge_step(packet)
+    log_approved_change(packet)
     logger.info("GATE DECISION: %s", packet["gate"]["decision"])
 
     # Stage 5: Dashboard

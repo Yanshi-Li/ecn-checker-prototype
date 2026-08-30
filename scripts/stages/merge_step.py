@@ -16,6 +16,11 @@ PART_ISSUE_FLAG_TYPES = {
     "UOM_MISMATCH",
 }
 CONFLICT_ALERT_FLAG_TYPES = {"HISTORICAL_CONFLICT"}
+WARNING_ONLY_FLAG_TYPES = {
+    "UNKNOWN_PART",
+    "QUANTITY_ANOMALY",
+    "DESCRIPTION_MISMATCH",
+}
 
 
 def run_merge_step(packet: dict) -> dict:
@@ -46,11 +51,17 @@ def run_merge_step(packet: dict) -> dict:
         if flag_type in PART_ISSUE_FLAG_TYPES:
             part_issues.append(flag)
         elif flag_type in CONFLICT_ALERT_FLAG_TYPES:
-            # HISTORICAL_CONFLICT remains WARNING in Node 4 for compatibility,
-            # but v1.2 requires conflicts to close the gate regardless of severity.
             conflict_alerts.append(flag)
-        else:
+        elif flag_type in WARNING_ONLY_FLAG_TYPES:
             context_warnings.append(flag)
+        else:
+            raise ValueError(
+                f"Unclassified context flag_type: {flag_type!r}. "
+                "Register it in a merge-step classification set."
+            )
+
+
+
 
     decision = "PASS" if not (blockers or part_issues or conflict_alerts) else "FAIL"
     overall_risk = ai_flags.get("overall_risk")
