@@ -5,7 +5,7 @@ This repository processes, validates, and generates workflow reports for Enginee
 
 ## File & Path Conventions
 - **Data Folder:** Input CSV files live in `data/`.
-  - Core data files: `master_bom.csv` (or `bom.csv`), `ecn_header.csv` (or `ecn_headers.csv`), `ecn_changes.csv`, and `parts.csv`.
+  - Core data files: `master_bom.csv` (or `bom.csv`), `ecn_header.csv` (or `ecn_headers.csv`), `ecn_changes.csv`, and `parts_master.csv`.
 - **Output Folder:** Generated JSON and HTML dashboards must be saved in `out/`.
 - Always resolve paths relative to the project root using `pathlib.Path(__file__).resolve().parent`.
 

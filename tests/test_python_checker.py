@@ -33,7 +33,7 @@ def test_ecn_c006_obsolete_new_part():
     )
     results = ecn_checker.run_checks({
         "ecn_changes.csv": changes_csv,
-        "parts.csv": parts_csv,
+        "parts_master.csv": parts_csv,
     })
     changes_result = next(r for r in results if r["file_type"] == "ecn_changes")
     rule_ids = [i["rule"] for i in changes_result["issues"]]
@@ -55,7 +55,7 @@ def test_ecn_c006_active_new_part_passes():
     )
     results = ecn_checker.run_checks({
         "ecn_changes.csv": changes_csv,
-        "parts.csv": parts_csv,
+        "parts_master.csv": parts_csv,
     })
     changes_result = next(r for r in results if r["file_type"] == "ecn_changes")
     rule_ids = [i["rule"] for i in changes_result["issues"]]
@@ -74,7 +74,7 @@ def test_ecn_c006_part_not_in_master():
     )
     results = ecn_checker.run_checks({
         "ecn_changes.csv": changes_csv,
-        "parts.csv": parts_csv,
+        "parts_master.csv": parts_csv,
     })
     changes_result = next(r for r in results if r["file_type"] == "ecn_changes")
     rule_ids = [i["rule"] for i in changes_result["issues"]]

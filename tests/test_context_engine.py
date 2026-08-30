@@ -5,6 +5,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from context_engine import (
     check_historical_conflicts,
     check_part_status,
+    log_approved_change,
     run_context_engine,
 )
 from stages.context_engine import _check_missing_supplier, _check_uom_mismatch
@@ -218,6 +219,14 @@ def test_context_engine_creates_required_databases(tmp_path):
         context_db_dir=tmp_path / "context_db",
     )
 
+    historical_conflicts = [
+        flag
+        for flag in result["validation"]["context_flags"]
+        if flag["flag_type"] == "HISTORICAL_CONFLICT"
+    ]
+    assert len(historical_conflicts) == 1
+    assert historical_conflicts[0]["severity"] == "ERROR"
+
     artifacts = result["validation"]["context_artifacts"]
     parts_db_path = Path(artifacts["parts_master_database"])
     conflict_log_path = Path(artifacts["ecn_conflict_log"])
@@ -228,32 +237,43 @@ def test_context_engine_creates_required_databases(tmp_path):
     assert bom_records_path.exists()
 
     parts_rows = _csv_rows(parts_db_path)
-    assert len(parts_rows) == 6
+    assert len(parts_rows) == len(_csv_rows(root / "data" / "parts_master.csv"))
     assert set(parts_rows[0]) >= {"supplier", "unit_of_measure"}
-    assert len(_csv_rows(conflict_log_path)) == 6  # 4 seeded history rows + 2 test BOM rows
+    assert len(_csv_rows(conflict_log_path)) == 4  # history seed only; no unapproved run rows
     assert len(_csv_rows(bom_records_path)) == 2
 
 
 
-def test_context_logs_append_for_each_test_run(tmp_path):
+
+
+def test_fail_gate_does_not_write_to_conflict_log(tmp_path):
     root = Path(__file__).parent.parent
     context_dir = tmp_path / "context_db"
-
-    run_context_engine(
+    packet = run_context_engine(
         _packet(),
         parts_db_path=root / "data" / "parts_master.csv",
         history_db_path=root / "data" / "ecn_history.csv",
         context_db_dir=context_dir,
     )
-    run_context_engine(
+    packet["gate"] = {"decision": "FAIL"}
+
+    assert log_approved_change(packet) is False
+    assert len(_csv_rows(context_dir / "ecn_conflict_log.csv")) == 4
+
+
+def test_pass_gate_writes_passed_rows_to_conflict_log(tmp_path):
+    root = Path(__file__).parent.parent
+    context_dir = tmp_path / "context_db"
+    packet = run_context_engine(
         _packet(),
         parts_db_path=root / "data" / "parts_master.csv",
         history_db_path=root / "data" / "ecn_history.csv",
         context_db_dir=context_dir,
     )
+    packet["gate"] = {"decision": "PASS"}
 
+    assert log_approved_change(packet) is True
     conflict_log_rows = _csv_rows(context_dir / "ecn_conflict_log.csv")
-    bom_structure_rows = _csv_rows(context_dir / "bom_structure_records.csv")
-
-    assert len(conflict_log_rows) == 8  # 4 seeded history rows + 2 runs * 2 BOM rows
-    assert len(bom_structure_rows) == 4  # 2 runs * 2 BOM rows
+    passed_rows = [row for row in conflict_log_rows if row["source"] == "approved_change"]
+    assert len(passed_rows) == 2
+    assert {row["status"] for row in passed_rows} == {"PASSED"}

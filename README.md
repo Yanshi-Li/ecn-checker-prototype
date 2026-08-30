@@ -12,7 +12,7 @@ The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the curre
 2. **Rule Engine** — applies deterministic checks for required ECN fields, part-number format, duplicate BOM lines, quantity, change type, and date format.
 3. **AI Advisory** — reviews ECN/BOM semantics using Gemini or OpenAI when configured; otherwise it uses deterministic advisory heuristics.
 4. **Context Engine** — checks BOM parts against `data/parts_master.csv` and ECN history, and writes context artifacts under `out/context_engine/`.
-5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors, selected part issues, and historical conflicts close the gate, while warnings and AI notes remain advisory.
+5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors, selected part issues, and historical conflicts close the gate, while warnings and AI notes remain advisory. Only a `PASS` decision is recorded as a durable current-run entry in the conflict log.
 6. **Dashboard** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; the Streamlit app renders the gate findings directly.
 7. **Email Notification** — sends or dry-runs a gate-specific notification through SendGrid.
 
@@ -122,7 +122,7 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers, par
 - The Streamlit uploader currently offers every intake extension for both upload controls, even though HTML is ECN-only and BOM parsing is supported only for CSV, Excel, and PDF. The low-level loader also accepts `.eml` for the BOM role but returns an ECN-style dictionary, which results in an empty BOM rather than a valid BOM import.
 - AI review is advisory only and is limited to the first 20 BOM lines sent to the model. If no usable provider/key is available, the rule-based fallback is used.
 - The gate does not fail for every context warning. It closes for rule-engine `ERROR`s, `DISCONTINUED_PART`, `MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`; other context flags, rule warnings, and AI findings are advisory.
-- Context logs and BOM structure records append on each run under `out/context_engine/`; clean or manage those generated artifacts as appropriate for repeatable local work.
+- BOM structure records append on each run under `out/context_engine/`. The conflict log is seeded from historical ECNs and receives current-run rows only after a `PASS` decision, with status `PASSED`; clean or manage these generated artifacts as appropriate for repeatable local work.
 - This remains a CSV/reference-data prototype: it does not connect directly to Windchill, PLM, or ERP systems.
 
 ## Key locations
