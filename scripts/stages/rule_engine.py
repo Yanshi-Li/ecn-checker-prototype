@@ -28,7 +28,7 @@ def rule_R01_required_fields(packet: dict) -> list[dict]:
 
 
 def rule_R02_part_number_format(packet: dict) -> list[dict]:
-    """R02 — Part numbers must contain exactly five or six digits."""
+    """R02 — When supplied, part numbers must contain five or six digits."""
     violations = []
     for row in packet.get("bom", []):
         pn = row.get("part_number", "").strip()
@@ -39,8 +39,9 @@ def rule_R02_part_number_format(packet: dict) -> list[dict]:
                 "field": "part_number",
                 "line": row.get("line_number", "?"),
                 "value": pn,
-                "message": f"Part number '{pn}' on line {row.get('line_number', '?')} "
-                           f"must contain exactly 5 or 6 digits (e.g. 12345 or 123456).",
+                                "message": f"Part number '{pn}' on line {row.get('line_number', '?')} "
+                           f"must contain 5 or 6 digits when provided "
+                           f"(e.g. 12345 or 123456).",
             })
     return violations
 

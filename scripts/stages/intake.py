@@ -34,14 +34,9 @@ except ImportError:
 # ── Required ECN Fields ───────────────────────────────────────────────────────
 # Only these ECN form headers are validated by R01.
 REQUIRED_ECN_FIELDS = [
-    "a3_number",
-    "associated_a3",
-    "change_actions",
-    "cost_impact",
     "description_of_change",
     "name_of_change",
     "change_notice_number",
-    "products_affected",
     "reason_for_change",
 ]
 
@@ -357,10 +352,12 @@ def _normalize_excel_key(value: str) -> str:
 
 
 def _lookup_value(mapping: dict, *candidates: str) -> str:
-    """Return the first mapped value whose normalized key matches a candidate."""
+    """Return the first non-empty value whose normalized key matches a candidate."""
     for candidate in candidates:
         for key, value in mapping.items():
-            if key == candidate or key.startswith(candidate) or key.endswith(candidate):
+            if (
+                key == candidate or key.startswith(candidate) or key.endswith(candidate)
+            ) and value:
                 return value
     return ""
 
@@ -373,10 +370,10 @@ def _normalize_mbom_row(row: dict) -> dict | None:
     }
     part_number = _lookup_value(
         normalized,
-        "part number",
-        "component part number",
         "existing child part number",
         "new child part number",
+        "component part number",
+        "part number",
     )
     if not part_number:
         return None
@@ -385,15 +382,37 @@ def _normalize_mbom_row(row: dict) -> dict | None:
         "part_number": part_number,
         "description": _lookup_value(
             normalized,
+            "existing child part description",
+            "new child part description",
             "part description",
             "description",
-            "new child part description",
+        ),
+        "parent_part_no": _lookup_value(normalized, "parent part number"),
+        "parent_part_description": _lookup_value(
+            normalized, "parent part description"
         ),
         "quantity": _lookup_value(normalized, "qty", "quantity") or "1",
         "unit": _lookup_value(normalized, "select unit of measure") or "EA",
         "action": _lookup_value(normalized, "select action", "action"),
         "source": _lookup_value(normalized, "select bom database"),
     }
+
+
+def _combine_mbom_headers(parent_row: list[str], child_row: list[str]) -> list[str]:
+    """Combine a grouped MBOM header row with its Number/Description subheaders."""
+    headers = []
+    current_group = ""
+    for parent, child in zip(parent_row, child_row):
+        parent_label = str(parent).strip()
+        child_label = str(child).strip()
+        if parent_label:
+            current_group = parent_label
+        headers.append(
+            f"{current_group} {child_label}".strip()
+            if child_label in {"Number", "Description"} and current_group
+            else parent_label or child_label
+        )
+    return headers
 
 
 def _coerce_mbom_rows(rows: list[dict]) -> list[dict]:
@@ -441,6 +460,7 @@ def load_excel(filepath: str, role: str = "bom") -> list[dict] | dict:
     if not HAS_PANDAS:
         raise ImportError("pandas is required: pip install pandas openpyxl")
 
+        
     df = pd.read_excel(filepath, header=None, dtype=str).fillna("")
     grid = df.values.tolist()
     if role == "ecn":
@@ -450,19 +470,27 @@ def load_excel(filepath: str, role: str = "bom") -> list[dict] | dict:
             return header
 
     header_index = None
-
     header = []
     for idx, row in enumerate(grid):
         normalized = [_normalize_excel_key(str(cell)) for cell in row]
-        if any(
-            "part number" in cell
-            or "select action" in cell
-            or "select bom database" in cell
+        is_part_master_header = any(
+            "part number" in cell or "select action" in cell
             for cell in normalized
-        ):
+        )
+        is_structure_header = (
+            "parent part" in normalized
+            and (
+                "existing child part" in normalized
+                or "new child part" in normalized
+            )
+        )
+        if is_structure_header and idx + 1 < len(grid):
+            header_index = idx + 1
+            header = _combine_mbom_headers(row, grid[idx + 1])
+            break
+        if is_part_master_header and header_index is None:
             header_index = idx
             header = [str(cell).strip() for cell in row]
-            break
 
     if header_index is not None:
         rows = []

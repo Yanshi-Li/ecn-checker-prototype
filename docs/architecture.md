@@ -55,8 +55,8 @@ Engineer submits ECN + BOM File from email / form / upload
 
 | ID  | Description                        | Severity |
 |-----|------------------------------------|----------|
-| R01 | Required ECN form fields present: A3 Number, Associated A3, Change Actions, Cost Impact, Description Of Change, Name of Change, Change Notice Number, Products Affected, and Reason for Change | ERROR |
-| R02 | Part number is exactly 5 or 6 digits | ERROR    |
+| R01 | Required ECN form fields present: Description Of Change, Name of Change, Change Notice Number, and Reason for Change | ERROR |
+| R02 | When provided, part number is exactly 5 or 6 digits | ERROR    |
 | R03 | No duplicate BOM lines             | WARNING  |
 | R04 | No zero/negative quantity          | ERROR    |
 

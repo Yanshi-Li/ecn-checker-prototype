@@ -44,6 +44,16 @@ def test_R02_rejects_part_numbers_outside_five_to_six_digits(part_number):
     assert _violations(result, "R02")
 
 
+@pytest.mark.parametrize("row", [
+    {"part_number": "", "quantity": "1", "line_number": "1"},
+    {"quantity": "1", "line_number": "1"},
+])
+def test_R02_allows_missing_part_number(row):
+    result = run_rule_engine(_base_packet(bom=[row]))
+
+    assert not _violations(result, "R02")
+
+
 def test_R03_duplicate_parts():
     packet = _base_packet(bom=[
         {"part_number": "12345", "quantity": "1", "line_number": "1"},
@@ -71,7 +81,12 @@ def test_R04_negative_quantity():
 
 def test_R01_checks_only_configured_form_headers():
     packet = _base_packet(header_overrides={
+        "a3_number": "",
+        "associated_a3": "",
+        "change_actions": "",
         "cost_impact": "",
+        "products_affected": "",
+        "description_of_change": "",
         "date": "07/15/2024",
         "change_type": "destroy",
     })
@@ -79,6 +94,12 @@ def test_R01_checks_only_configured_form_headers():
 
     violations = result["validation"]["rule_violations"]
     assert [violation["field"] for violation in _violations(result, "R01")] == [
-        "cost_impact"
+        "description_of_change"
     ]
-    assert not any(violation["field"] in {"date", "change_type"} for violation in violations)
+    assert not any(
+        violation["field"] in {
+            "a3_number", "associated_a3", "change_actions", "cost_impact",
+            "products_affected", "date", "change_type",
+        }
+        for violation in violations
+    )

@@ -44,17 +44,49 @@ def test_load_excel_mbom_template(tmp_path):
         "Primary", "Electrical", "DRW-10017", "B", "Obsolete", "2026-08-03",
         "ECN-4000014", "Replaced by 1001245",
     ])
+
     wb.save(path)
 
-    rows = load_excel(str(path))
+    if True:
+        rows = load_excel(str(path))
     assert len(rows) == 2
     assert rows[0]["part_number"] == "1001234"
     assert rows[1]["quantity"] == "1"
 
 
+def test_load_excel_mbom_structure_parent_part_headers(tmp_path):
+    path = tmp_path / "MBOM_Structure.xlsx"
+    from openpyxl import Workbook
 
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append([
+        "Select BOM Database", "", "Parent Part", "", "Task Number",
+        "Select Action", "Existing Child Part", "", "New Child Part", "", "", "Qty",
+    ])
+    worksheet.append([
+        "", "", "Number", "Description", "", "", "Number", "Description",
+        "Number", "Description", "", "",
+    ])
+    worksheet.append([
+        "MBOM", "", "123456", "Parent assembly", "TASK-1", "ADD", "", "",
+        "654321", "Replacement child", "", "2",
+    ])
+    workbook.save(path)
 
+    rows = load_excel(str(path))
 
+    assert rows == [{
+        "part_number": "654321",
+        "description": "Replacement child",
+        "parent_part_no": "123456",
+        "parent_part_description": "Parent assembly",
+        "quantity": "2",
+        "unit": "EA",
+        "action": "ADD",
+        "source": "MBOM",
+        "line_number": "1",
+    }]
 
 
 def test_load_excel_ecn_form(tmp_path):
@@ -178,7 +210,7 @@ def test_load_sample_html_ecn_form():
         "change_actions",
     ):
         assert data[field]
-    assert validate_ecn_header(data)["validation"]["missing_fields"] == ["a3_number"]
+    assert validate_ecn_header(data)["validation"]["missing_fields"] == []
 
 
 
@@ -190,6 +222,8 @@ def test_load_sample_pdf_bom():
     assert rows[0] == {
         "part_number": "567953",
         "description": "MOD MC DD RX24T PH12J 230V DBL",
+        "parent_part_no": "",
+        "parent_part_description": "",
         "quantity": "1",
         "unit": "EA",
         "action": "ADD",
@@ -211,7 +245,7 @@ def test_load_file_rejects_unknown_role():
 def test_run_intake_with_sample_html_ecn_and_pdf_bom():
     packet = run_intake(str(HTML_ECN_PATH), str(PDF_BOM_PATH))
 
-    assert packet["validation"]["missing_fields"] == ["a3_number"]
+    assert packet["validation"]["missing_fields"] == []
     assert len(packet["bom"]) == 4
     assert packet["source_files"] == {
         "ecn": str(HTML_ECN_PATH),
