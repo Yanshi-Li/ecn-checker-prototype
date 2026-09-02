@@ -26,18 +26,28 @@ def test_R02_bad_part_number():
     assert any(v["rule_id"] == "R02" for v in result["validation"]["rule_violations"])
 
 
-def test_R02_good_part_number():
+@pytest.mark.parametrize("part_number", ["12345", "123456"])
+def test_R02_good_part_number(part_number):
     packet = _base_packet(bom=[
-        {"part_number": "AB-1234", "quantity": "1", "line_number": "1"}
+        {"part_number": part_number, "quantity": "1", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
     assert not _violations(result, "R02")
 
 
+@pytest.mark.parametrize("part_number", ["1234", "1234567", "AB-1234"])
+def test_R02_rejects_part_numbers_outside_five_to_six_digits(part_number):
+    packet = _base_packet(bom=[
+        {"part_number": part_number, "quantity": "1", "line_number": "1"}
+    ])
+    result = run_rule_engine(packet)
+    assert _violations(result, "R02")
+
+
 def test_R03_duplicate_parts():
     packet = _base_packet(bom=[
-        {"part_number": "AB-1234", "quantity": "1", "line_number": "1"},
-        {"part_number": "AB-1234", "quantity": "2", "line_number": "2"},
+        {"part_number": "12345", "quantity": "1", "line_number": "1"},
+        {"part_number": "12345", "quantity": "2", "line_number": "2"},
     ])
     result = run_rule_engine(packet)
     assert _violations(result, "R03")
@@ -45,7 +55,7 @@ def test_R03_duplicate_parts():
 
 def test_R04_zero_quantity():
     packet = _base_packet(bom=[
-        {"part_number": "AB-1234", "quantity": "0", "line_number": "1"}
+        {"part_number": "12345", "quantity": "0", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
     assert _violations(result, "R04")
@@ -53,7 +63,7 @@ def test_R04_zero_quantity():
 
 def test_R04_negative_quantity():
     packet = _base_packet(bom=[
-        {"part_number": "AB-1234", "quantity": "-1", "line_number": "1"}
+        {"part_number": "12345", "quantity": "-1", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
     assert _violations(result, "R04")

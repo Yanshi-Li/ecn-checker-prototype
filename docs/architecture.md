@@ -35,7 +35,7 @@ Engineer submits ECN + BOM File from email / form / upload
          ▼
 ┌─────────────────────┐
 │  Stage 4: Context   │  Parts Master: Active / Obsolete / Phase-Out
-│  Engine (RAG)       │  Historical ECN Conflict Check
+│  Engine (RAG)       │  Part-master status and data checks
 └────────┬────────────┘
          │
          ▼
@@ -56,7 +56,7 @@ Engineer submits ECN + BOM File from email / form / upload
 | ID  | Description                        | Severity |
 |-----|------------------------------------|----------|
 | R01 | Required fields present            | ERROR    |
-| R02 | Part number format valid           | ERROR    |
+| R02 | Part number is exactly 5 or 6 digits | ERROR    |
 | R03 | No duplicate BOM lines             | WARNING  |
 | R04 | No zero/negative quantity          | ERROR    |
 | R05 | Change type in approved list       | WARNING  |
@@ -70,12 +70,11 @@ Engineer submits ECN + BOM File from email / form / upload
 | `scripts/intake.py`           | Stage 1: Parse ECN + BOM      |
 | `scripts/rule_engine.py`      | Stage 2: Deterministic rules  |
 | `scripts/ai_advisory.py`      | Stage 3: AI / fallback checks |
-| `scripts/context_engine.py`   | Stage 4: Parts + history RAG  |
+| `scripts/context_engine.py`   | Stage 4: Parts RAG            |
 | `scripts/dashboard.py`        | Stage 5: HTML dashboard       |
 | `scripts/email_notification.py`| Stage 6: gate-driven SendGrid email |
 
 | `data/parts_master.csv`       | Parts status database         |
-| `data/ecn_history.csv`        | Historical ECN records        |
 | `data/ecn_intake.csv`         | Sample ECN input              |
 | `data/bom.csv`                | Sample BOM input              |
 
@@ -92,4 +91,11 @@ Engineer submits ECN + BOM File from email / form / upload
 | `DRY_RUN` | Defaults to `true`; set explicitly false only to send email          |
 
 
-## Running
+## Key design decisions
+
+- ECN Conflict Log is not available in the current implementation.
+
+
+
+
+

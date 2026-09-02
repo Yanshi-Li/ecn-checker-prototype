@@ -10,7 +10,7 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-PART_NUMBER_PATTERN = re.compile(r"^[A-Z]{2,4}-\d{4,8}(-[A-Z0-9]+)?$")
+PART_NUMBER_PATTERN = re.compile(r"^\d{5,6}$")
 
 
 # ── Individual rules ─────────────────────────────────────────────────────────
@@ -28,11 +28,11 @@ def rule_R01_required_fields(packet: dict) -> list[dict]:
 
 
 def rule_R02_part_number_format(packet: dict) -> list[dict]:
-    """R02 — Part numbers must match the approved format: AA-1234 or AA-12345-XY."""
+    """R02 — Part numbers must contain exactly five or six digits."""
     violations = []
     for row in packet.get("bom", []):
-        pn = row.get("part_number", "")
-        if pn and not PART_NUMBER_PATTERN.match(pn):
+        pn = row.get("part_number", "").strip()
+        if pn and not PART_NUMBER_PATTERN.fullmatch(pn):
             violations.append({
                 "rule_id": "R02",
                 "severity": "ERROR",
@@ -40,7 +40,7 @@ def rule_R02_part_number_format(packet: dict) -> list[dict]:
                 "line": row.get("line_number", "?"),
                 "value": pn,
                 "message": f"Part number '{pn}' on line {row.get('line_number', '?')} "
-                           f"does not match required format (e.g. AB-1234 or AB-12345-XY).",
+                           f"must contain exactly 5 or 6 digits (e.g. 12345 or 123456).",
             })
     return violations
 
