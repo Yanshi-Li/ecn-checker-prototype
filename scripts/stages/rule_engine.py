@@ -10,7 +10,7 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-PART_NUMBER_PATTERN = re.compile(r"^[A-Z]{2,4}-\d{4,8}(-[A-Z0-9]+)?$")
+PART_NUMBER_PATTERN = re.compile(r"^\d{5,6}$")
 
 
 # ── Individual rules ─────────────────────────────────────────────────────────
@@ -28,19 +28,20 @@ def rule_R01_required_fields(packet: dict) -> list[dict]:
 
 
 def rule_R02_part_number_format(packet: dict) -> list[dict]:
-    """R02 — Part numbers must match the approved format: AA-1234 or AA-12345-XY."""
+    """R02 — When supplied, part numbers must contain five or six digits."""
     violations = []
     for row in packet.get("bom", []):
-        pn = row.get("part_number", "")
-        if pn and not PART_NUMBER_PATTERN.match(pn):
+        pn = row.get("part_number", "").strip()
+        if pn and not PART_NUMBER_PATTERN.fullmatch(pn):
             violations.append({
                 "rule_id": "R02",
                 "severity": "ERROR",
                 "field": "part_number",
                 "line": row.get("line_number", "?"),
                 "value": pn,
-                "message": f"Part number '{pn}' on line {row.get('line_number', '?')} "
-                           f"does not match required format (e.g. AB-1234 or AB-12345-XY).",
+                                "message": f"Part number '{pn}' on line {row.get('line_number', '?')} "
+                           f"must contain 5 or 6 digits when provided "
+                           f"(e.g. 12345 or 123456).",
             })
     return violations
 
@@ -99,36 +100,9 @@ def rule_R04_zero_quantity(packet: dict) -> list[dict]:
     return violations
 
 
-def rule_R05_change_type_valid(packet: dict) -> list[dict]:
-    """R05 — Change type must be one of the approved values."""
-    VALID_TYPES = {"add", "remove", "modify", "replace", "note"}
-    violations = []
-    change_type = packet["header"].get("change_type", "").strip().lower()
-    if change_type and change_type not in VALID_TYPES:
-        violations.append({
-            "rule_id": "R05",
-            "severity": "WARNING",
-            "field": "change_type",
-            "value": change_type,
-            "message": f"Change type '{change_type}' is not in the approved list: "
-                       f"{sorted(VALID_TYPES)}.",
-        })
-    return violations
 
 
-def rule_R06_date_format(packet: dict) -> list[dict]:
-    """R06 — ECN date must be in YYYY-MM-DD format."""
-    violations = []
-    date_val = packet["header"].get("date", "").strip()
-    if date_val and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
-        violations.append({
-            "rule_id": "R06",
-            "severity": "WARNING",
-            "field": "date",
-            "value": date_val,
-            "message": f"Date '{date_val}' is not in required YYYY-MM-DD format.",
-        })
-    return violations
+
 
 
 # ── Rule registry & runner ───────────────────────────────────────────────────
@@ -137,8 +111,6 @@ RULES = [
     rule_R02_part_number_format,
     rule_R03_duplicate_lines,
     rule_R04_zero_quantity,
-    rule_R05_change_type_valid,
-    rule_R06_date_format,
 ]
 
 

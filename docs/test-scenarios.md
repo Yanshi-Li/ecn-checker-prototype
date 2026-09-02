@@ -17,7 +17,7 @@ Each scenario validates the same downstream flow:
 2. normalise the payload into the common packet format
 3. run the rule engine for structural and completeness issues
 4. run AI advisory for vague or contradictory description checks
-5. run context checks against lifecycle / historical ECN data
+5. run context checks against lifecycle data
 6. generate a reviewer summary and recommended decision
 
 ## Stage 1 intake regression scenarios
@@ -50,7 +50,18 @@ The AI advisory stage now tracks the semantic checks defined in the ECN intake m
 | A04 | Products affected align with BOM parent assemblies | Flag mismatch between `affected_parts` and BOM parent assembly fields |
 | A05 | Part description starts with naming noun | Flag part descriptions that start with action verbs (for example "Replace ...") |
 
-Coverage is implemented in [test_ai_advisory.py](C:/Users/liy/FPA-Internship/repo/ecn-checker-prototype.worktrees/ai-advisory-module-testing/tests/test_ai_advisory.py) and pipeline-level validation is covered in [test_run_hybrid_pipeline.py](C:/Users/liy/FPA-Internship/repo/ecn-checker-prototype.worktrees/ai-advisory-module-testing/tests/test_run_hybrid_pipeline.py).
+### AI response integrity scenarios
+
+A model assessment must be supported by itemised flags. The advisory normaliser
+adds `AI_RESPONSE_INCOMPLETE` and marks the response `INCOMPLETE` when a model
+returns `MEDIUM`/`HIGH` risk or `VAGUE`/`CONTRADICTING` quality with no flags,
+or returns an invalid flags shape. A `LOW` / `CLEAR` response with an empty list
+remains complete. Dashboard tests also verify that an unsupported non-clear
+assessment is never shown as “No AI flags.”
+
+Coverage is implemented in `tests/test_ai_advisory.py`,
+`tests/test_dashboard_ai_advisory.py`, and pipeline-level validation is covered
+in `tests/test_run_hybrid_pipeline.py`.
 
 ## Initial failure scenario
 
@@ -88,13 +99,14 @@ The prototype intentionally focuses on a controlled, rule-based validation layer
 
 - email intake works best when standard ECN fields are labelled explicitly
 - AI advisory is advisory only and must not replace human review
-- historical conflict checks are limited to the sample history data and do not yet cover full enterprise lifecycle records
+- ECN Conflict Log is not available in the current implementation
+
 
 Recommendations for the next phase:
 
 - standardise ECN templates across email, PDF and web forms
 - add OCR support for scanned PDFs and handwritten forms
-- connect the intake layer to a controlled parts and ECN history source
+- connect the intake layer to a controlled parts source
 - track reviewer decisions and feedback in a structured workflow record
 
 ## Weekly stand-up notes
@@ -104,5 +116,5 @@ Typical stand-up questions for the prototype review:
 - What intake source was tested this week (email, PDF, form, or upload)?
 - What fields were successfully extracted and what still needs manual intervention?
 - Did the rule engine or AI advisory identify any new false positives or misses?
-- Are there any blockers in the parts master, lifecycle data, or conflict logic?
+- Are there any blockers in the parts master or lifecycle data?
 - What is the priority for the next iteration: extraction quality, rule coverage, or reviewer UI clarity?

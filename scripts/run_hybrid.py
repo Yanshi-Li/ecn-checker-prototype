@@ -86,6 +86,7 @@ def write_ai_summary(packet: dict, out_dir: Path) -> None:
         f"- **Overall Risk:** {ai_flags.get('overall_risk', 'N/A')}",
         f"- **Description Quality:** {ai_flags.get('description_quality', 'N/A')}",
         f"- **AI Available:** {ai_flags.get('ai_available', False)}",
+        f"- **Response Status:** {ai_flags.get('response_status', 'UNKNOWN')}",
         f"- **Recommendation:** {ai_flags.get('recommendation', '')}",
         "",
         "### AI Flags",

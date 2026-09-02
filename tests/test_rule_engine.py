@@ -26,18 +26,38 @@ def test_R02_bad_part_number():
     assert any(v["rule_id"] == "R02" for v in result["validation"]["rule_violations"])
 
 
-def test_R02_good_part_number():
+@pytest.mark.parametrize("part_number", ["12345", "123456"])
+def test_R02_good_part_number(part_number):
     packet = _base_packet(bom=[
-        {"part_number": "AB-1234", "quantity": "1", "line_number": "1"}
+        {"part_number": part_number, "quantity": "1", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
     assert not _violations(result, "R02")
 
 
+@pytest.mark.parametrize("part_number", ["1234", "1234567", "AB-1234"])
+def test_R02_rejects_part_numbers_outside_five_to_six_digits(part_number):
+    packet = _base_packet(bom=[
+        {"part_number": part_number, "quantity": "1", "line_number": "1"}
+    ])
+    result = run_rule_engine(packet)
+    assert _violations(result, "R02")
+
+
+@pytest.mark.parametrize("row", [
+    {"part_number": "", "quantity": "1", "line_number": "1"},
+    {"quantity": "1", "line_number": "1"},
+])
+def test_R02_allows_missing_part_number(row):
+    result = run_rule_engine(_base_packet(bom=[row]))
+
+    assert not _violations(result, "R02")
+
+
 def test_R03_duplicate_parts():
     packet = _base_packet(bom=[
-        {"part_number": "AB-1234", "quantity": "1", "line_number": "1"},
-        {"part_number": "AB-1234", "quantity": "2", "line_number": "2"},
+        {"part_number": "12345", "quantity": "1", "line_number": "1"},
+        {"part_number": "12345", "quantity": "2", "line_number": "2"},
     ])
     result = run_rule_engine(packet)
     assert _violations(result, "R03")
@@ -45,7 +65,7 @@ def test_R03_duplicate_parts():
 
 def test_R04_zero_quantity():
     packet = _base_packet(bom=[
-        {"part_number": "AB-1234", "quantity": "0", "line_number": "1"}
+        {"part_number": "12345", "quantity": "0", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
     assert _violations(result, "R04")
@@ -53,19 +73,33 @@ def test_R04_zero_quantity():
 
 def test_R04_negative_quantity():
     packet = _base_packet(bom=[
-        {"part_number": "AB-1234", "quantity": "-1", "line_number": "1"}
+        {"part_number": "12345", "quantity": "-1", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
     assert _violations(result, "R04")
 
 
-def test_R05_invalid_change_type():
-    packet = _base_packet(header_overrides={"change_type": "destroy"})
+def test_R01_checks_only_configured_form_headers():
+    packet = _base_packet(header_overrides={
+        "a3_number": "",
+        "associated_a3": "",
+        "change_actions": "",
+        "cost_impact": "",
+        "products_affected": "",
+        "description_of_change": "",
+        "date": "07/15/2024",
+        "change_type": "destroy",
+    })
     result = run_rule_engine(packet)
-    assert _violations(result, "R05")
 
-
-def test_R06_bad_date_format():
-    packet = _base_packet(header_overrides={"date": "07/15/2024"})
-    result = run_rule_engine(packet)
-    assert _violations(result, "R06")
+    violations = result["validation"]["rule_violations"]
+    assert [violation["field"] for violation in _violations(result, "R01")] == [
+        "description_of_change"
+    ]
+    assert not any(
+        violation["field"] in {
+            "a3_number", "associated_a3", "change_actions", "cost_impact",
+            "products_affected", "date", "change_type",
+        }
+        for violation in violations
+    )

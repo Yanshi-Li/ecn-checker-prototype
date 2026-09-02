@@ -82,6 +82,8 @@ ACTION_ALIASES = {
     "change": "MODIFY",
 }
 VERB_FIRST_WORDS = {"replace", "add", "remove", "update", "change", "fix", "modify"}
+VALID_RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
+VALID_DESCRIPTION_QUALITIES = {"CLEAR", "VAGUE", "CONTRADICTING"}
 
 
 # ── Prompt builder ───────────────────────────────────────────────────────────
@@ -153,8 +155,15 @@ Use this exact structure:
       "line_number": null
     }}
   ],
-  "recommendation": "short summary for the BOM Coordinator"
-}}"""
+    "recommendation": "short summary for the BOM Coordinator"
+}}
+
+Consistency requirements:
+- Return an empty `flags` array only when `overall_risk` is LOW and
+  `description_quality` is CLEAR.
+- For MEDIUM/HIGH risk, VAGUE/CONTRADICTING quality, or either condition,
+  include at least one flag with a specific, evidence-based detail.
+- Do not use a high-risk rating unless the returned flags support it."""
     return prompt
 
 
@@ -209,7 +218,18 @@ def _rule_flag(rule_id: str, flag_type: str, detail: str, line_number=None) -> d
 
 # ── AI call ──────────────────────────────────────────────────────────────────
 def _resolve_llm_config() -> dict | None:
-    """Resolve provider config for OpenAI-compatible API clients."""
+    """Resolve provider config, preferring OpenAI when both providers are set."""
+    openai_key = _get_config_value("OPENAI_API_KEY")
+    if openai_key:
+        return {
+            "provider": "openai",
+            "api_key": openai_key,
+            "base_url": _get_config_value(
+                "OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"
+            ),
+            "model": _get_config_value("OPENAI_MODEL", "gpt-4o-mini"),
+        }
+
     gemini_key = _get_config_value("GEMINI_API_KEY")
     if gemini_key:
         return {
@@ -220,17 +240,6 @@ def _resolve_llm_config() -> dict | None:
                 "https://generativelanguage.googleapis.com/v1beta/openai/",
             ),
             "model": _get_config_value("GEMINI_MODEL", "gemini-2.5-flash"),
-        }
-
-    openai_key = _get_config_value("OPENAI_API_KEY")
-    if openai_key:
-        return {
-            "provider": "openai",
-            "api_key": openai_key,
-            "base_url": _get_config_value(
-                "OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"
-            ),
-            "model": _get_config_value("OPENAI_MODEL", "gpt-4o-mini"),
         }
 
     return None
@@ -290,6 +299,52 @@ def _try_parse_json(raw: str) -> dict:
             except json.JSONDecodeError:
                 pass
         raise
+
+
+def _normalise_ai_result(result: dict) -> dict:
+    """Return a display-safe AI result and expose unsupported AI conclusions.
+
+    Providers occasionally return a non-clear risk or quality label without the
+    detailed flags requested by the prompt. Rather than presenting that as
+    "No AI flags", add an explicit advisory explaining that the model did not
+    supply evidence for its conclusion.
+    """
+    if not isinstance(result, dict):
+        raise ValueError("AI response must be a JSON object")
+
+    risk = str(result.get("overall_risk", "UNKNOWN")).upper().strip()
+    if risk not in VALID_RISK_LEVELS:
+        risk = "UNKNOWN"
+
+    quality = str(result.get("description_quality", "UNKNOWN")).upper().strip()
+    if quality not in VALID_DESCRIPTION_QUALITIES:
+        quality = "UNKNOWN"
+
+    raw_flags = result.get("flags", [])
+    flags = [flag for flag in raw_flags if isinstance(flag, dict)] if isinstance(raw_flags, list) else []
+    response_complete = isinstance(raw_flags, list) and len(flags) == len(raw_flags)
+    recommendation = str(result.get("recommendation") or "").strip()
+    needs_evidence = risk in {"MEDIUM", "HIGH"} or quality in {"VAGUE", "CONTRADICTING"}
+
+    if not response_complete or (needs_evidence and not flags):
+        detail = (
+            "The AI returned a non-clear assessment without any supporting flags. "
+            "Review the ECN manually; the assessment alone is not evidence of a specific issue."
+            if response_complete
+            else "The AI returned flags in an invalid format. Review the ECN manually."
+        )
+        flags.append(_rule_flag("AI_RESPONSE_INCOMPLETE", "REVIEW_REQUIRED", detail))
+        response_complete = False
+        if not recommendation:
+            recommendation = "AI response needs manual review because supporting details were incomplete."
+
+    return {
+        "overall_risk": risk,
+        "description_quality": quality,
+        "flags": flags,
+        "recommendation": recommendation,
+        "response_status": "COMPLETE" if response_complete else "INCOMPLETE",
+    }
 
 
 def _call_openai(prompt: str, config: dict) -> dict:
@@ -446,9 +501,12 @@ def _rule_based_advisory(packet: dict) -> dict:
         "recommendation": (
             "AI unavailable — rule-based advisory used. "
             f"{num_flags} potential issue(s) flagged. Manual review recommended."
-        ),
+                ),
         "ai_available": False,
+        "response_status": "COMPLETE",
     }
+
+
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -459,16 +517,19 @@ def run_ai_advisory(packet: dict) -> dict:
     if HAS_OPENAI and config:
         try:
             prompt = _build_prompt(packet)
-            ai_result = _call_openai(prompt, config)
+            ai_result = _normalise_ai_result(_call_openai(prompt, config))
             ai_result["ai_available"] = True
-            logger.info("AI Advisory complete — risk: %s", ai_result.get("overall_risk"))
+            logger.info(
+                "AI Advisory complete — risk: %s; response: %s",
+                ai_result.get("overall_risk"),
+                ai_result.get("response_status"),
+            )
         except Exception as exc:
             logger.warning("AI Advisory failed (%s) — falling back to rule-based.", exc)
-            ai_result = None  #  explicitly reset so fallback triggers below
+            ai_result = None
     else:
         logger.warning("No API key or openai package — falling back to rule-based.")
 
-    # Single unconditional write — dashboard always gets a dict
     if ai_result is None:
         ai_result = _rule_based_advisory(packet)
         logger.info("AI Advisory: using rule-based fallback.")

@@ -2,7 +2,7 @@
 
 ## Overview
 
-ECN Checker is a Python prototype for ECN creators, BOM coordinators, and Chief Engineers. It ingests an Engineering Change Notice (ECN) and a Bill of Materials (BOM), validates them with deterministic rules and part-master/history context, adds an AI-assisted (or rule-based fallback) review, makes a gate decision, presents the findings, and notifies the appropriate reviewers by email.
+ECN Checker is a Python prototype for ECN creators, BOM coordinators, and Chief Engineers. It ingests an Engineering Change Notice (ECN) and a Bill of Materials (BOM), validates them with deterministic rules and part-master context, adds an AI-assisted (or rule-based fallback) review, makes a gate decision, presents the findings, and notifies the appropriate reviewers by email.
 
 ## Architecture
 
@@ -10,9 +10,9 @@ The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the curre
 
 1. **Intake** — parses the submitted ECN and BOM and normalizes them into one packet.
 2. **Rule Engine** — applies deterministic checks for required ECN fields, part-number format, duplicate BOM lines, quantity, change type, and date format.
-3. **AI Advisory** — reviews ECN/BOM semantics using Gemini or OpenAI when configured; otherwise it uses deterministic advisory heuristics.
-4. **Context Engine** — checks BOM parts against `data/parts_master.csv` and ECN history, and writes context artifacts under `out/context_engine/`.
-5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors, selected part issues, and historical conflicts close the gate, while warnings and AI notes remain advisory. Only a `PASS` decision is recorded as a durable current-run entry in the conflict log.
+3. **AI Advisory** — reviews ECN/BOM semantics using OpenAI first (or Gemini when OpenAI is not configured); otherwise it uses deterministic advisory heuristics.
+4. **Context Engine** — checks BOM parts against `data/parts_master.csv` and writes context artifacts under `out/context_engine/`.
+5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors and selected part issues close the gate, while warnings and AI notes remain advisory.
 6. **Dashboard** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; the Streamlit app renders the gate findings directly.
 7. **Email Notification** — sends or dry-runs a gate-specific notification through SendGrid.
 
@@ -92,10 +92,10 @@ For local CLI use, the AI advisory reads a repository-root `.env` file; process 
 
 | Variable | Purpose | Used by | Example/default |
 |---|---|---|---|
-| `GEMINI_API_KEY` | Enables Gemini AI advisory; preferred when both AI keys are set. | CLI and Streamlit | `your-gemini-api-key` |
+| `GEMINI_API_KEY` | Enables Gemini AI advisory when no OpenAI key is configured. | CLI and Streamlit | `your-gemini-api-key` |
 | `GEMINI_MODEL` | Gemini model override. | CLI and Streamlit | `gemini-2.5-flash` |
 | `GEMINI_BASE_URL` | Gemini OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://generativelanguage.googleapis.com/v1beta/openai/` |
-| `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory when no Gemini key is configured. | CLI and Streamlit | `your-openai-api-key` |
+| `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory; preferred when both AI keys are set. | CLI and Streamlit | `your-openai-api-key` |
 | `OPENAI_MODEL` | OpenAI model override. | CLI and Streamlit | `gpt-4o-mini` |
 | `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://gateway.aitools.corp.fisherpaykel.com` |
 | `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Streamlit | `your-sendgrid-api-key` |
@@ -109,11 +109,11 @@ python -m pytest -q
 # Windows, if `python` is not on PATH: py -m pytest -q
 ```
 
-The test suite covers intake (including sample HTML ECN and PDF MBOM extraction), deterministic rules, AI fallback/configuration, part-master and history checks, merge/gate behavior, Node 6 notification rendering, the hybrid pipeline, and the legacy CSV checker.
+The test suite covers intake (including sample HTML ECN and PDF MBOM extraction), deterministic rules, AI fallback/configuration, part-master checks, merge/gate behavior, Node 6 notification rendering, the hybrid pipeline, and the legacy CSV checker.
 
 ## Email notifications
 
-Node **6a** is the `FAIL` path: it notifies only the engineer with blockers, part issues, and conflict alerts so the ECN can be fixed and resubmitted. Node **6b** is the `PASS` path: it notifies the engineer and Chief Engineer that the ECN is ready for CE review, including advisory warnings and AI notes. `DRY_RUN` defaults to `true`, so no email is sent unless it is explicitly disabled and valid SendGrid credentials plus a verified sender address are configured.
+Node **6a** is the `FAIL` path: it notifies only the engineer with blockers and part issues so the ECN can be fixed and resubmitted. Node **6b** is the `PASS` path: it notifies the engineer and Chief Engineer that the ECN is ready for CE review, including advisory warnings and AI notes. `DRY_RUN` defaults to `true`, so no email is sent unless it is explicitly disabled and valid SendGrid credentials plus a verified sender address are configured.
 
 ## Known limitations / TODO
 
@@ -121,8 +121,9 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers, par
 - PDF BOM extraction only recognizes extractable tables with MBOM-like **Part Number** and **Action** headers. Scanned PDFs and differently structured tables may yield no rows or need a parser enhancement.
 - The Streamlit uploader currently offers every intake extension for both upload controls, even though HTML is ECN-only and BOM parsing is supported only for CSV, Excel, and PDF. The low-level loader also accepts `.eml` for the BOM role but returns an ECN-style dictionary, which results in an empty BOM rather than a valid BOM import.
 - AI review is advisory only and is limited to the first 20 BOM lines sent to the model. If no usable provider/key is available, the rule-based fallback is used.
-- The gate does not fail for every context warning. It closes for rule-engine `ERROR`s, `DISCONTINUED_PART`, `MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`; other context flags, rule warnings, and AI findings are advisory.
-- BOM structure records append on each run under `out/context_engine/`. The conflict log is seeded from historical ECNs and receives current-run rows only after a `PASS` decision, with status `PASSED`; clean or manage these generated artifacts as appropriate for repeatable local work.
+- The gate does not fail for every context warning. It closes for rule-engine `ERROR`s, `DISCONTINUED_PART`, `MISSING_SUPPLIER`, and `UOM_MISMATCH`; other context flags, rule warnings, and AI findings are advisory.
+- BOM structure records append on each run under `out/context_engine/`; clean or manage these generated artifacts as appropriate for repeatable local work.
+- ECN Conflict Log is not available in the current implementation.
 - This remains a CSV/reference-data prototype: it does not connect directly to Windchill, PLM, or ERP systems.
 
 ## Key locations
@@ -132,7 +133,7 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers, par
 | `scripts/run_hybrid.py` | CLI orchestration of all stages and notifications |
 | `scripts/stages/` | Intake, rule, AI, context, merge, dashboard, and email stage implementations |
 | `streamlit_app.py` | Streamlit upload, gate-results, and explicit notification interface |
-| `data/` | Sample ECN/BOM inputs, parts master, and ECN history |
+| `data/` | Sample ECN/BOM inputs and parts master |
 | `docs/` | Architecture, deployment, rule, and intake-test documentation |
 | `tests/` | Regression and pipeline tests |
 | `out/` | Generated CLI dashboard, summary, and context artifacts |
