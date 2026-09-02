@@ -25,26 +25,61 @@ def test_load_excel_mbom_template(tmp_path):
     wb = Workbook()
     ws = wb.active
     ws.title = "MBOM Spreadsheet"
-    ws.append(["Help", "BILLS OF MATERIAL CHANGES TEMPLATE", "", "", "", "", "", "", "", "", "",
-                "", "", ""])
-    ws.append(["PART MASTER CHANGES (Part Details)", "", "", "", "", "", "", "", "", "", "",
-                "", "", "", ""])
-    ws.append(["Select BOM Database", "Select Action", "Part Number", "Part Description (max. 30 characters)",
-               "Part Issue", "Select Unit of Measure", "Select Primary Role", "Part Class",
-               "Drawing Number", "Drawing Issue", "Select Part Status", "If required Intro Date",
-               "ECN number", "Additional info"])
-    ws.append(["MBOM", "ADD", "1001234", "Induction Cooktop Glass Top", "A", "EA", "Primary",
-               "Electrical", "DRW-10012", "A", "Active", "2026-08-01", "ECN-4000012",
-               "New glass spec applied"])
-    ws.append(["MBOM", "DELETE", "1001239", "Legacy Ignition Module", "B", "EA", "Primary",
-               "Electrical", "DRW-10017", "B", "Obsolete", "2026-08-03", "ECN-4000014",
-               "Replaced by 1001245"])
+    ws.append(["Help", "BILLS OF MATERIAL CHANGES TEMPLATE"])
+    ws.append(["PART MASTER CHANGES (Part Details)"])
+    ws.append([
+        "Select BOM Database", "Select Action", "Part Number",
+        "Part Description (max. 30 characters)", "Part Issue",
+        "Select Unit of Measure", "Select Primary Role", "Part Class",
+        "Drawing Number", "Drawing Issue", "Select Part Status",
+        "If required Intro Date", "ECN number", "Additional info",
+    ])
+    ws.append([
+        "MBOM", "ADD", "1001234", "Induction Cooktop Glass Top", "A", "EA",
+        "Primary", "Electrical", "DRW-10012", "A", "Active", "2026-08-01",
+        "ECN-4000012", "New glass spec applied",
+    ])
+    ws.append([
+        "MBOM", "DELETE", "1001239", "Legacy Ignition Module", "B", "EA",
+        "Primary", "Electrical", "DRW-10017", "B", "Obsolete", "2026-08-03",
+        "ECN-4000014", "Replaced by 1001245",
+    ])
     wb.save(path)
 
     rows = load_excel(str(path))
     assert len(rows) == 2
     assert rows[0]["part_number"] == "1001234"
     assert rows[1]["quantity"] == "1"
+
+
+
+
+
+
+
+def test_load_excel_ecn_form(tmp_path):
+    path = tmp_path / "ECN.xlsx"
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append([
+        "A3 Number", "Associated A3", "Change Actions", "Cost Impact",
+        "Description Of Change", "Name", "Number", "Products Affected",
+        "Reason for Change",
+    ])
+    worksheet.append([
+        "A3-100", "No", "Update BOM", "No cost impact", "Update the controller",
+        "Controller update", "ECN-100", "PH12", "Reliability",
+    ])
+    workbook.save(path)
+
+    header = load_file(str(path), role="ecn")
+
+    assert header["a3_number"] == "A3-100"
+    assert header["name_of_change"] == "Controller update"
+    assert header["change_notice_number"] == "ECN-100"
+    assert validate_ecn_header(header)["validation"]["missing_fields"] == []
 
 
 def _make_header(**kwargs):
@@ -56,9 +91,15 @@ def _make_header(**kwargs):
 def test_packet_structure():
     header = _make_header()
     packet = build_ecn_packet([header], [])
+
     assert "header" in packet
     assert "bom" in packet
     assert "validation" in packet
+    assert not {"effective_date", "ecn_title", "affected_assembly"} & packet["header"].keys()
+
+
+
+
 
 
 def test_missing_fields_detected():
@@ -76,7 +117,31 @@ def test_complete_header_no_missing():
 def test_pdf_dict_input():
     header = _make_header()
     packet = build_ecn_packet(header, [])  # dict, not list
-    assert packet["header"] == header
+    for field in REQUIRED_ECN_FIELDS:
+        assert packet["header"][field] == "val"
+
+
+def test_form_header_aliases_are_normalized():
+    form_header = {
+        "Engineering Change Number": "ECN-100",
+        "Name": "Motor controller update",
+        "A3 Number": "A3-100",
+        "Associated A3": "Yes",
+        "Change Actions": "Update BOM",
+        "Cost Impact": "No cost impact",
+        "Description Of Change": "Replace controller.",
+        "Products Affected": "PH12",
+        "Reason for Change": "Reliability",
+        "Implementation Date": "not checked",
+    }
+
+    packet = build_ecn_packet(form_header, [])
+
+    assert packet["validation"]["missing_fields"] == []
+    assert packet["header"]["change_notice_number"] == "ECN-100"
+    assert packet["header"]["name_of_change"] == "Motor controller update"
+    assert "date" not in packet["validation"]["missing_fields"]
+
 
 
 def test_load_email_into_header_dict(tmp_path):
@@ -111,10 +176,10 @@ def test_load_sample_html_ecn_form():
         "description_of_change",
         "products_affected",
         "change_actions",
-        "date",
     ):
         assert data[field]
-    assert validate_ecn_header(data)["validation"]["missing_fields"] == []
+    assert validate_ecn_header(data)["validation"]["missing_fields"] == ["a3_number"]
+
 
 
 def test_load_sample_pdf_bom():
@@ -146,7 +211,7 @@ def test_load_file_rejects_unknown_role():
 def test_run_intake_with_sample_html_ecn_and_pdf_bom():
     packet = run_intake(str(HTML_ECN_PATH), str(PDF_BOM_PATH))
 
-    assert packet["validation"]["missing_fields"] == []
+    assert packet["validation"]["missing_fields"] == ["a3_number"]
     assert len(packet["bom"]) == 4
     assert packet["source_files"] == {
         "ecn": str(HTML_ECN_PATH),

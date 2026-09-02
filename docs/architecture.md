@@ -24,7 +24,7 @@ Engineer submits ECN + BOM File from email / form / upload
 ┌─────────────────────┐
 │  Stage 2: Rule      │  R01 Required Fields  R02 Part Number Format
 │  Engine             │  R03 Duplicate Lines  R04 Zero-Qty Check
-└────────┬────────────┘  R05 Change Type      R06 Date Format
+└────────┬────────────┘
          │ Errors Found → Real-Time Warning shown to Engineer
          ▼
 ┌─────────────────────┐
@@ -55,12 +55,10 @@ Engineer submits ECN + BOM File from email / form / upload
 
 | ID  | Description                        | Severity |
 |-----|------------------------------------|----------|
-| R01 | Required fields present            | ERROR    |
+| R01 | Required ECN form fields present: A3 Number, Associated A3, Change Actions, Cost Impact, Description Of Change, Name of Change, Change Notice Number, Products Affected, and Reason for Change | ERROR |
 | R02 | Part number is exactly 5 or 6 digits | ERROR    |
 | R03 | No duplicate BOM lines             | WARNING  |
 | R04 | No zero/negative quantity          | ERROR    |
-| R05 | Change type in approved list       | WARNING  |
-| R06 | Date in YYYY-MM-DD format          | WARNING  |
 
 ## Key Files
 
@@ -90,6 +88,17 @@ Engineer submits ECN + BOM File from email / form / upload
 | `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address for Stage 6 notifications   |
 | `DRY_RUN` | Defaults to `true`; set explicitly false only to send email          |
 
+
+## AI advisory response contract
+
+Stage 3 stores an advisory object with `overall_risk`, `description_quality`,
+`flags`, `recommendation`, `ai_available`, and `response_status`. A provider may
+return an empty `flags` list only for a `LOW` / `CLEAR` assessment. If a provider
+returns `MEDIUM` or `HIGH` risk, or `VAGUE` or `CONTRADICTING` quality, without
+supporting flags, the checker adds an `AI_RESPONSE_INCOMPLETE` advisory flag and
+sets `response_status` to `INCOMPLETE`. This is advisory only; it makes the
+missing evidence visible and requires manual review rather than silently showing
+“No AI flags.”
 
 ## Key design decisions
 

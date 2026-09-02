@@ -2,7 +2,8 @@ import pytest
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from ai_advisory import _build_prompt, _resolve_llm_config, _rule_based_advisory
+from ai_advisory import _build_prompt, _resolve_llm_config, _rule_based_advisory, run_ai_advisory
+from stages import ai_advisory as advisory_impl
 from intake import build_ecn_packet, REQUIRED_ECN_FIELDS
 
 
@@ -45,6 +46,72 @@ def test_result_structure():
     assert "description_quality" in result
     assert "flags" in result
     assert "recommendation" in result
+    assert result["response_status"] == "COMPLETE"
+
+
+def test_normalise_adds_review_flag_for_unsupported_non_clear_assessment():
+    result = advisory_impl._normalise_ai_result(
+        {
+            "overall_risk": "HIGH",
+            "description_quality": "VAGUE",
+            "flags": [],
+            "recommendation": "",
+        }
+    )
+
+    assert result["response_status"] == "INCOMPLETE"
+    assert result["flags"][0]["rule_id"] == "AI_RESPONSE_INCOMPLETE"
+    assert "supporting flags" in result["flags"][0]["detail"]
+    assert result["recommendation"]
+
+
+def test_normalise_keeps_a_supported_or_clear_assessment_complete():
+    result = advisory_impl._normalise_ai_result(
+        {
+            "overall_risk": "LOW",
+            "description_quality": "CLEAR",
+            "flags": [],
+            "recommendation": "No action required.",
+        }
+    )
+
+    assert result["response_status"] == "COMPLETE"
+    assert result["flags"] == []
+
+
+@pytest.mark.parametrize("raw_flags", [None, "not-a-list", [{"type": "RISK"}, "invalid"]])
+def test_normalise_marks_invalid_flag_shapes_incomplete(raw_flags):
+    result = advisory_impl._normalise_ai_result(
+        {
+            "overall_risk": "LOW",
+            "description_quality": "CLEAR",
+            "flags": raw_flags,
+        }
+    )
+
+    assert result["response_status"] == "INCOMPLETE"
+    assert result["flags"][-1]["rule_id"] == "AI_RESPONSE_INCOMPLETE"
+
+
+def test_live_ai_path_normalises_an_incomplete_model_response(monkeypatch):
+    packet = _packet(description="A detailed description for a mocked AI call.")
+    monkeypatch.setattr(advisory_impl, "HAS_OPENAI", True)
+    monkeypatch.setattr(advisory_impl, "_resolve_llm_config", lambda: {"api_key": "test"})
+    monkeypatch.setattr(
+        advisory_impl,
+        "_call_openai",
+        lambda prompt, config: {
+            "overall_risk": "HIGH",
+            "description_quality": "VAGUE",
+            "flags": [],
+        },
+    )
+
+    result = run_ai_advisory(packet)["validation"]["ai_flags"]
+    assert result["ai_available"] is True
+    assert result["response_status"] == "INCOMPLETE"
+    assert result["flags"][0]["rule_id"] == "AI_RESPONSE_INCOMPLETE"
+
 
 
 # ── Tests reflecting ECN-2026-002 (cost reduction, well-formed) ──────────────

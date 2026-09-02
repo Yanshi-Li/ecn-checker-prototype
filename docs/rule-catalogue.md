@@ -6,6 +6,7 @@
 | BOM-001 | Existing component must exist in released BOM | Prevents a change being applied to the wrong or obsolete BOM line | Blocker |
 | BOM-002 | Added component should not already exist | Helps detect incorrect ADD actions where a quantity change may be intended | Warning |
 | BOM-003 | Quantity must be greater than zero | Prevents invalid component quantities entering a BOM | Blocker |
+| R01 | ECN form must contain Description Of Change, Name of Change, Change Notice Number, Reason for Change | Ensures the configured ECN form headers are complete. `Name` maps to Name of Change; Engineering Change Number or `Number` maps to Change Notice Number. | Blocker |
 | R02 | Part number must be exactly 5 or 6 digits | Keeps BOM part numbers in the required numeric format | Blocker |
 | PART-001 | Proposed part must exist in part master | Ensures traceability and valid part data | Blocker |
 | PART-004 | Proposed part must be ACTIVE | Prevents introduction of obsolete or blocked components | Blocker |

@@ -85,6 +85,8 @@ def _render_context_flags(flags: list[dict]) -> str:
     </table>"""
 
 
+
+
 def _render_ai_flags(ai_flags: dict) -> str:
     logger.info("_render_ai_flags received: %s", ai_flags)
     if not ai_flags:
@@ -94,6 +96,7 @@ def _render_ai_flags(ai_flags: dict) -> str:
     risk = ai_flags.get("overall_risk", "UNKNOWN")
     quality = ai_flags.get("description_quality", "UNKNOWN")
     recommendation = ai_flags.get("recommendation", "")
+    response_status = ai_flags.get("response_status", "UNKNOWN")
     available = ai_flags.get("ai_available", False)
     ai_label = "🤖 AI Advisory" if available else "⚙️ Rule-Based Advisory (AI Unavailable)"
 
@@ -107,7 +110,6 @@ def _render_ai_flags(ai_flags: dict) -> str:
       <td>{flag.get('line_number') or '—'}</td>
     </tr>"""
 
-    #  Build table if there are flags, show green tick only if truly empty
     if ai_flags.get("flags"):
         flag_table = f"""
     <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
@@ -121,15 +123,22 @@ def _render_ai_flags(ai_flags: dict) -> str:
       </thead>
       <tbody>{flag_rows}</tbody>
     </table>"""
+    elif risk in {"MEDIUM", "HIGH"} or quality in {"VAGUE", "CONTRADICTING"}:
+        flag_table = (
+            '<p style="color:#d4a017;">⚠️ The advisory has a non-clear assessment '
+            'but did not provide itemised flags. Manual review is required.</p>'
+        )
     else:
-        flag_table = '<p style="color:green;"> No AI flags.</p>'
+        flag_table = '<p style="color:green;">✅ No AI flags.</p>'
 
     return f"""
     <p><strong>{ai_label}</strong></p>
     <p>Overall Risk: <strong style="color:{risk_colors.get(risk,'black')};">{risk}</strong>
-       &nbsp;|&nbsp; Description Quality: <strong>{quality}</strong></p>
+       &nbsp;|&nbsp; Description Quality: <strong>{quality}</strong>
+       &nbsp;|&nbsp; Response Status: <strong>{response_status}</strong></p>
     <p><em>{recommendation}</em></p>
     {flag_table}"""
+
 
 
 # ── Summary bar ───────────────────────────────────────────────────────────────

@@ -99,36 +99,9 @@ def rule_R04_zero_quantity(packet: dict) -> list[dict]:
     return violations
 
 
-def rule_R05_change_type_valid(packet: dict) -> list[dict]:
-    """R05 — Change type must be one of the approved values."""
-    VALID_TYPES = {"add", "remove", "modify", "replace", "note"}
-    violations = []
-    change_type = packet["header"].get("change_type", "").strip().lower()
-    if change_type and change_type not in VALID_TYPES:
-        violations.append({
-            "rule_id": "R05",
-            "severity": "WARNING",
-            "field": "change_type",
-            "value": change_type,
-            "message": f"Change type '{change_type}' is not in the approved list: "
-                       f"{sorted(VALID_TYPES)}.",
-        })
-    return violations
 
 
-def rule_R06_date_format(packet: dict) -> list[dict]:
-    """R06 — ECN date must be in YYYY-MM-DD format."""
-    violations = []
-    date_val = packet["header"].get("date", "").strip()
-    if date_val and not re.match(r"^\d{4}-\d{2}-\d{2}$", date_val):
-        violations.append({
-            "rule_id": "R06",
-            "severity": "WARNING",
-            "field": "date",
-            "value": date_val,
-            "message": f"Date '{date_val}' is not in required YYYY-MM-DD format.",
-        })
-    return violations
+
 
 
 # ── Rule registry & runner ───────────────────────────────────────────────────
@@ -137,8 +110,6 @@ RULES = [
     rule_R02_part_number_format,
     rule_R03_duplicate_lines,
     rule_R04_zero_quantity,
-    rule_R05_change_type_valid,
-    rule_R06_date_format,
 ]
 
 

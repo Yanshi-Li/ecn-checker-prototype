@@ -69,13 +69,16 @@ def test_R04_negative_quantity():
     assert _violations(result, "R04")
 
 
-def test_R05_invalid_change_type():
-    packet = _base_packet(header_overrides={"change_type": "destroy"})
+def test_R01_checks_only_configured_form_headers():
+    packet = _base_packet(header_overrides={
+        "cost_impact": "",
+        "date": "07/15/2024",
+        "change_type": "destroy",
+    })
     result = run_rule_engine(packet)
-    assert _violations(result, "R05")
 
-
-def test_R06_bad_date_format():
-    packet = _base_packet(header_overrides={"date": "07/15/2024"})
-    result = run_rule_engine(packet)
-    assert _violations(result, "R06")
+    violations = result["validation"]["rule_violations"]
+    assert [violation["field"] for violation in _violations(result, "R01")] == [
+        "cost_impact"
+    ]
+    assert not any(violation["field"] in {"date", "change_type"} for violation in violations)
