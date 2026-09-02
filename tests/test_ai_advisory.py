@@ -230,19 +230,19 @@ def test_semantic_A05_part_description_naming_word_check():
     assert any(f.get("rule_id") == "A05" for f in result["flags"])
 
 
-def test_llm_config_prefers_gemini_key(monkeypatch):
+def test_llm_config_prefers_openai_key(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
-    config = _resolve_llm_config()
-    assert config["provider"] == "gemini"
-    assert config["model"] == "gemini-2.5-flash"
-
-
-def test_llm_config_uses_openai_when_gemini_missing(monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     config = _resolve_llm_config()
     assert config["provider"] == "openai"
     assert config["model"] == "gpt-4o-mini"
+
+
+def test_llm_config_uses_gemini_when_openai_missing(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    config = _resolve_llm_config()
+    assert config["provider"] == "gemini"
+    assert config["model"] == "gemini-2.5-flash"

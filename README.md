@@ -10,7 +10,7 @@ The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the curre
 
 1. **Intake** — parses the submitted ECN and BOM and normalizes them into one packet.
 2. **Rule Engine** — applies deterministic checks for required ECN fields, part-number format, duplicate BOM lines, quantity, change type, and date format.
-3. **AI Advisory** — reviews ECN/BOM semantics using Gemini or OpenAI when configured; otherwise it uses deterministic advisory heuristics.
+3. **AI Advisory** — reviews ECN/BOM semantics using OpenAI first (or Gemini when OpenAI is not configured); otherwise it uses deterministic advisory heuristics.
 4. **Context Engine** — checks BOM parts against `data/parts_master.csv` and writes context artifacts under `out/context_engine/`.
 5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors and selected part issues close the gate, while warnings and AI notes remain advisory.
 6. **Dashboard** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; the Streamlit app renders the gate findings directly.
@@ -92,10 +92,10 @@ For local CLI use, the AI advisory reads a repository-root `.env` file; process 
 
 | Variable | Purpose | Used by | Example/default |
 |---|---|---|---|
-| `GEMINI_API_KEY` | Enables Gemini AI advisory; preferred when both AI keys are set. | CLI and Streamlit | `your-gemini-api-key` |
+| `GEMINI_API_KEY` | Enables Gemini AI advisory when no OpenAI key is configured. | CLI and Streamlit | `your-gemini-api-key` |
 | `GEMINI_MODEL` | Gemini model override. | CLI and Streamlit | `gemini-2.5-flash` |
 | `GEMINI_BASE_URL` | Gemini OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://generativelanguage.googleapis.com/v1beta/openai/` |
-| `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory when no Gemini key is configured. | CLI and Streamlit | `your-openai-api-key` |
+| `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory; preferred when both AI keys are set. | CLI and Streamlit | `your-openai-api-key` |
 | `OPENAI_MODEL` | OpenAI model override. | CLI and Streamlit | `gpt-4o-mini` |
 | `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://gateway.aitools.corp.fisherpaykel.com` |
 | `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Streamlit | `your-sendgrid-api-key` |

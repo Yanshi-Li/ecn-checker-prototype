@@ -218,7 +218,18 @@ def _rule_flag(rule_id: str, flag_type: str, detail: str, line_number=None) -> d
 
 # ── AI call ──────────────────────────────────────────────────────────────────
 def _resolve_llm_config() -> dict | None:
-    """Resolve provider config for OpenAI-compatible API clients."""
+    """Resolve provider config, preferring OpenAI when both providers are set."""
+    openai_key = _get_config_value("OPENAI_API_KEY")
+    if openai_key:
+        return {
+            "provider": "openai",
+            "api_key": openai_key,
+            "base_url": _get_config_value(
+                "OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"
+            ),
+            "model": _get_config_value("OPENAI_MODEL", "gpt-4o-mini"),
+        }
+
     gemini_key = _get_config_value("GEMINI_API_KEY")
     if gemini_key:
         return {
@@ -229,17 +240,6 @@ def _resolve_llm_config() -> dict | None:
                 "https://generativelanguage.googleapis.com/v1beta/openai/",
             ),
             "model": _get_config_value("GEMINI_MODEL", "gemini-2.5-flash"),
-        }
-
-    openai_key = _get_config_value("OPENAI_API_KEY")
-    if openai_key:
-        return {
-            "provider": "openai",
-            "api_key": openai_key,
-            "base_url": _get_config_value(
-                "OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"
-            ),
-            "model": _get_config_value("OPENAI_MODEL", "gpt-4o-mini"),
         }
 
     return None
