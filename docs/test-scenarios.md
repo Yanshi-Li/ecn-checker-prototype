@@ -37,18 +37,35 @@ both source paths in the packet. Tests also reject unsupported `load_file()`
 roles. These document-based tests depend on the corresponding files remaining
 in `data/`.
 
+## Rule catalogue regression scenarios
+
+`tests/test_rule_catalogue.py` validates the policy registry independently of
+the legacy runtime checks. It verifies that `docs/rules_list.json` is valid,
+contains every ID in `docs/rules_origin.txt`, rejects duplicate IDs and unknown
+evaluators, and maps each policy rule to its intended pipeline stage. This
+ensures a policy-file edit cannot silently create an ambiguous or unowned rule.
+
+The catalogue is not yet a dispatcher for the legacy evaluators. Therefore,
+these tests prove catalogue integrity and ownership only; they do not prove
+that every `H`, `S`, or `D` rule is enforced in a pipeline run. See
+[the architecture implementation-status note](architecture.md#implementation-status)
+and [the rule schema](rules_schema.md) for the migration contract.
+
 ## Node 3 semantic advisory test matrix
 
+The policy catalogue assigns the following semantic rules to AI Advisory. The
+current advisory implementation is tested for its existing semantic behavior;
+the policy IDs become emitted finding IDs when unified-finding migration is
+implemented.
 
-The AI advisory stage now tracks the semantic checks defined in the ECN intake mapping:
-
-| Rule | Semantic expectation | Test focus |
+| Policy rule | Semantic expectation | Test focus |
 |---|---|---|
-| A01 | Description semantically aligns to BOM change intent | Flag missing BOM context when BOM parts are not described |
-| A02 | Parts mentioned in description appear in BOM rows | Flag description-only parts not present in BOM |
-| A03 | Description verbs align with BOM task/action | Flag contradiction between "replace/add/remove" language and BOM action |
-| A04 | Products affected align with BOM parent assemblies | Flag mismatch between `affected_parts` and BOM parent assembly fields |
-| A05 | Part description starts with naming noun | Flag part descriptions that start with action verbs (for example "Replace ...") |
+| S01 | Description semantically aligns to BOM change intent | Flag missing BOM context when BOM parts are not described |
+| S02 | Parts mentioned in description appear in BOM rows | Flag description-only parts not present in BOM |
+| S03 | Description verbs align with BOM task/action | Flag contradiction between "replace/add/remove" language and BOM action |
+| S04 | Products affected align with BOM parent assemblies | Flag mismatch between `affected_parts` and BOM parent assembly fields |
+| S05 | Part description starts with naming noun | Flag part descriptions that start with action verbs (for example "Replace ...") |
+
 
 ### AI response integrity scenarios
 
@@ -63,9 +80,12 @@ Coverage is implemented in `tests/test_ai_advisory.py`,
 `tests/test_dashboard_ai_advisory.py`, and pipeline-level validation is covered
 in `tests/test_run_hybrid_pipeline.py`.
 
-## Initial failure scenario
+## Legacy CSV compatibility failure scenario
 
-The supplied `ecn_changes.csv` intentionally includes invalid data.
+The supplied `ecn_changes.csv` intentionally includes invalid data. This
+scenario documents the legacy CSV checker identifiers (`PART-004`, `BOM-001`,
+and similar), not the new policy-catalogue IDs. It remains regression coverage
+for the existing CSV-driven workflow during the catalogue migration.
 
 | Line | ECN action | Test scenario | Expected result |
 |---:|---|---|---|
