@@ -1,0 +1,52 @@
+# ECN Checker Rules
+
+## 🔴 Hard Rules
+
+| Rule ID | Rule | Field | Severity | Error Message |
+|---|---|---|---|---|
+| H01 | Name of Change must be present | Identification | 🔴 Blocker | Name of Change is blank, mandatory field missing |
+| H02 | Name of Change must not be more than 50 characters. Must not contain: `<` `>` `:` `"` `/` `\` `|` `?` `*` | Identification | 🔴 Blocker | Name of Change contains too many or unacceptable characters |
+| H03 | Description of Change must be present | Change Details | 🔴 Blocker | Description of Change is missing |
+| H04 | Description should be more than 50 characters and structured | Change Details | 🟡 Warning | Description is too short or lacks required paragraph structure |
+| H05 | Description must use plain English only | Change Details | 🟡 Warning | Description contains non-English characters or Jargon-heavy words |
+| H06 | If there is an Implementation Site, the Implementation Date must be present | Change Details | 🟡 Warning | Implementation Date is missing |
+| H07 | If there is an Implementation Date, it must not be in the past | Change Details | 🟡 Warning | Implementation Date is in the past, must be a future date |
+| H08 | Each change line should match assembly in ECN form | BOM Structure | 🟡 Warning | Parent Part No. does not match the assembly listed in the ECN form |
+| H09 | Parts being removed/replaced must exist in current BOM | BOM Part Master | 🔴 Blocker | Existing Child Part does not exist in current BOM, cannot be removed or replaced |
+| H10 | Parts being added must not already be in BOM | BOM Part Master | 🔴 Blocker | New Child Part already exists in current BOM, cannot be added again |
+| H11 | If Action is not Close or Mass Close, there should be a non-negative quantity | BOM Structure | 🔴 Blocker | Quantity is zero when the ACTION is ADD; other quantities must be greater than zero, and rounded to no more than 5 decimal places |
+| H12 | No duplicate change lines for same part | BOM Part Master | 🟡 Warning | Duplicate change lines detected for same part in same assembly |
+| H13 | Units of measure should match Parts Master DB | BOM Part Master | 🟡 Warning | Unit of measure does not match what is recorded in the Parts Master DB |
+| H14 | Part description cannot contain space, comma, or `*` | BOM Part Master | 🔴 Blocker | Space, comma, and asterisk symbol is not acceptable |
+| H15 | If drawing number is the same as part number, part issue must be the same as drawing issue, and in max 2 characters | BOM Part Master | 🔴 Blocker | Part issue and drawing issue not matched |
+| H16 | Description of Change must not contain "fire", "flood", "shock", "hazard" | Change Details | 🔴 Blocker | Avoid words "fire", "flood", "shock", "hazard" |
+| H17 | Part description must be 30 characters max | BOM Part Master | 🟡 Warning | Avoid more than 30 characters |
+| H18 | If there is an Implementation Date, there must be a Person | Change Details | 🟡 Warning | Implementation Person is missing |
+| H19 | Parent Description should be present if there is a Parent No. | BOM Structure | 🟡 Warning | Parent Description is missing |
+| H20 | Task Number must be present when action is not Mass Close, Replace or Copy Structure | BOM Structure | 🔴 Blocker | Task Number is missing |
+| H21 | Existing Child Description must be present if there is a Part Number | BOM Structure | 🔴 Blocker | Existing Child Description is missing |
+| H22 | New Child Description must be present if there is a Part Number | BOM Structure | 🔴 Blocker | New Child Description is missing |
+| H23 | Description of Change contains two or more words from: "electrical", "water", "safety concern" | Change Details | 🟡 Warning | Words "electrical", "water", "safety concern" need to be checked, better to change to others |
+
+---
+
+## 🔵 Semantic Rules
+
+| Rule ID | Rule | Field | Severity | Example | Error Message |
+|---|---|---|---|---|---|
+| S01 | Description of Change must semantically match BOM change actions | Description vs BOM | 🟡 Advisory | Description says "remove SA-220 with no replacement" but MBOM shows Add SA-330 | The meaning between description of change and BOM is different |
+| S02 | Each part mentioned in Description of Change must appear in BOM rows | Description vs BOM | 🔴 Blocker | Description mentions HE-1021 but no corresponding BOM row found | The part mentioned in description of change is not found in BOM rows |
+| S03 | Change action verbs must align between Description of Change and BOM task | Description vs BOM Task | 🟡 Advisory | Description says "Replace" but BOM task is "Add" | Change action does not match in description of change and BOM task |
+| S04 | Products Affected must align with assemblies in BOM | Products Affected vs BOM | 🟡 Advisory | Products Affected lists RF600 but BOM parent is from DW900 assembly | Products Affected does not align with assemblies in BOM |
+| S05 | Part description should start with a noun, naming word, or an abbreviation | Part Description in BOM | 🟡 Advisory | Part Description says "Pink BBQ Cover" instead of "Cover BBQ Pink" | Part description does not start with a noun, naming word, or an abbreviation |
+
+---
+
+## 🟢 Data Rules
+
+| Rule ID | Rule | Field | Severity | Error Message |
+|---|---|---|---|---|
+| D01 | If adding child does not exist in the database and ADD doesn't exist in part master changes, new parts must exist in Parts Master DB | BOM Part Number | 🔴 Blocker | Part number not found in Parts Master DB |
+| D02 | New parts must have ACTIVE status | BOM Part Number | 🔴 Blocker | Part has OBSOLETE primary role, cannot be used as new part |
+| D03 | If the Primary Role is not PU, every part must have a supplier recorded | EBOM Manufacturer | 🔴 Blocker | No supplier recorded for this part in Parts Master DB |
+| D04 | Safety-critical parts require Quality team approval | BOM Part Number | 🟡 Advisory | Safety-critical part detected, Quality team approval required before ECN can proceed |

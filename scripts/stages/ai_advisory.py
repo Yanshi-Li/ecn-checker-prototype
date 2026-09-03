@@ -12,6 +12,11 @@ import logging
 from pathlib import Path
 import httpx
 
+from rule_catalogue import rules_for_engine
+
+
+
+
 
 
 def _load_local_env() -> None:
@@ -511,6 +516,9 @@ def _rule_based_advisory(packet: dict) -> dict:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 def run_ai_advisory(packet: dict) -> dict:
+    configured_rules = rules_for_engine("ai_advisory")
+    logger.info("AI Advisory catalogue mapping: %d semantic rule(s).", len(configured_rules))
+
     config = _resolve_llm_config()
     ai_result = None
 

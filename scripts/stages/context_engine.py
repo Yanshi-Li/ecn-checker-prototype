@@ -10,6 +10,8 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rule_catalogue import rules_for_engine
+
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parent.parent.parent
@@ -516,8 +518,14 @@ def run_context_engine(
     Run context checks against the reference parts database.
     Also materializes context-engine data files used during module testing.
     Appends flags to packet['validation']['context_flags'].
-    Returns updated packet.
+        Returns updated packet.
     """
+    configured_rules = rules_for_engine("context_engine")
+    logger.info(
+        "Context Engine catalogue mapping: %d reference-data rule(s).",
+        len(configured_rules),
+    )
+
     bom = packet.get("bom", [])
     artifacts = create_context_databases(
         packet=packet,

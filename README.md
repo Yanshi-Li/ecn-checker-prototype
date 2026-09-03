@@ -9,14 +9,21 @@ ECN Checker is a Python prototype for ECN creators, BOM coordinators, and Chief 
 The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the current stage implementations live in `scripts/stages/` (with compatibility wrappers in `scripts/`).
 
 1. **Intake** — parses the submitted ECN and BOM and normalizes them into one packet.
-2. **Rule Engine** — applies deterministic checks for required ECN fields, part-number format, duplicate BOM lines, quantity, change type, and date format.
+2. **Rule Engine** — applies the currently implemented deterministic checks for required ECN fields, part-number format, duplicate BOM lines, and quantity.
 3. **AI Advisory** — reviews ECN/BOM semantics using OpenAI first (or Gemini when OpenAI is not configured); otherwise it uses deterministic advisory heuristics.
 4. **Context Engine** — checks BOM parts against `data/parts_master.csv` and writes context artifacts under `out/context_engine/`.
 5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors and selected part issues close the gate, while warnings and AI notes remain advisory.
 6. **Dashboard** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; the Streamlit app renders the gate findings directly.
 7. **Email Notification** — sends or dry-runs a gate-specific notification through SendGrid.
 
-See [docs/architecture.md](docs/architecture.md) for the workflow and rule reference. The README reflects the current code where it differs from that document.
+### Rule policy catalogue
+
+`docs/rules_list.json` is the versioned machine-readable policy catalogue. It retains the business-rule IDs `H01`–`H23`, `S01`–`S05`, and `D01`–`D04`, and assigns each rule to a deterministic, reference-data, semantic-heuristic, or LLM-advisory evaluator. `scripts/rule_catalogue.py` validates that file and provides the ownership mapping used by the pipeline stages.
+
+The catalogue is the policy and migration source of truth; `docs/rules_origin.txt` preserves its approved human-readable source. The existing prototype checks continue to emit legacy runtime IDs such as `R01`–`R04` and context flag types while their full catalogue-driven evaluators and unified finding output are implemented. Do not treat a catalogue entry as proof that the corresponding check is already enforced by the running prototype.
+
+See [docs/architecture.md](docs/architecture.md) for the workflow, [docs/rules_schema.md](docs/rules_schema.md) for the rule contract, and [docs/rules_origin.txt](docs/rules_origin.txt) for the readable policy table.
+
 
 ## Supported file formats
 
@@ -109,7 +116,7 @@ python -m pytest -q
 # Windows, if `python` is not on PATH: py -m pytest -q
 ```
 
-The test suite covers intake (including sample HTML ECN and PDF MBOM extraction), deterministic rules, AI fallback/configuration, part-master checks, merge/gate behavior, Node 6 notification rendering, the hybrid pipeline, and the legacy CSV checker.
+The test suite covers intake (including sample HTML ECN and PDF MBOM extraction), the validated rule catalogue and stage ownership mapping, deterministic rules, AI fallback/configuration, part-master checks, merge/gate behavior, Node 6 notification rendering, the hybrid pipeline, and the legacy CSV checker.
 
 ## Email notifications
 
@@ -134,13 +141,15 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers and 
 | `scripts/stages/` | Intake, rule, AI, context, merge, dashboard, and email stage implementations |
 | `streamlit_app.py` | Streamlit upload, gate-results, and explicit notification interface |
 | `data/` | Sample ECN/BOM inputs and parts master |
-| `docs/` | Architecture, deployment, rule, and intake-test documentation |
+| `docs/` | Architecture, rule-policy, deployment, and intake-test documentation |
 | `tests/` | Regression and pipeline tests |
 | `out/` | Generated CLI dashboard, summary, and context artifacts |
 
 ## Documentation
 
-- [Architecture and rules](docs/architecture.md)
+- [Architecture and current runtime behavior](docs/architecture.md)
+- [Rule-system schema and finding contract](docs/rules_schema.md)
+- [Approved rule-policy source table](docs/rules_origin.txt)
+- [Machine-readable rule catalogue](docs/rules_list.json)
 - [Streamlit Cloud deployment](docs/streamlit-deploy.md)
 - [Intake scenarios and regression expectations](docs/test-scenarios.md)
-- [Rule catalogue](docs/rule-catalogue.md)

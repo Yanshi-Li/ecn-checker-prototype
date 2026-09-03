@@ -8,6 +8,8 @@ import re
 import logging
 from collections import defaultdict
 
+from rule_catalogue import rules_for_engine
+
 logger = logging.getLogger(__name__)
 
 PART_NUMBER_PATTERN = re.compile(r"^\d{5,6}$")
@@ -118,8 +120,14 @@ def run_rule_engine(packet: dict) -> dict:
     """
     Run all rules against the ECN packet.
     Appends violations to packet['validation']['rule_violations'].
-    Returns the updated packet.
+        Returns the updated packet.
     """
+    configured_rules = rules_for_engine("rule_engine")
+    logger.info(
+        "Rule Engine catalogue mapping: %d deterministic rule(s).",
+        len(configured_rules),
+    )
+
     all_violations = []
     for rule_fn in RULES:
         violations = rule_fn(packet)
