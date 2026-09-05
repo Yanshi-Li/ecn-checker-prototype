@@ -8,7 +8,7 @@ from intake import build_ecn_packet, REQUIRED_ECN_FIELDS
 
 def _base_packet(bom=None, header_overrides=None):
     header = {f: "val" for f in REQUIRED_ECN_FIELDS}
-    header.update({"ecn_id": "ECN-001", "date": "2024-01-01",
+    header.update({"change_notice_number": "ECN-001", "date": "2024-01-01",
                    "change_type": "add", **(header_overrides or {})})
     return build_ecn_packet([header], bom or [])
 

@@ -28,13 +28,13 @@ MOCK_PARTS = {
 }
 
 MOCK_HISTORY = [
-    {"ecn_id": "ECN-OLD-001", "part_number": "AB-1001",
+    {"change_notice_number": "ECN-OLD-001", "part_number": "AB-1001",
      "change_type": "modify", "date": "2023-01-01", "status": "APPROVED"},
     # ECN-2026-002: cost reduction replacing C-300 with C-350
-    {"ecn_id": "ECN-2026-002", "part_number": "C-300",
+    {"change_notice_number": "ECN-2026-002", "part_number": "C-300",
      "change_type": "replace", "date": "2026-10-01", "status": "APPROVED"},
     # ECN-2026-003: stock shortage concession replacing C-200 with C-260
-    {"ecn_id": "ECN-2026-003", "part_number": "C-200",
+    {"change_notice_number": "ECN-2026-003", "part_number": "C-200",
      "change_type": "replace", "date": "2026-11-15", "status": "PENDING"},
 ]
 
@@ -59,7 +59,7 @@ def test_part_not_found():
 def test_historical_conflict_found():
     conflicts = check_historical_conflicts("ECN-NEW-002", "AB-1001", MOCK_HISTORY)
     assert len(conflicts) == 1
-    assert conflicts[0]["conflicting_ecn_id"] == "ECN-OLD-001"
+    assert conflicts[0]["conflicting_change_notice_number"] == "ECN-OLD-001"
 
 
 def test_no_conflict_same_ecn():
@@ -91,14 +91,14 @@ def test_c300_replaced_by_ecn_2026_002():
     # A new ECN touching C-300 should conflict with ECN-2026-002
     conflicts = check_historical_conflicts("ECN-NEW-999", "C-300", MOCK_HISTORY)
     assert len(conflicts) == 1
-    assert conflicts[0]["conflicting_ecn_id"] == "ECN-2026-002"
+    assert conflicts[0]["conflicting_change_notice_number"] == "ECN-2026-002"
 
 
 def test_c200_replaced_by_ecn_2026_003():
     # A new ECN touching C-200 should conflict with the pending ECN-2026-003
     conflicts = check_historical_conflicts("ECN-NEW-999", "C-200", MOCK_HISTORY)
     assert len(conflicts) == 1
-    assert conflicts[0]["conflicting_ecn_id"] == "ECN-2026-003"
+    assert conflicts[0]["conflicting_change_notice_number"] == "ECN-2026-003"
 
 
 def test_ecn_2026_002_no_self_conflict():
@@ -208,7 +208,7 @@ def _packet() -> dict:
     }
 
 
-def test_context_engine_creates_required_databases(tmp_path):
+def test_context_engine_uses_parts_master_source_without_copying_it(tmp_path):
     packet = _packet()
     root = Path(__file__).parent.parent
 
@@ -228,22 +228,30 @@ def test_context_engine_creates_required_databases(tmp_path):
     assert historical_conflicts[0]["severity"] == "ERROR"
 
     artifacts = result["validation"]["context_artifacts"]
-    parts_db_path = Path(artifacts["parts_master_database"])
+    parts_source_path = Path(artifacts["parts_master_source"])
     conflict_log_path = Path(artifacts["ecn_conflict_log"])
     bom_records_path = Path(artifacts["bom_structure_records"])
 
-    assert parts_db_path.exists()
+    assert parts_source_path == root / "data" / "parts_master.csv"
     assert conflict_log_path.exists()
     assert bom_records_path.exists()
-
-    parts_rows = _csv_rows(parts_db_path)
-    assert len(parts_rows) == len(_csv_rows(root / "data" / "parts_master.csv"))
-    assert set(parts_rows[0]) >= {"supplier", "unit_of_measure"}
+    assert not (tmp_path / "context_db" / "parts_master_database.csv").exists()
     assert len(_csv_rows(conflict_log_path)) == 4  # history seed only; no unapproved run rows
     assert len(_csv_rows(bom_records_path)) == 2
 
 
 
+
+
+
+def test_context_engine_defaults_to_direct_part_master_source(tmp_path):
+    result = run_context_engine(_packet(), context_db_dir=tmp_path / "context_db")
+
+    artifacts = result["validation"]["context_artifacts"]
+    assert Path(artifacts["parts_master_source"]) == (
+        Path(__file__).parent.parent / "data" / "Part_Master.csv"
+    )
+    assert not (tmp_path / "context_db" / "parts_master_database.csv").exists()
 
 
 def test_fail_gate_does_not_write_to_conflict_log(tmp_path):
@@ -258,7 +266,7 @@ def test_fail_gate_does_not_write_to_conflict_log(tmp_path):
     packet["gate"] = {"decision": "FAIL"}
 
     assert log_approved_change(packet) is False
-    assert len(_csv_rows(context_dir / "ecn_conflict_log.csv")) == 4
+    assert len(_csv_rows(context_dir / "change_notice_log.csv")) == 4
 
 
 def test_pass_gate_writes_passed_rows_to_conflict_log(tmp_path):
@@ -273,7 +281,7 @@ def test_pass_gate_writes_passed_rows_to_conflict_log(tmp_path):
     packet["gate"] = {"decision": "PASS"}
 
     assert log_approved_change(packet) is True
-    conflict_log_rows = _csv_rows(context_dir / "ecn_conflict_log.csv")
+    conflict_log_rows = _csv_rows(context_dir / "change_notice_log.csv")
     passed_rows = [row for row in conflict_log_rows if row["source"] == "approved_change"]
     assert len(passed_rows) == 2
     assert {row["status"] for row in passed_rows} == {"PASSED"}

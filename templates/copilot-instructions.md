@@ -4,7 +4,7 @@
 This repository processes, validates, and generates workflow reports for Engineering Change Notices (ECNs) against a Bill of Materials (BOM) database. It consists of Python intake, validation, AI assistance, and dashboard generation modules.
 
 ## File & Path Conventions
-- **Data Folder:** Active hybrid-pipeline inputs and reference CSV files live in `data/`: `ecn_intake.csv`, `bom.csv`, `parts_master.csv`, and `ecn_history.csv`.
+- **Data Folder:** Active hybrid-pipeline inputs and reference CSV files live in `data/`: `ecn_intake.csv`, `bom.csv`, `Part_Master.csv`, and `ecn_history.csv`. The context engine reads `Part_Master.csv` directly and must not generate a parts-master copy.
 - **Output Folder:** Generated dashboard, summary, and context artifacts are saved in `out/`.
 
 - Always resolve paths relative to the project root using `pathlib.Path(__file__).resolve().parent`.

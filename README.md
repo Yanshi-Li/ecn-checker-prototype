@@ -11,7 +11,7 @@ The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the curre
 1. **Intake** — parses the submitted ECN and BOM and normalizes them into one packet.
 2. **Rule Engine** — applies the currently implemented deterministic checks for required ECN fields, part-number format, duplicate BOM lines, and quantity.
 3. **AI Advisory** — reviews ECN/BOM semantics using OpenAI first (or Gemini when OpenAI is not configured); otherwise it uses deterministic advisory heuristics.
-4. **Context Engine** — checks BOM parts against `data/parts_master.csv` and writes context artifacts under `out/context_engine/`.
+4. **Context Engine** — checks BOM parts directly against `data/Part_Master.csv` and writes audit artifacts under `out/context_engine/`; it does not generate a parts-master copy.
 5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors and selected part issues close the gate, while warnings and AI notes remain advisory.
 6. **Dashboard** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; the Streamlit app renders the gate findings directly.
 7. **Email Notification** — sends or dry-runs a gate-specific notification through SendGrid.

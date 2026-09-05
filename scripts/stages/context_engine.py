@@ -16,18 +16,17 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parent.parent.parent
 DATA_DIR = ROOT / "data"
-LEGACY_PARTS_DB = DATA_DIR / "parts_db.csv"
-DEFAULT_PARTS_DB = DATA_DIR / "parts_master.csv"
+DEFAULT_PARTS_DB = DATA_DIR / "Part_Master.csv"
 DEFAULT_ECN_HISTORY_DB = DATA_DIR / "ecn_history.csv"
 DEFAULT_CONTEXT_DB_DIR = ROOT / "out" / "context_engine"
 
-PARTS_MASTER_DB_FILENAME = "parts_master_database.csv"
-ECN_CONFLICT_LOG_FILENAME = "ecn_conflict_log.csv"
+
+ECN_CONFLICT_LOG_FILENAME = "change_notice_log.csv"
 BOM_STRUCTURE_RECORDS_FILENAME = "bom_structure_records.csv"
 CONFLICT_LOG_FIELDNAMES = [
     "logged_at",
     "source",
-    "ecn_id",
+    "change_notice_number",
     "part_number",
     "change_type",
     "date",
@@ -40,23 +39,29 @@ def _now_utc_iso() -> str:
 
 
 def _read_csv_rows(filepath: Path) -> list[dict]:
+    """Read CSV rows and normalize the external Change Notice Number heading."""
     if not filepath.exists():
         logger.warning("CSV source not found at %s", filepath)
         return []
 
     rows = []
-    with open(filepath, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
+    with open(filepath, newline="", encoding="utf-8") as file_handle:
+        for row in csv.DictReader(file_handle):
             normalized_row = {}
             for key, value in row.items():
                 clean_key = str(key or "").strip()
                 if not clean_key:
                     continue
-                normalized_row[clean_key] = str(value or "").strip()
+                canonical_key = (
+                    "change_notice_number"
+                    if clean_key.casefold() == "change notice number"
+                    else clean_key
+                )
+                normalized_row[canonical_key] = str(value or "").strip()
             if normalized_row:
                 rows.append(normalized_row)
     return rows
+
 
 
 def _append_csv_rows(filepath: Path, fieldnames: list[str], rows: list[dict]) -> None:
@@ -73,21 +78,13 @@ def _append_csv_rows(filepath: Path, fieldnames: list[str], rows: list[dict]) ->
             writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
-def _write_csv_rows(filepath: Path, fieldnames: list[str], rows: list[dict]) -> None:
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    with open(filepath, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
 
 
 def _resolve_parts_source(parts_source_path: Path | None) -> Path:
-    if parts_source_path is not None:
-        return Path(parts_source_path)
-    if LEGACY_PARTS_DB.exists():
-        return LEGACY_PARTS_DB
-    return DEFAULT_PARTS_DB
+    """Return the supplied parts master or the checked-in reference file."""
+    return Path(parts_source_path) if parts_source_path is not None else DEFAULT_PARTS_DB
+
 
 
 def create_context_databases(
@@ -96,40 +93,20 @@ def create_context_databases(
     history_source_path: Path | None = None,
     context_db_dir: Path = DEFAULT_CONTEXT_DB_DIR,
 ) -> dict:
-    """Create the context-engine reference and audit data files."""
+    """Create audit artifacts while using the parts master source in place."""
     parts_source = _resolve_parts_source(parts_source_path)
     history_source = Path(history_source_path) if history_source_path else DEFAULT_ECN_HISTORY_DB
     output_dir = Path(context_db_dir)
-    parts_master_db_path = output_dir / PARTS_MASTER_DB_FILENAME
     ecn_conflict_log_path = output_dir / ECN_CONFLICT_LOG_FILENAME
     bom_structure_records_path = output_dir / BOM_STRUCTURE_RECORDS_FILENAME
     run_timestamp = _now_utc_iso()
-
-    parts_fieldnames = [
-        "part_number", "description", "status", "lifecycle_state", "revision",
-        "supplier", "unit_of_measure",
-    ]
-    normalized_parts_rows = [
-        {
-            "part_number": row.get("part_number", "").strip(),
-            "description": row.get("description", "").strip(),
-            "status": row.get("status", "").strip(),
-            "lifecycle_state": row.get("lifecycle_state", "").strip(),
-            "revision": row.get("revision", "").strip(),
-            "supplier": row.get("supplier", "").strip(),
-            "unit_of_measure": row.get("unit_of_measure", "").strip(),
-        }
-        for row in _read_csv_rows(parts_source)
-        if row.get("part_number", "").strip()
-    ]
-    _write_csv_rows(parts_master_db_path, parts_fieldnames, normalized_parts_rows)
 
     if not ecn_conflict_log_path.exists():
         history_seed_rows = [
             {
                 "logged_at": run_timestamp,
                 "source": "history_seed",
-                "ecn_id": row.get("ecn_id", "").strip(),
+                "change_notice_number": row.get("change_notice_number", "").strip(),
                 "part_number": row.get("part_number", "").strip(),
                 "change_type": row.get("change_type", "").strip(),
                 "date": row.get("date", "").strip(),
@@ -145,13 +122,13 @@ def create_context_databases(
         or "UNKNOWN_ECN"
     )
     bom_fieldnames = [
-        "logged_at", "ecn_id", "line_number", "part_number", "description",
+        "logged_at", "change_notice_number", "line_number", "part_number", "description",
         "quantity", "unit", "action", "parent_part_no",
     ]
     bom_structure_rows = [
         {
             "logged_at": run_timestamp,
-            "ecn_id": change_notice_number,
+            "change_notice_number": change_notice_number,
             "line_number": str(row.get("line_number", "")).strip(),
             "part_number": str(row.get("part_number", "")).strip(),
             "description": str(row.get("description", "")).strip(),
@@ -164,12 +141,17 @@ def create_context_databases(
         if str(row.get("part_number", "")).strip()
     ]
     _append_csv_rows(bom_structure_records_path, bom_fieldnames, bom_structure_rows)
-    logger.info("Context databases ready — parts:%s bom_records:+%d", parts_master_db_path, len(bom_structure_rows))
+    logger.info(
+        "Context artifacts ready — parts source:%s bom_records:+%d",
+        parts_source,
+        len(bom_structure_rows),
+    )
     return {
-        "parts_master_database": str(parts_master_db_path),
+        "parts_master_source": str(parts_source),
         "ecn_conflict_log": str(ecn_conflict_log_path),
         "bom_structure_records": str(bom_structure_records_path),
     }
+
 
 
 
@@ -192,7 +174,7 @@ def log_approved_change(packet: dict) -> bool:
         {
             "logged_at": _now_utc_iso(),
             "source": "approved_change",
-            "ecn_id": change_notice_number,
+            "change_notice_number": change_notice_number,
             "part_number": str(row.get("part_number", "")).strip(),
             "change_type": str(row.get("action", "")).strip() or str(header.get("change_type", "")).strip(),
             "date": str(header.get("date", "")).strip(),
@@ -257,11 +239,13 @@ def check_part_status(part_number: str, parts_db: dict) -> dict:
     return result
 
 
-def check_historical_conflicts(ecn_id: str, part_number: str, history: list[dict]) -> list[dict]:
-    """Return historical ECNs that touched the same part number."""
-    key = (ecn_id or "").strip()
-    pn = (part_number or "").strip()
-    if not pn:
+def check_historical_conflicts(
+    change_notice_number: str, part_number: str, history: list[dict]
+) -> list[dict]:
+    """Return historical change notices that touched the same part number."""
+    current_change_notice_number = (change_notice_number or "").strip()
+    normalized_part_number = (part_number or "").strip()
+    if not normalized_part_number:
         return []
 
     conflicts = []
@@ -269,19 +253,25 @@ def check_historical_conflicts(ecn_id: str, part_number: str, history: list[dict
         if not isinstance(entry, dict):
             continue
         historical_part = str(entry.get("part_number", "")).strip()
-        if historical_part != pn:
+        if historical_part != normalized_part_number:
             continue
-        conflicting_ecn = str(entry.get("ecn_id", "")).strip()
-        if not conflicting_ecn or conflicting_ecn == key:
+        conflicting_change_notice_number = str(
+            entry.get("change_notice_number", "")
+        ).strip()
+        if (
+            not conflicting_change_notice_number
+            or conflicting_change_notice_number == current_change_notice_number
+        ):
             continue
         conflicts.append({
-            "conflicting_ecn_id": conflicting_ecn,
-            "part_number": pn,
+            "conflicting_change_notice_number": conflicting_change_notice_number,
+            "part_number": normalized_part_number,
             "status": str(entry.get("status", "")).strip(),
             "date": str(entry.get("date", "")).strip(),
             "change_type": str(entry.get("change_type", "")).strip(),
         })
     return conflicts
+
 
 
 def _load_history_log(filepath: Path) -> list[dict]:
@@ -292,7 +282,7 @@ def _load_history_log(filepath: Path) -> list[dict]:
         if not part_number:
             continue
         history.append({
-            "ecn_id": row.get("ecn_id", "").strip(),
+            "change_notice_number": row.get("change_notice_number", "").strip(),
             "part_number": part_number,
             "change_type": row.get("change_type", "").strip(),
             "date": row.get("date", "").strip(),
@@ -500,7 +490,10 @@ def run_context_engine(
         context_db_dir=context_db_dir,
     )
 
-    parts_db = _load_parts_db(Path(artifacts["parts_master_database"]))
+        
+    parts_db = _load_parts_db(Path(artifacts["parts_master_source"]))
+
+
     history = packet.get("history") or _load_history_log(Path(artifacts["ecn_conflict_log"]))
 
     all_flags = []
@@ -528,16 +521,18 @@ def run_context_engine(
             continue
         for conflict in check_historical_conflicts(change_notice_number, pn, history):
             all_flags.append({
-                                "flag_type": "HISTORICAL_CONFLICT",
-                # v1.2 gate-logic decision: historical conflicts close the gate.
+                "flag_type": "HISTORICAL_CONFLICT",
+                # Historical conflicts close the gate pending review.
                 "severity": "ERROR",
                 "part_number": pn,
                 "line_number": row.get("line_number", "?"),
                 "message": (
-                    f"Part '{pn}' was previously touched by ECN '{conflict['conflicting_ecn_id']}' "
-                    f"and may conflict with the current change."
+                    f"Part '{pn}' was previously touched by Change Notice Number "
+                    f"'{conflict['conflicting_change_notice_number']}' and may conflict "
+                    "with the current change."
                 ),
             })
+
 
     packet["validation"]["context_flags"] = all_flags; packet["validation"]["context_artifacts"] = artifacts
 

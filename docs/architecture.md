@@ -105,7 +105,7 @@ logic consume the unified finding contract.
 | `scripts/stages/dashboard.py` | Stage 5: HTML dashboard |
 | `scripts/stages/email_notification.py` | Stage 6: gate-driven SendGrid email |
 
-| `data/parts_master.csv`       | Parts status database         |
+| `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
 | `data/ecn_intake.csv`         | Sample ECN input              |
 | `data/bom.csv`                | Sample BOM input              |
 
