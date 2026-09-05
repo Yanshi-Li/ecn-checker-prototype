@@ -179,7 +179,7 @@ def build_dashboard_html(packet: dict) -> str:
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>ECN Dashboard — {header.get('ecn_id','')}</title>
+  <title>ECN Dashboard — {header.get('change_notice_number','')}</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
            margin: 0; background: #f4f6f9; color: #333; }}
@@ -217,7 +217,7 @@ def build_dashboard_html(packet: dict) -> str:
 <div class="topbar">
   <h1>📋 ECN Review Dashboard</h1>
   <div class="meta">
-    ECN: <strong>{header.get('ecn_id','N/A')}</strong> &nbsp;|&nbsp;
+    Change Notice Number: <strong>{header.get('change_notice_number','N/A')}</strong> &nbsp;|&nbsp;
     Author: {header.get('author','N/A')} &nbsp;|&nbsp;
     Date: {header.get('date','N/A')} &nbsp;|&nbsp;
     Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}

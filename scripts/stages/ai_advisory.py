@@ -98,7 +98,7 @@ def _build_prompt(packet: dict) -> str:
     truncated = len(bom) > BOM_CAP
 
     # Map PDF-parsed keys to prompt-friendly values
-    ecn_id      = header.get("change_notice_number") or header.get("ecn_id", "N/A")
+    change_notice_number = header.get("change_notice_number", "N/A")
     title       = header.get("name_of_change") or header.get("title", "N/A")
     description = header.get("description") or header.get("description_of_change", "")
     change_type = header.get("change_type", "N/A")
@@ -121,7 +121,7 @@ def _build_prompt(packet: dict) -> str:
 
     prompt = f"""You are an ECN (Engineering Change Notice) quality reviewer.
 
-ECN ID            : {ecn_id}
+Change Notice Number : {change_notice_number}
 Title             : {title}
 Change Type       : {change_type}
 Author            : {author}

@@ -135,7 +135,7 @@ def test_packet_structure():
 
 
 def test_missing_fields_detected():
-    header = {"ecn_id": "E001"}  # missing most fields
+    header = {"Change Notice Number": "E001"}  # missing most fields
     packet = build_ecn_packet([header], [])
     assert len(packet["validation"]["missing_fields"]) > 0
 
@@ -183,7 +183,7 @@ def test_load_email_into_header_dict(tmp_path):
         b"From: coordinator@example.com\n"
         b"Date: 2026-08-10\n"
         b"\n"
-        b"ECN ID: ECN-2026-007\n"
+        b"Change Notice Number: ECN-2026-007\n"
         b"Title: Sample email intake\n"
         b"Affected assembly: A-100\n"
         b"Change type: modify\n"
@@ -192,7 +192,7 @@ def test_load_email_into_header_dict(tmp_path):
     )
 
     data = __import__("intake").load_file(str(eml_path))
-    assert data["ecn_id"] == "ECN-2026-007"
+    assert data["change_notice_number"] == "ECN-2026-007"
     assert data["title"] == "Sample email intake"
     assert "obsolete capacitor" in data["description"].lower()
     assert data["change_type"] == "modify"
@@ -265,7 +265,7 @@ def test_load_html_email_body(tmp_path):
         b"--abc\n"
         b"Content-Type: text/html; charset=utf-8\n"
         b"\n"
-        b"<html><body><p><strong>ECN ID:</strong> ECN-2026-008</p>"
+        b"<html><body><p><strong>Change Notice Number:</strong> ECN-2026-008</p>"
         b"<p><strong>Title:</strong> HTML Email Intake</p>"
         b"<p><strong>Affected assembly:</strong> A-100</p>"
         b"<p><strong>Change type:</strong> replace</p>"
@@ -275,7 +275,7 @@ def test_load_html_email_body(tmp_path):
     )
 
     data = __import__("intake").load_file(str(eml_path))
-    assert data["ecn_id"] == "ECN-2026-008"
+    assert data["change_notice_number"] == "ECN-2026-008"
     assert data["title"] == "HTML Email Intake"
     assert data["change_type"] == "replace"
     assert data["date"] == "2026-08-12"

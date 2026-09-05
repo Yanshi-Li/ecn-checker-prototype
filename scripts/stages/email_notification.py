@@ -91,9 +91,9 @@ def _deliver_notification(recipients: list[str], subject: str, body: str) -> dic
     return result
 
 
-def _ecn_id(packet: dict) -> str:
-    """Return an ECN identifier without requiring optional packet fields."""
-    return packet.get("header", {}).get("ecn_id", "N/A")
+def _change_notice_number(packet: dict) -> str:
+    """Return the ECN Change Notice Number without requiring optional fields."""
+    return packet.get("header", {}).get("change_notice_number", "N/A")
 
 
 def _format_fail_findings(findings: list[dict]) -> list[str]:
@@ -117,7 +117,7 @@ def _build_fail_body(packet: dict) -> str:
     """Render the Node 6a action-required notification body."""
     gate = packet.get("gate", {})
     sections = [
-        f"ECN {_ecn_id(packet)} did not pass the validation gate.",
+        f"ECN {_change_notice_number(packet)} did not pass the validation gate.",
         "",
         "❌ Blockers",
         *_format_fail_findings(gate.get("blockers", [])),
@@ -137,7 +137,7 @@ def send_fail_email(packet: dict, engineer_email: str) -> dict:
     """Send or dry-run the Node 6a notification for a failed ECN gate."""
     return _deliver_notification(
         recipients=[engineer_email],
-        subject=f"[{_ecn_id(packet)}] Action Required — Fix and Resubmit",
+        subject=f"[{_change_notice_number(packet)}] Action Required — Fix and Resubmit",
         body=_build_fail_body(packet),
     )
 
@@ -180,7 +180,7 @@ def _build_pass_body(packet: dict) -> str:
         ai_notes = {}
 
     sections = [
-        f"ECN {_ecn_id(packet)} passed the validation gate and is ready for Chief Engineer review.",
+        f"ECN {_change_notice_number(packet)} passed the validation gate and is ready for Chief Engineer review.",
         "",
         "⚠️ Warnings (advisory only)",
         *_format_fail_findings(gate.get("warnings", [])),
@@ -195,6 +195,6 @@ def send_pass_email(packet: dict, engineer_email: str, ce_email: str) -> dict:
     """Send or dry-run the Node 6b notification for an ECN ready for CE review."""
     return _deliver_notification(
         recipients=[engineer_email, ce_email],
-        subject=f"[{_ecn_id(packet)}] Gate Passed — Ready for CE Review",
+        subject=f"[{_change_notice_number(packet)}] Gate Passed — Ready for CE Review",
         body=_build_pass_body(packet),
     )

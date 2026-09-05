@@ -75,7 +75,7 @@ def write_ai_summary(packet: dict, out_dir: Path) -> None:
             "ai_available": False,
         }
     lines = [
-        f"# ECN AI Summary — {header.get('ecn_id', 'N/A')}",
+        f"# ECN AI Summary — {header.get('change_notice_number', 'N/A')}",
         f"**Title:** {header.get('title', '')}  ",
         f"**Author:** {header.get('author', '')}  ",
         f"**Date:** {header.get('date', '')}  ",

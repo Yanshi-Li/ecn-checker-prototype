@@ -175,7 +175,7 @@ def _csv_rows(path: Path) -> list[dict]:
 def _packet() -> dict:
     return {
         "header": {
-            "ecn_id": "ECN-NEW-CTX-001",
+            "change_notice_number": "ECN-NEW-CTX-001",
             "change_type": "replace",
             "date": "2026-12-01",
         },

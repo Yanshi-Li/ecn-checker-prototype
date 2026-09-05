@@ -94,10 +94,39 @@ def test_ecn_c006_not_fired_without_parts_file():
 
 
 def test_python_checker_generates_dashboard(tmp_path):
+    """The legacy checker owns its fixture data rather than the hybrid data directory."""
+    data_dir = tmp_path / "legacy_checker_data"
+    data_dir.mkdir()
     output_dir = tmp_path / "out"
-    dashboard = ecn_checker.run_checker(ROOT / "data", output_dir)
+
+    (data_dir / "ecn_header.csv").write_text(
+        "ecnId,ecn_number,date_initiated,initiator,title,description,status,affectedAssembly,effectiveDate,qualityApproval\n"
+        "ECN-2026-001,ECN-0001,2026-08-10,Lily,Sample ECN with intentional failures,Replace capacitor <script>alert(1)</script>,DRAFT,A-100,2026-09-01,FALSE\n"
+        "ECN-2026-002,ECN-0002,2026-08-11,Lucy,Cost Reduction R301 Swap,Replace resistor C-300 with C-350 to reduce unit cost.,APPROVED,A-100,2026-10-01,TRUE\n"
+        "ECN-2026-003,ECN-0003,2026-08-12,Amanda,Stock Shortage C-200 Concession,,PENDING,A-100,,FALSE\n",
+        encoding="utf-8",
+    )
+    (data_dir / "ecn_changes.csv").write_text(
+        "ecnId,lineNumber,action,parentPartNumber,oldPartNumber,newPartNumber,Part_Number,oldQuantity,newQuantity,uom\n"
+        "ECN-2026-001,1,REPLACE,A-100,C-200,C-250,C-250,1,1,EA\n"
+        "ECN-2026-002,1,REPLACE,A-100,C-300,C-350,C-350,4,4,EA\n"
+        "ECN-2026-003,1,REPLACE,A-100,C-200,C-260,C-260,1,1,EA\n",
+        encoding="utf-8",
+    )
+    (data_dir / "parts_master.csv").write_text(
+        "part_number,description,status,unit_of_measure\n"
+        "C-200,Capacitor 10uF,ACTIVE,EA\n"
+        "C-250,Capacitor 10uF Old Version,OBSOLETE,EA\n"
+        "C-260,Capacitor 10uF Alternate,ACTIVE,EA\n"
+        "C-300,Resistor 100 Ohm,ACTIVE,EA\n"
+        "C-350,Resistor 100 Ohm Low-Cost,ACTIVE,EA\n",
+        encoding="utf-8",
+    )
+
+    dashboard = ecn_checker.run_checker(data_dir, output_dir)
 
     ecn_ids = [e["ecnId"] for e in dashboard["ecns"]]
+
     assert "ECN-2026-001" in ecn_ids
     assert "ECN-2026-002" in ecn_ids
     assert "ECN-2026-003" in ecn_ids

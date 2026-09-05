@@ -78,7 +78,7 @@ Rules must use normalized fields, not source-specific CSV headings or PDF labels
 
 | Area | Canonical fields |
 |---|---|
-| ECN header | `header.ecn_id`, `header.name_of_change`, `header.description_of_change`, `header.products_affected`, `header.change_type` |
+| ECN header | `header.change_notice_number`, `header.name_of_change`, `header.description_of_change`, `header.products_affected`, `header.change_type` |
 | Implementation | `header.implementation.site`, `header.implementation.date`, `header.implementation.person` |
 | BOM line | `bom[].line_number`, `bom[].action`, `bom[].quantity`, `bom[].unit_of_measure`, `bom[].task_number` |
 | Parent assembly | `bom[].parent.part_number`, `bom[].parent.description` |

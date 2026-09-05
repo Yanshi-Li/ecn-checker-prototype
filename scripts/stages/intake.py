@@ -726,24 +726,24 @@ def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
     text = (email_text or "").strip()
     if not text:
         return {
-            "ecn_id":        "",
-            "title":         "ECN from email",
-            "description":   "",
-            "author":        from_header or "email-submitter",
-            "date":          "",
+            "change_notice_number": "",
+            "title": "ECN from email",
+            "description": "",
+            "author": from_header or "email-submitter",
+            "date": "",
             "affected_parts": "",
-            "change_type":   "modify",
+            "change_type": "modify",
         }
 
     normalized_text = re.sub(r"\s+", " ", text)
     labels = [
-        ("ecn_id",         r"(?:ECN\s*ID|ECN\s*NUMBER|ECN)"),
-        ("title",          r"Title"),
+        ("change_notice_number", r"Change\s+Notice\s+Number"),
+        ("title", r"Title"),
         ("affected_parts", r"Affected\s+assembly|Affected\s+part|Affected\s+parts"),
-        ("change_type",    r"Change\s+type|Action|Request\s+type"),
-        ("description",    r"Description|Summary|Change\s+summary|Change\s+request"),
-        ("date",           r"Date|Effective\s+date|Submitted\s+date|Request\s+date"),
-        ("author",         r"Author|Submitted\s+by|Requested\s+by|From"),
+        ("change_type", r"Change\s+type|Action|Request\s+type"),
+        ("description", r"Description|Summary|Change\s+summary|Change\s+request"),
+        ("date", r"Date|Effective\s+date|Submitted\s+date|Request\s+date"),
+        ("author", r"Author|Submitted\s+by|Requested\s+by|From"),
     ]
     fields: dict[str, str] = {}
 
@@ -756,35 +756,21 @@ def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
             if value:
                 fields[field_name] = value
 
-    if not fields.get("ecn_id"):
-        match = re.search(r"(?i)\bECN[-: ]*([A-Z0-9-]+)\b", normalized_text)
-        if match:
-            fields["ecn_id"] = match.group(1)
-
-    if not fields.get("title"):
-        match = re.search(
-            r"(?is)Title\s*[:\-]?\s*(.*?)(?=(?:\bAffected\s+assembly\b|\bChange\s+type\b|\bDescription\b|\bDate\b|\bRequested\s+by\b)|$)",
-            normalized_text
-        )
-        if match:
-            fields["title"] = match.group(1).strip().strip(" \t\n\r:*#-")
-
     header = {
-        "ecn_id":         fields.get("ecn_id") or "",
-        "title":          fields.get("title") or "ECN from email",
-        "description":    fields.get("description") or "",
-        "author":         fields.get("author") or from_header or "email-submitter",
-        "date":           _normalize_email_date(fields.get("date") or ""),
+        "change_notice_number": fields.get("change_notice_number") or "",
+        "title": fields.get("title") or "ECN from email",
+        "description": fields.get("description") or "",
+        "author": fields.get("author") or from_header or "email-submitter",
+        "date": _normalize_email_date(fields.get("date") or ""),
         "affected_parts": fields.get("affected_parts") or "",
-        "change_type":    (fields.get("change_type") or "modify").strip().lower(),
+        "change_type": (fields.get("change_type") or "modify").strip().lower(),
     }
 
     if not header["change_type"]:
         header["change_type"] = "modify"
-    if header["ecn_id"] and header["ecn_id"].lower().startswith("id:"):
-        header["ecn_id"] = header["ecn_id"].split(":", 1)[1].strip()
 
     return header
+
 
 
 # ── Email Loader ──────────────────────────────────────────────────────────────

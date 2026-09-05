@@ -18,7 +18,7 @@ def test_pipeline_runs_with_semantic_advisory_and_outputs(tmp_path, monkeypatch)
     out_dir = tmp_path / "out"
 
     ecn_path.write_text(
-        "ecn_id,title,description,author,date,affected_parts,change_type\n"
+        "Change Notice Number,title,description,author,date,affected_parts,change_type\n"
         "ECN-SEM-001,Semantic test,Replace AB-1001 with AB-1002 for reliability,QA User,2026-08-14,RF600,add\n",
         encoding="utf-8",
     )

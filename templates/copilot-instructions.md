@@ -4,9 +4,9 @@
 This repository processes, validates, and generates workflow reports for Engineering Change Notices (ECNs) against a Bill of Materials (BOM) database. It consists of Python intake, validation, AI assistance, and dashboard generation modules.
 
 ## File & Path Conventions
-- **Data Folder:** Input CSV files live in `data/`.
-  - Core data files: `master_bom.csv` (or `bom.csv`), `ecn_header.csv` (or `ecn_headers.csv`), `ecn_changes.csv`, and `parts_master.csv`.
-- **Output Folder:** Generated JSON and HTML dashboards must be saved in `out/`.
+- **Data Folder:** Active hybrid-pipeline inputs and reference CSV files live in `data/`: `ecn_intake.csv`, `bom.csv`, `parts_master.csv`, and `ecn_history.csv`.
+- **Output Folder:** Generated dashboard, summary, and context artifacts are saved in `out/`.
+
 - Always resolve paths relative to the project root using `pathlib.Path(__file__).resolve().parent`.
 
 ## Coding Standards & Python Conventions
@@ -17,10 +17,10 @@ This repository processes, validates, and generates workflow reports for Enginee
 - **HTML Outputs:** When concatenating inline HTML strings in Python scripts, wrap dynamic content with `html.escape()` to sanitize strings.
 
 ## Business Logic & Validation Rules
-- **ECN Severity Levels:** Categorize validation findings strictly into `BLOCKER`, `WARNING`, or `PASS`.
-- **Decision Outcomes:** High-level ECN decisions should be `BLOCK`, `REVIEW`, or `APPROVE`.
-- **Description Rule:** ECN descriptions must be between 10 and 250 characters and contain allowed special characters. Use `ecn_checker.check_description_issues(ecn)` for validation.
-- **BOM Rules:** - `REMOVE`, `REPLACE`, and `CHANGE_QUANTITY` actions must verify that `oldPartNumber` exists in `master_bom.csv` with a `RELEASED` status under `affectedAssembly`.
+- **Policy source:** Use `docs/rules_list.json` and `docs/rules_schema.md` for rule IDs, canonical fields, severities, and gate effects.
+- **Runtime behavior:** Keep changes compatible with the active hybrid pipeline. The policy catalogue is not yet a complete runtime-rule dispatcher; see `docs/architecture.md` for implemented checks.
+- **Canonical ECN identifier:** External input uses `Change Notice Number`, normalized to `header.change_notice_number`.
+
 
 ## Debugging & Error Handling
 - Use defensive `.get()` calls when parsing ECN dictionary payloads.
