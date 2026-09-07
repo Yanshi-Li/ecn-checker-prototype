@@ -89,7 +89,33 @@ def test_load_excel_mbom_structure_parent_part_headers(tmp_path):
     }]
 
 
+def test_load_xls_converts_before_excel_loading(tmp_path, monkeypatch):
+    source = tmp_path / "legacy.xls"
+    converted = tmp_path / "converted.xlsx"
+    source.write_bytes(b"legacy workbook")
+    converted.write_bytes(b"xlsx workbook")
+    calls = []
+
+    import stages.intake as intake
+
+    monkeypatch.setattr(
+        intake,
+        "_convert_xls_to_xlsx",
+        lambda filepath: calls.append(filepath) or str(converted),
+    )
+    monkeypatch.setattr(
+        intake,
+        "load_excel",
+        lambda filepath, role: calls.append((filepath, role)) or {"loaded": True},
+    )
+
+    assert intake.load_file(str(source), role="ecn") == {"loaded": True}
+    assert calls == [str(source), (str(converted), "ecn")]
+
+
+
 def test_load_excel_ecn_form(tmp_path):
+
     path = tmp_path / "ECN.xlsx"
     from openpyxl import Workbook
 
@@ -249,8 +275,34 @@ def test_run_intake_with_sample_html_ecn_and_pdf_bom():
     assert len(packet["bom"]) == 4
     assert packet["source_files"] == {
         "ecn": str(HTML_ECN_PATH),
-        "bom": str(PDF_BOM_PATH),
+        "boms": [str(PDF_BOM_PATH)],
     }
+    assert packet["validation"]["bom_supplied"] is True
+    assert packet["bom"][0]["bom_type"] == "MBOM"
+    assert packet["bom"][0]["source_file"] == str(PDF_BOM_PATH)
+
+
+def test_run_intake_without_bom_is_valid():
+    packet = run_intake(str(HTML_ECN_PATH))
+
+    assert packet["bom"] == []
+    assert packet["source_files"]["boms"] == []
+    assert packet["validation"]["bom_supplied"] is False
+    assert packet["validation"]["bom_warnings"] == []
+
+
+def test_run_intake_warns_when_bom_filename_has_different_ecn(tmp_path):
+    bom_path = tmp_path / "4009999-MBOM.csv"
+    bom_path.write_text(
+        "part_number,quantity,action\n123456,1,ADD\n",
+        encoding="utf-8",
+    )
+
+    packet = run_intake(str(HTML_ECN_PATH), str(bom_path))
+
+    assert len(packet["validation"]["bom_warnings"]) == 1
+    assert packet["validation"]["bom_warnings"][0]["type"] == "SOURCE_FILE_MISMATCH"
+    assert "Please check the file name" in packet["validation"]["bom_warnings"][0]["message"]
 
 
 def test_load_html_email_body(tmp_path):
