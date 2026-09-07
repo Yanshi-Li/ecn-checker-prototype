@@ -1,7 +1,15 @@
+
+
+
+
+
+
+
 import argparse
 import importlib.util
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 RUN_HYBRID_PATH = ROOT / "scripts" / "run_hybrid.py"
@@ -44,9 +52,33 @@ def test_pipeline_runs_with_semantic_advisory_and_outputs(tmp_path, monkeypatch)
     packet = run_hybrid.run_pipeline(args)
 
     ai_flags = packet["validation"]["ai_flags"]
+
     assert ai_flags["ai_available"] is False
     assert any(flag.get("rule_id") == "A03" for flag in ai_flags["flags"])
     assert any(flag.get("rule_id") == "A04" for flag in ai_flags["flags"])
     assert any(flag.get("rule_id") == "A05" for flag in ai_flags["flags"])
     assert (out_dir / "dashboard.html").exists()
     assert (out_dir / "ai_summary.md").exists()
+
+
+
+def test_pipeline_normalizes_none_bom_before_checking_length(monkeypatch):
+    args = argparse.Namespace(
+        ecn="ecn.html",
+        bom=None,
+        engineer_email="engineer@example.com",
+        ce_email="ce@example.com",
+    )
+
+    class IntakeReached(Exception):
+        pass
+
+    def fake_run_intake(ecn_path, bom_path):
+        assert ecn_path == "ecn.html"
+        assert bom_path is None
+        raise IntakeReached
+
+    monkeypatch.setattr(run_hybrid, "run_intake", fake_run_intake)
+
+    with pytest.raises(IntakeReached):
+        run_hybrid.run_pipeline(args)

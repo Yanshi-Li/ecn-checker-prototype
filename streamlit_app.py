@@ -12,7 +12,8 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parent
 SCRIPTS = ROOT / "scripts"
 STAGES = SCRIPTS / "stages"
-SUPPORTED_FILE_TYPES = ["csv", "xlsx", "xls", "pdf", "html", "htm", "eml"]
+ECN_FILE_TYPES = ["csv", "xlsx", "xls", "pdf", "html", "htm", "eml"]
+BOM_FILE_TYPES = ["csv", "xlsx", "xls", "pdf"]
 
 # Stages dynamically loaded below import the shared rule_catalogue module from
 # scripts/. Make that directory importable in both Streamlit and test sessions.
@@ -117,7 +118,7 @@ def _write_upload(uploaded_file) -> str:
         return temp_file.name
 
 
-def _run_pipeline(ecn_path: str, bom_path: str) -> dict:
+def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
     """Run the same validation stages used by the command-line orchestrator."""
     packet = run_intake(ecn_path, bom_path)
     packet = run_rule_engine(packet)
@@ -165,7 +166,7 @@ def main() -> None:
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
     # Password access control is temporarily disabled for local testing.
     st.title("ECN Checker")
-    st.caption("Upload an Engineering Change Notice and BOM, then run the validation pipeline.")
+    st.caption("Upload one ECN and optionally one BOM, then run the validation pipeline.")
     st.info(
         "Notifications require a separate button click after checks complete. "
         "They remain dry runs unless DRY_RUN is explicitly disabled."
@@ -175,22 +176,27 @@ def main() -> None:
     with upload_column:
         ecn_file = st.file_uploader(
             "Step 1 — Upload ECN file",
-            type=SUPPORTED_FILE_TYPES,
+            type=ECN_FILE_TYPES,
             help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
         )
     with bom_column:
         bom_file = st.file_uploader(
-            "Step 2 — Upload BOM file",
-            type=SUPPORTED_FILE_TYPES,
-            help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
+            "Step 2 — Upload BOM file (optional)",
+            type=BOM_FILE_TYPES,
+            help="Upload one MBOM or EBOM. Run the ECN separately for each BOM file.",
         )
 
-    if st.button("Run Checks", type="primary", disabled=not (ecn_file and bom_file)):
+    if st.button("Run Checks", type="primary", disabled=not ecn_file):
         temporary_paths = []
         try:
-            temporary_paths = [_write_upload(ecn_file), _write_upload(bom_file)]
+            temporary_paths.append(_write_upload(ecn_file))
+            if bom_file:
+                temporary_paths.append(_write_upload(bom_file))
             with st.spinner("Running ECN validation checks..."):
-                st.session_state["packet"] = _run_pipeline(*temporary_paths)
+                st.session_state["packet"] = _run_pipeline(
+                    temporary_paths[0],
+                    temporary_paths[1] if len(temporary_paths) == 2 else None,
+                )
         except Exception as exc:
             st.error(f"The uploaded files could not be processed: {exc}")
         finally:

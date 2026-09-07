@@ -117,10 +117,12 @@ def load_rule_catalogue(path: Path | str = DEFAULT_CATALOGUE_PATH) -> dict[str, 
 
 
 def rules_for_engine(engine_name: str, catalogue: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Return policy definitions owned by a named pipeline stage."""
+    """Return active policy definitions owned by a named pipeline stage."""
     active_catalogue = catalogue if catalogue is not None else load_rule_catalogue()
     return [
         rule
         for rule in active_catalogue["rules"]
-        if EVALUATOR_OWNERS[rule["evaluator"]] == engine_name
+        if rule.get("runtime_status", "active") == "active"
+        and EVALUATOR_OWNERS[rule["evaluator"]] == engine_name
     ]
+

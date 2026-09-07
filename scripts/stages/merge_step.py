@@ -32,20 +32,11 @@ def run_merge_step(packet: dict) -> dict:
     if not isinstance(ai_flags, dict):
         ai_flags = {}
 
-    blockers = [
-        violation
-        for violation in rule_violations
-        if violation.get("severity") == "ERROR"
-    ]
-    rule_warnings = [
-        violation
-        for violation in rule_violations
-        if violation.get("severity") != "ERROR"
-    ]
+    intake_warnings = validation.get("bom_warnings", [])
+    blockers = [item for item in rule_violations if item.get("gate_effect") == "FAIL"]
+    rule_warnings = [item for item in rule_violations if item.get("gate_effect") != "FAIL"]
 
-    part_issues = []
-    conflict_alerts = []
-    context_warnings = []
+    part_issues, conflict_alerts, context_warnings = [], [], []
     for flag in context_flags:
         flag_type = flag.get("flag_type")
         if flag_type in PART_ISSUE_FLAG_TYPES:
@@ -60,9 +51,6 @@ def run_merge_step(packet: dict) -> dict:
                 "Register it in a merge-step classification set."
             )
 
-
-
-
     decision = "PASS" if not (blockers or part_issues or conflict_alerts) else "FAIL"
     overall_risk = ai_flags.get("overall_risk")
     packet["gate"] = {
@@ -70,7 +58,7 @@ def run_merge_step(packet: dict) -> dict:
         "blockers": blockers,
         "part_issues": part_issues,
         "conflict_alerts": conflict_alerts,
-        "warnings": rule_warnings + context_warnings,
+        "warnings": rule_warnings + context_warnings + intake_warnings,
         "ai_notes": {
             "mismatch_flag": overall_risk not in {"LOW", "UNKNOWN", None},
             "flags": ai_flags.get("flags", []),
@@ -79,7 +67,6 @@ def run_merge_step(packet: dict) -> dict:
             "ai_available": ai_flags.get("ai_available", False),
         },
     }
-
     logger.info(
         "Merge Step complete — %s (blockers:%d part_issues:%d "
         "conflict_alerts:%d warnings:%d)",
@@ -90,3 +77,5 @@ def run_merge_step(packet: dict) -> dict:
         len(packet["gate"]["warnings"]),
     )
     return packet
+
+
