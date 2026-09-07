@@ -1,4 +1,4 @@
-ecn_id,part_number,change_type,date,status
+Change Notice Number,part_number,change_type,date,status
 ECN-2023-045,AB-1001,modify,2023-11-10,APPROVED
 ECN-2024-001,AB-1002,add,2024-01-05,APPROVED
 ECN-2026-002,C-300,replace,2026-10-01,APPROVED

@@ -55,7 +55,9 @@ def _normalise_uploaded_data(filename: str, payload: object, role: str) -> tuple
     if role == "ecn_creator":
         synthetic_name = f"{stem}_ecn_header.csv"
         if isinstance(payload, dict):
-            ecn_number = str(payload.get("ecn_id") or payload.get("ecn_number") or "").strip()
+            ecn_number = str(
+                payload.get("change_notice_number") or payload.get("ecn_number") or ""
+            ).strip()
             title = str(payload.get("title") or "ECN Intake").strip()
             status = str(payload.get("status") or "draft").strip().lower()
             initiator = str(payload.get("author") or payload.get("initiator") or "Manual review").strip()
@@ -72,7 +74,7 @@ def _normalise_uploaded_data(filename: str, payload: object, role: str) -> tuple
             row = rows[0] if rows else {}
             csv_text = (
                 'ecn_number,title,reason_for_change,description,status,initiator,date_initiated\n'
-                f'"{row.get("ecn_id", row.get("ecn_number", ""))}",'
+                f'"{row.get("change_notice_number", row.get("ecn_number", ""))}",'
                 f'"{row.get("title", "ECN Intake")}",'
                 f'"{row.get("reason_for_change", row.get("reason", ""))}",'
                 f'"{row.get("description", "")}",'

@@ -22,8 +22,8 @@ Engineer submits ECN + BOM File from email / form / upload
          │ Structured Data
          ▼
 ┌─────────────────────┐
-│  Stage 2: Rule      │  Legacy runtime checks: R01 required fields,
-│  Engine             │  R02 part-number format, R03 duplicates, R04 quantity
+│  Stage 2: Rule      │  Catalogue-driven H01/H03 required fields,
+│  Engine             │  H11 quantity, H12 duplicates; R02 compatibility check
 └────────┬────────────┘
          │ Errors Found → Real-Time Warning shown to Engineer
          ▼
@@ -72,24 +72,29 @@ rules to their intended owners:
 
 ### Implementation status
 
-The catalogue is currently a validated policy and ownership registry; it does
-not yet dispatch individual catalogue checks. The running prototype therefore
-continues to emit its pre-existing result identifiers and shapes:
+The catalogue is both policy source of truth and runtime selection registry. Entries
+with `runtime_status: "active"` are dispatched by their `check` through the Rule
+Engine registry. The active deterministic migration is:
 
-| Runtime ID | Implemented check | Runtime severity |
+| Catalogue ID | Implemented check | Legacy compatibility |
 |---|---|---|
-| R01 | Required configured ECN fields are present | `ERROR` |
-| R02 | A supplied BOM part number has exactly five or six digits | `ERROR` |
-| R03 | No duplicate BOM part numbers | `WARNING` |
-| R04 | BOM quantity is numeric and greater than zero | `ERROR` |
+| H01, H03 | Required name and description | none; canonical IDs are emitted |
+| H11 | Positive decimal quantity, including catalogue applicability and precision | none; canonical ID is emitted |
+| H12 | Duplicate BOM change lines | none; canonical ID is emitted |
+
+Unmigrated catalogue entries are explicitly marked `runtime_status: "planned"`
+and are not executed by this incremental change. R02 remains an explicit
+compatibility check because `rules_origin.txt` and the catalogue contain no
+approved part-number-format rule. It is not a catalogue finding and remains
+clearly marked with `legacy_rule_id`.
 
 Context checks likewise emit flag types such as `DISCONTINUED_PART`,
 `MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`. The merge step
 uses those legacy `ERROR` values and configured context flag types for the
-current PASS/FAIL decision. The `BLOCKER`/`WARNING`/`ADVISORY` severity and
-`FAIL`/`REVIEW`/`NONE` gate-effect vocabulary in the policy catalogue becomes
-automatically authoritative only after the corresponding evaluators and merge
-logic consume the unified finding contract.
+current PASS/FAIL decision. Catalogue findings use the unified finding contract, including catalogue severity,
+gate effect, rule version, location, and evidence. The merge step closes the gate
+for rule findings only when `gate_effect == "FAIL"`. Context flags and AI findings
+remain on their existing contracts and are not part of this migration.
 
 
 ## Key Files
@@ -105,7 +110,7 @@ logic consume the unified finding contract.
 | `scripts/stages/dashboard.py` | Stage 5: HTML dashboard |
 | `scripts/stages/email_notification.py` | Stage 6: gate-driven SendGrid email |
 
-| `data/parts_master.csv`       | Parts status database         |
+| `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
 | `data/ecn_intake.csv`         | Sample ECN input              |
 | `data/bom.csv`                | Sample BOM input              |
 
@@ -138,6 +143,8 @@ missing evidence visible and requires manual review rather than silently showing
 - ECN Conflict Log is not available in the current implementation.
 
 
-
-
-
+                                
+                                
+                                
+                                
+                                

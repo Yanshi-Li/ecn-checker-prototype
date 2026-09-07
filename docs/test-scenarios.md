@@ -80,27 +80,14 @@ Coverage is implemented in `tests/test_ai_advisory.py`,
 `tests/test_dashboard_ai_advisory.py`, and pipeline-level validation is covered
 in `tests/test_run_hybrid_pipeline.py`.
 
-## Legacy CSV compatibility failure scenario
+## Legacy checker fixture isolation
 
-The supplied `ecn_changes.csv` intentionally includes invalid data. This
-scenario documents the legacy CSV checker identifiers (`PART-004`, `BOM-001`,
-and similar), not the new policy-catalogue IDs. It remains regression coverage
-for the existing CSV-driven workflow during the catalogue migration.
+`tests/test_python_checker.py` retains isolated, temporary fixtures for the
+separate legacy CSV checker. They are created by the test and are not checked
+into `data/`, which is reserved for active hybrid-pipeline inputs and reference
+data.
 
-| Line | ECN action | Test scenario | Expected result |
-|---:|---|---|---|
-| 1 | REPLACE | Replace active C-200 with obsolete C-250 | PART-004 Blocker |
-| 2 | REMOVE | Remove C-999, which is not in released BOM | BOM-001 Blocker |
-| 3 | ADD | Add C-100, which already exists in BOM | BOM-002 Warning |
-| 3 | ADD | Add safety-critical C-100 without Quality approval | REG-001 Warning |
-| 4 | CHANGE_QUANTITY | Change C-300 quantity from 4 to 0 | BOM-003 Blocker |
-| 5 | ADD | Add active C-400 with quantity 2 | Pass |
 
-Expected final decision:
-
-```text
-FINAL DECISION: ECN cannot proceed.
-```
 
 ## Review summary and dashboard expectations
 

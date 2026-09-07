@@ -8,7 +8,7 @@ from email_notification import send_fail_email, send_pass_email
 
 def _fail_packet():
     return {
-        "header": {"ecn_id": "ECN-FAIL-001"},
+        "header": {"change_notice_number": "ECN-FAIL-001"},
         "gate": {
             "decision": "FAIL",
             "blockers": [
@@ -40,7 +40,7 @@ def _fail_packet():
 
 def _pass_packet():
     return {
-        "header": {"ecn_id": "ECN-PASS-001"},
+        "header": {"change_notice_number": "ECN-PASS-001"},
         "gate": {
             "decision": "PASS",
             "blockers": [],

@@ -20,7 +20,7 @@ The schema separates a rule's business purpose from the engine that evaluates it
 
 ## Rule definition contract
 
-The active catalogue is `docs/rules_list.json`. Every rule definition in that file uses the following fields.
+The active catalogue is `docs/rules_list.json`. Every rule definition in that file uses the following fields. During incremental migration, `runtime_status` makes the activation decision explicit; an omitted value is active.
 
 | Field | Required | Description |
 |---|---:|---|
@@ -38,6 +38,7 @@ The active catalogue is `docs/rules_list.json`. Every rule definition in that fi
 | `reference` or `references` | No | Reference data required by a lookup check. |
 | `lookup_key` | No | Packet field used to look up the reference record. |
 | `implementation_note` | No | Constraint or ambiguity that must be resolved before implementation. |
+| `runtime_status` | No | `active` (default) dispatches through the owning stage; `planned` remains policy-only during incremental migration. |
 
 ## Allowed outcome values
 
@@ -78,7 +79,7 @@ Rules must use normalized fields, not source-specific CSV headings or PDF labels
 
 | Area | Canonical fields |
 |---|---|
-| ECN header | `header.ecn_id`, `header.name_of_change`, `header.description_of_change`, `header.products_affected`, `header.change_type` |
+| ECN header | `header.change_notice_number`, `header.name_of_change`, `header.description_of_change`, `header.products_affected`, `header.change_type` |
 | Implementation | `header.implementation.site`, `header.implementation.date`, `header.implementation.person` |
 | BOM line | `bom[].line_number`, `bom[].action`, `bom[].quantity`, `bom[].unit_of_measure`, `bom[].task_number` |
 | Parent assembly | `bom[].parent.part_number`, `bom[].parent.description` |

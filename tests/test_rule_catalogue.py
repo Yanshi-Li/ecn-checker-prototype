@@ -34,14 +34,13 @@ def test_active_catalogue_is_valid_and_contains_each_source_rule():
 
 def test_rules_are_assigned_to_their_owning_pipeline_stage():
     assert {rule["id"] for rule in rules_for_engine("rule_engine")} == {
-        "H01", "H02", "H03", "H06", "H07", "H08", "H11", "H12",
-        "H14", "H15", "H16", "H17", "H18", "H19", "H20", "H21", "H22",
+        "H01", "H03", "H11", "H12",
     }
     assert {rule["id"] for rule in rules_for_engine("context_engine")} == {
-        "H09", "H10", "H13", "D01", "D02", "D03", "D04",
+        "D01", "D02", "D03", "D04",
     }
     assert {rule["id"] for rule in rules_for_engine("ai_advisory")} == {
-        "H04", "H05", "H23", "S01", "S02", "S03", "S04", "S05",
+        "H23", "S01", "S02", "S03", "S04", "S05",
     }
 
 

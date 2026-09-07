@@ -8,6 +8,10 @@ import csv
 import logging
 import os
 import re
+import shutil
+import subprocess
+import tempfile
+
 from email import policy
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
@@ -726,24 +730,24 @@ def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
     text = (email_text or "").strip()
     if not text:
         return {
-            "ecn_id":        "",
-            "title":         "ECN from email",
-            "description":   "",
-            "author":        from_header or "email-submitter",
-            "date":          "",
+            "change_notice_number": "",
+            "title": "ECN from email",
+            "description": "",
+            "author": from_header or "email-submitter",
+            "date": "",
             "affected_parts": "",
-            "change_type":   "modify",
+            "change_type": "modify",
         }
 
     normalized_text = re.sub(r"\s+", " ", text)
     labels = [
-        ("ecn_id",         r"(?:ECN\s*ID|ECN\s*NUMBER|ECN)"),
-        ("title",          r"Title"),
+        ("change_notice_number", r"Change\s+Notice\s+Number"),
+        ("title", r"Title"),
         ("affected_parts", r"Affected\s+assembly|Affected\s+part|Affected\s+parts"),
-        ("change_type",    r"Change\s+type|Action|Request\s+type"),
-        ("description",    r"Description|Summary|Change\s+summary|Change\s+request"),
-        ("date",           r"Date|Effective\s+date|Submitted\s+date|Request\s+date"),
-        ("author",         r"Author|Submitted\s+by|Requested\s+by|From"),
+        ("change_type", r"Change\s+type|Action|Request\s+type"),
+        ("description", r"Description|Summary|Change\s+summary|Change\s+request"),
+        ("date", r"Date|Effective\s+date|Submitted\s+date|Request\s+date"),
+        ("author", r"Author|Submitted\s+by|Requested\s+by|From"),
     ]
     fields: dict[str, str] = {}
 
@@ -756,35 +760,21 @@ def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
             if value:
                 fields[field_name] = value
 
-    if not fields.get("ecn_id"):
-        match = re.search(r"(?i)\bECN[-: ]*([A-Z0-9-]+)\b", normalized_text)
-        if match:
-            fields["ecn_id"] = match.group(1)
-
-    if not fields.get("title"):
-        match = re.search(
-            r"(?is)Title\s*[:\-]?\s*(.*?)(?=(?:\bAffected\s+assembly\b|\bChange\s+type\b|\bDescription\b|\bDate\b|\bRequested\s+by\b)|$)",
-            normalized_text
-        )
-        if match:
-            fields["title"] = match.group(1).strip().strip(" \t\n\r:*#-")
-
     header = {
-        "ecn_id":         fields.get("ecn_id") or "",
-        "title":          fields.get("title") or "ECN from email",
-        "description":    fields.get("description") or "",
-        "author":         fields.get("author") or from_header or "email-submitter",
-        "date":           _normalize_email_date(fields.get("date") or ""),
+        "change_notice_number": fields.get("change_notice_number") or "",
+        "title": fields.get("title") or "ECN from email",
+        "description": fields.get("description") or "",
+        "author": fields.get("author") or from_header or "email-submitter",
+        "date": _normalize_email_date(fields.get("date") or ""),
         "affected_parts": fields.get("affected_parts") or "",
-        "change_type":    (fields.get("change_type") or "modify").strip().lower(),
+        "change_type": (fields.get("change_type") or "modify").strip().lower(),
     }
 
     if not header["change_type"]:
         header["change_type"] = "modify"
-    if header["ecn_id"] and header["ecn_id"].lower().startswith("id:"):
-        header["ecn_id"] = header["ecn_id"].split(":", 1)[1].strip()
 
     return header
+
 
 
 # ── Email Loader ──────────────────────────────────────────────────────────────
@@ -825,6 +815,60 @@ def validate_ecn_header(header: dict) -> dict:
     return packet
 
 
+# ── Legacy Excel conversion ───────────────────────────────────────────────────
+def _convert_xls_to_xlsx(filepath: str) -> str:
+    """Convert a legacy .xls file to a temporary .xlsx file before loading."""
+    source = Path(filepath).resolve()
+    temp_dir = Path(tempfile.mkdtemp(prefix="ecn-xls-"))
+    output = temp_dir / f"{source.stem}.xlsx"
+
+    converter = shutil.which("soffice") or shutil.which("libreoffice")
+    if converter:
+        command = [
+            converter,
+            "--headless",
+            "--convert-to", "xlsx",
+            "--outdir", str(temp_dir),
+            str(source),
+        ]
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    elif os.name == "nt":
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if powershell:
+            script = (
+                "$excel = New-Object -ComObject Excel.Application; "
+                "$excel.Visible = $false; $excel.DisplayAlerts = $false; "
+                "$book = $excel.Workbooks.Open($env:ECN_XLS_INPUT); "
+                "$book.SaveAs($env:ECN_XLS_OUTPUT, 51); $book.Close($false); "
+                "$excel.Quit()"
+            )
+            environment = os.environ.copy()
+            environment["ECN_XLS_INPUT"] = str(source)
+            environment["ECN_XLS_OUTPUT"] = str(output)
+            subprocess.run(
+                [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+        else:
+            raise RuntimeError(
+                "Reading .xls files requires LibreOffice or Microsoft Excel. "
+                "Install an approved converter, then retry intake."
+            )
+    else:
+        raise RuntimeError(
+            "Reading .xls files requires LibreOffice. "
+            "Install an approved converter, then retry intake."
+        )
+
+    if not output.exists():
+        raise RuntimeError(f"Excel conversion did not create {output}")
+    logger.info("Converted legacy Excel file: %s -> %s", source, output)
+    return str(output)
+
+
 # ── Auto-detect File Loader ───────────────────────────────────────────────────
 def load_file(filepath: str, role: str = "ecn") -> list[dict] | dict:
     """Auto-detect file type and load it for the supplied ECN or BOM role."""
@@ -834,7 +878,13 @@ def load_file(filepath: str, role: str = "ecn") -> list[dict] | dict:
     ext = Path(filepath).suffix.lower()
     if ext == ".csv":
         return load_csv(filepath)
-    if ext in (".xlsx", ".xls"):
+    if ext == ".xls":
+        converted_filepath = _convert_xls_to_xlsx(filepath)
+        try:
+            return load_excel(converted_filepath, role=role)
+        finally:
+            shutil.rmtree(Path(converted_filepath).parent, ignore_errors=True)
+    if ext == ".xlsx":
         return load_excel(filepath, role=role)
     if ext == ".pdf":
         return load_pdf_bom(filepath) if role == "bom" else load_pdf(filepath)
@@ -843,6 +893,7 @@ def load_file(filepath: str, role: str = "ecn") -> list[dict] | dict:
     if ext == ".eml":
         return load_email(filepath)
     raise ValueError(f"Unsupported file type: {ext}")
+
 
 
 
@@ -894,28 +945,74 @@ def build_ecn_packet(ecn_data, bom_data, source_files=None) -> dict:
     return packet
 
 
+# ── Submission source helpers ─────────────────────────────────────────────────
+def _ecn_number(value: str) -> str:
+    """Return the numeric ECN identifier used when checking source filenames."""
+    match = re.search(r"(?<!\d)(\d{5,})(?!\d)", str(value or ""))
+    return match.group(1) if match else ""
+
+
+def _bom_source_metadata(filepath: str, ecn_number: str) -> tuple[str, str | None]:
+    """Classify a BOM filename and return an optional filename mismatch warning."""
+    stem = Path(filepath).stem.upper()
+    if "MBOM" in stem:
+        bom_type = "MBOM"
+    elif "EBOM" in stem:
+        bom_type = "EBOM"
+    else:
+        bom_type = "UNKNOWN"
+
+    file_number = _ecn_number(Path(filepath).stem)
+    warning = None
+    if ecn_number and file_number and file_number != ecn_number:
+        warning = (
+            f"BOM filename {Path(filepath).name!r} contains ECN number "
+            f"{file_number}, but the ECN number is {ecn_number}. "
+            "Please check the file name."
+        )
+    return bom_type, warning
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
-def run_intake(ecn_filepath: str, bom_filepath: str) -> dict:
-    """
-    Main intake entry point called by the orchestrator (run_hybrid.py).
-        Returns a fully structured ECN packet.
-    """
+def run_intake(ecn_filepath: str, bom_filepath: str | None = None) -> dict:
+    """Load one required ECN and zero or one BOM for a single comparison."""
+    if not ecn_filepath:
+        raise ValueError("An ECN file is required.")
 
     ecn_data = load_file(ecn_filepath, role="ecn")
-    bom_data = load_file(bom_filepath, role="bom")
-
+    bom_data: list[dict] = []
+    bom_warnings: list[dict] = []
 
     packet = build_ecn_packet(
         ecn_data,
         bom_data,
-        source_files={"ecn": ecn_filepath, "bom": bom_filepath},
+        source_files={"ecn": ecn_filepath, "boms": []},
     )
 
+    if bom_filepath:
+        loaded_rows = load_file(bom_filepath, role="bom")
+        ecn_number = _ecn_number(packet["header"].get("change_notice_number", ""))
+        bom_type, mismatch_warning = _bom_source_metadata(bom_filepath, ecn_number)
+        for index, row in enumerate(loaded_rows, start=1):
+            row["source_file"] = bom_filepath
+            row["bom_type"] = bom_type
+            row.setdefault("line_number", str(index))
+        packet["bom"] = loaded_rows
+        packet["source_files"]["boms"] = [bom_filepath]
+        if mismatch_warning:
+            bom_warnings.append({
+                "type": "SOURCE_FILE_MISMATCH",
+                "severity": "WARNING",
+                "source_file": bom_filepath,
+                "message": mismatch_warning,
+            })
+
+    packet["validation"]["bom_supplied"] = bool(bom_filepath)
+    packet["validation"]["bom_warnings"] = bom_warnings
     logger.info(
         "Intake complete — %d ECN fields, %d BOM rows, %d missing fields",
         len(packet["header"]),
         len(packet["bom"]),
         len(packet["validation"]["missing_fields"]),
     )
-
     return packet

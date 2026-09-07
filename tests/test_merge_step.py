@@ -27,7 +27,7 @@ def _packet(rule_violations=None, context_flags=None, ai_flags=None):
 
 
 def _rule(severity):
-    return {"rule_id": "R01", "severity": severity, "message": "Test rule"}
+    return {"rule_id": "H01", "severity": severity, "gate_effect": "FAIL" if severity == "BLOCKER" else "REVIEW", "message": "Test rule"}
 
 
 def _context(flag_type, severity="WARNING"):
@@ -45,7 +45,7 @@ def test_no_issues_passes_gate():
 
 
 def test_rule_error_fails_gate_and_is_blocker():
-    violation = _rule("ERROR")
+    violation = _rule("BLOCKER")
     result = run_merge_step(_packet(rule_violations=[violation]))
 
     assert result["gate"]["decision"] == "FAIL"
@@ -155,7 +155,7 @@ def test_ai_notes_never_change_gate_decision():
 
 
 def test_each_gate_category_is_aggregated_together():
-    blocker = _rule("ERROR")
+    blocker = _rule("BLOCKER")
     part_issue = _context("DISCONTINUED_PART", "ERROR")
     conflict = _context("HISTORICAL_CONFLICT", "ERROR")
     warning = _context("DESCRIPTION_MISMATCH", "WARNING")

@@ -26,3 +26,13 @@
 - Use the existing documentation in [README.md](README.md) and [docs/](docs/) as the source of truth before introducing new conventions.
 - Avoid duplicating documentation; link to the existing docs when adding guidance.
 - Avoid py file with similar function in different folders.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This is a single-context repository using root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
