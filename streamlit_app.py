@@ -1,6 +1,8 @@
 """Public Streamlit interface for the ECN Checker pipeline."""
 
+import hmac
 import importlib.util
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -8,8 +10,15 @@ from pathlib import Path
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parent
-STAGES = ROOT / "scripts" / "stages"
-SUPPORTED_FILE_TYPES = ["csv", "xlsx", "xls", "pdf", "html", "htm", "eml"]
+SCRIPTS = ROOT / "scripts"
+STAGES = SCRIPTS / "stages"
+ECN_FILE_TYPES = ["csv", "xlsx", "xls", "pdf", "html", "htm", "eml"]
+BOM_FILE_TYPES = ["csv", "xlsx", "xls", "pdf"]
+
+# Stages dynamically loaded below import the shared rule_catalogue module from
+# scripts/. Make that directory importable in both Streamlit and test sessions.
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
 
 def _load(name: str):
@@ -36,9 +45,69 @@ run_intake = intake_mod.run_intake
 run_rule_engine = rule_engine_mod.run_rule_engine
 run_ai_advisory = ai_advisory_mod.run_ai_advisory
 run_context_engine = context_engine_mod.run_context_engine
+log_approved_change = context_engine_mod.log_approved_change
 run_merge_step = merge_step_mod.run_merge_step
 send_fail_email = email_notification_mod.send_fail_email
 send_pass_email = email_notification_mod.send_pass_email
+
+
+def _get_config_value(key: str, default: str = "") -> str:
+    """Read Streamlit secrets first, then fall back to local environment values."""
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        if get_script_run_ctx(suppress_warning=True) is not None:
+            value = st.secrets.get(key)
+            if value is not None:
+                return str(value).strip()
+    except Exception:
+        # No Streamlit runtime/secrets configured: retain local environment support.
+        pass
+
+    return os.environ.get(key, default).strip()
+
+
+def _password_matches(submitted_password: str, configured_password: str) -> bool:
+    """Compare non-empty passwords without leaking a partial-match timing signal."""
+    return bool(configured_password) and hmac.compare_digest(
+        submitted_password, configured_password
+    )
+
+
+def _authenticate() -> None:
+    """Record a successful password entry for the current Streamlit session."""
+    configured_password = _get_config_value("APP_PASSWORD")
+    submitted_password = st.session_state.get("app_password_entry", "")
+
+    if _password_matches(submitted_password, configured_password):
+        st.session_state["app_authenticated"] = True
+        st.session_state.pop("app_auth_error", None)
+        st.session_state.pop("app_password_entry", None)
+    else:
+        st.session_state["app_authenticated"] = False
+        st.session_state["app_auth_error"] = True
+
+
+def _require_access() -> bool:
+    """Render the password gate and return whether this session is authorized."""
+    if st.session_state.get("app_authenticated", False):
+        return True
+
+    configured_password = _get_config_value("APP_PASSWORD")
+    st.title("ECN Checker Access")
+    if not configured_password:
+        st.error("APP_PASSWORD must be configured before this app can be used.")
+        return False
+
+    st.text_input(
+        "Password",
+        type="password",
+        key="app_password_entry",
+        on_change=_authenticate,
+    )
+    if st.session_state.get("app_auth_error", False):
+        st.error("Incorrect password.")
+    return False
 
 
 def _write_upload(uploaded_file) -> str:
@@ -49,13 +118,15 @@ def _write_upload(uploaded_file) -> str:
         return temp_file.name
 
 
-def _run_pipeline(ecn_path: str, bom_path: str) -> dict:
+def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
     """Run the same validation stages used by the command-line orchestrator."""
     packet = run_intake(ecn_path, bom_path)
     packet = run_rule_engine(packet)
     packet = run_ai_advisory(packet)
     packet = run_context_engine(packet)
-    return run_merge_step(packet)
+    packet = run_merge_step(packet)
+    log_approved_change(packet)
+    return packet
 
 
 def _finding_rows(findings: list[dict]) -> list[dict]:
@@ -93,8 +164,9 @@ def _render_ai_notes(ai_notes: dict) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
+    # Password access control is temporarily disabled for local testing.
     st.title("ECN Checker")
-    st.caption("Upload an Engineering Change Notice and BOM, then run the validation pipeline.")
+    st.caption("Upload one ECN and optionally one BOM, then run the validation pipeline.")
     st.info(
         "Notifications require a separate button click after checks complete. "
         "They remain dry runs unless DRY_RUN is explicitly disabled."
@@ -104,22 +176,27 @@ def main() -> None:
     with upload_column:
         ecn_file = st.file_uploader(
             "Step 1 — Upload ECN file",
-            type=SUPPORTED_FILE_TYPES,
+            type=ECN_FILE_TYPES,
             help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
         )
     with bom_column:
         bom_file = st.file_uploader(
-            "Step 2 — Upload BOM file",
-            type=SUPPORTED_FILE_TYPES,
-            help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
+            "Step 2 — Upload BOM file (optional)",
+            type=BOM_FILE_TYPES,
+            help="Upload one MBOM or EBOM. Run the ECN separately for each BOM file.",
         )
 
-    if st.button("Run Checks", type="primary", disabled=not (ecn_file and bom_file)):
+    if st.button("Run Checks", type="primary", disabled=not ecn_file):
         temporary_paths = []
         try:
-            temporary_paths = [_write_upload(ecn_file), _write_upload(bom_file)]
+            temporary_paths.append(_write_upload(ecn_file))
+            if bom_file:
+                temporary_paths.append(_write_upload(bom_file))
             with st.spinner("Running ECN validation checks..."):
-                st.session_state["packet"] = _run_pipeline(*temporary_paths)
+                st.session_state["packet"] = _run_pipeline(
+                    temporary_paths[0],
+                    temporary_paths[1] if len(temporary_paths) == 2 else None,
+                )
         except Exception as exc:
             st.error(f"The uploaded files could not be processed: {exc}")
         finally:

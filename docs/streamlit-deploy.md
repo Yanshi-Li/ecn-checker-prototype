@@ -6,7 +6,7 @@
 4. In the app dashboard, open **Settings → Secrets** and paste the real provider credentials using the keys shown in [`.streamlit/secrets.toml.example`](../.streamlit/secrets.toml.example). Do not put credentials in a committed file.
 5. Deploy the app. Community Cloud installs the dependencies listed in `requirements.txt` automatically.
 
-The public Streamlit interface runs intake, validation, advisory, context, and merge stages when **Run Checks** is selected. It does not send email on page load or when checks run. A user must separately enter the notification recipients and select **Send Notification Email**. Keep `DRY_RUN=true` in Streamlit secrets unless live SendGrid delivery has been explicitly approved.
+Password access control is temporarily disabled, so `APP_PASSWORD` is not required and the interface opens directly. Re-enable the `_require_access()` check in `streamlit_app.py` before deploying the app beyond this temporary testing period. The app runs intake, validation, advisory, context, and merge stages when **Run Checks** is selected. It does not send email on page load or when checks run. A user must separately enter the notification recipients and select **Send Notification Email**. Keep `DRY_RUN=true` in Streamlit secrets unless live SendGrid delivery has been explicitly approved.
 
 ## SendGrid sender verification
 

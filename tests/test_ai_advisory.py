@@ -2,7 +2,8 @@ import pytest
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from ai_advisory import _build_prompt, _resolve_llm_config, _rule_based_advisory
+from ai_advisory import _build_prompt, _resolve_llm_config, _rule_based_advisory, run_ai_advisory
+from stages import ai_advisory as advisory_impl
 from intake import build_ecn_packet, REQUIRED_ECN_FIELDS
 
 
@@ -45,6 +46,72 @@ def test_result_structure():
     assert "description_quality" in result
     assert "flags" in result
     assert "recommendation" in result
+    assert result["response_status"] == "COMPLETE"
+
+
+def test_normalise_adds_review_flag_for_unsupported_non_clear_assessment():
+    result = advisory_impl._normalise_ai_result(
+        {
+            "overall_risk": "HIGH",
+            "description_quality": "VAGUE",
+            "flags": [],
+            "recommendation": "",
+        }
+    )
+
+    assert result["response_status"] == "INCOMPLETE"
+    assert result["flags"][0]["rule_id"] == "AI_RESPONSE_INCOMPLETE"
+    assert "supporting flags" in result["flags"][0]["detail"]
+    assert result["recommendation"]
+
+
+def test_normalise_keeps_a_supported_or_clear_assessment_complete():
+    result = advisory_impl._normalise_ai_result(
+        {
+            "overall_risk": "LOW",
+            "description_quality": "CLEAR",
+            "flags": [],
+            "recommendation": "No action required.",
+        }
+    )
+
+    assert result["response_status"] == "COMPLETE"
+    assert result["flags"] == []
+
+
+@pytest.mark.parametrize("raw_flags", [None, "not-a-list", [{"type": "RISK"}, "invalid"]])
+def test_normalise_marks_invalid_flag_shapes_incomplete(raw_flags):
+    result = advisory_impl._normalise_ai_result(
+        {
+            "overall_risk": "LOW",
+            "description_quality": "CLEAR",
+            "flags": raw_flags,
+        }
+    )
+
+    assert result["response_status"] == "INCOMPLETE"
+    assert result["flags"][-1]["rule_id"] == "AI_RESPONSE_INCOMPLETE"
+
+
+def test_live_ai_path_normalises_an_incomplete_model_response(monkeypatch):
+    packet = _packet(description="A detailed description for a mocked AI call.")
+    monkeypatch.setattr(advisory_impl, "HAS_OPENAI", True)
+    monkeypatch.setattr(advisory_impl, "_resolve_llm_config", lambda: {"api_key": "test"})
+    monkeypatch.setattr(
+        advisory_impl,
+        "_call_openai",
+        lambda prompt, config: {
+            "overall_risk": "HIGH",
+            "description_quality": "VAGUE",
+            "flags": [],
+        },
+    )
+
+    result = run_ai_advisory(packet)["validation"]["ai_flags"]
+    assert result["ai_available"] is True
+    assert result["response_status"] == "INCOMPLETE"
+    assert result["flags"][0]["rule_id"] == "AI_RESPONSE_INCOMPLETE"
+
 
 
 # ── Tests reflecting ECN-2026-002 (cost reduction, well-formed) ──────────────
@@ -163,19 +230,19 @@ def test_semantic_A05_part_description_naming_word_check():
     assert any(f.get("rule_id") == "A05" for f in result["flags"])
 
 
-def test_llm_config_prefers_gemini_key(monkeypatch):
+def test_llm_config_prefers_openai_key(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
-    config = _resolve_llm_config()
-    assert config["provider"] == "gemini"
-    assert config["model"] == "gemini-2.5-flash"
-
-
-def test_llm_config_uses_openai_when_gemini_missing(monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     config = _resolve_llm_config()
     assert config["provider"] == "openai"
     assert config["model"] == "gpt-4o-mini"
+
+
+def test_llm_config_uses_gemini_when_openai_missing(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    config = _resolve_llm_config()
+    assert config["provider"] == "gemini"
+    assert config["model"] == "gemini-2.5-flash"

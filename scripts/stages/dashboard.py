@@ -17,9 +17,11 @@ OUT_DIR = Path(__file__).parent.parent.parent / "out"
 # ── Severity helpers ──────────────────────────────────────────────────────────
 def _badge(severity: str) -> str:
     colors = {
-        "ERROR":   ("🔴", "#ffe0e0", "#c0392b"),
+        "BLOCKER": ("🔴", "#ffe0e0", "#c0392b"),
         "WARNING": ("🟡", "#fff8e0", "#d4a017"),
-        "INFO":    ("🔵", "#e0f0ff", "#2980b9"),
+        "ADVISORY": ("🔵", "#e0f0ff", "#2980b9"),
+        "ERROR": ("🔴", "#ffe0e0", "#c0392b"),
+        "INFO": ("🔵", "#e0f0ff", "#2980b9"),
     }
     icon, bg, border = colors.get(severity.upper(), ("⚪", "#f5f5f5", "#aaa"))
     return (
@@ -33,30 +35,18 @@ def _render_violations(violations: list[dict]) -> str:
     if not violations:
         return '<p style="color:green;">✅ No violations found.</p>'
     rows = ""
-    for v in violations:
-        rule = v.get("rule_id", "—")
-        msg = v.get("message", "")
-        sev = v.get("severity", "INFO")
-        field = v.get("field", "")
-        rows += f"""
-        <tr>
-          <td><code>{rule}</code></td>
-          <td>{_badge(sev)}</td>
-          <td><code>{field}</code></td>
-          <td>{msg}</td>
-        </tr>"""
-    return f"""
-    <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
-      <thead>
-        <tr style="background:#f0f0f0;">
-          <th style="padding:6px;text-align:left;">Rule</th>
-          <th style="padding:6px;text-align:left;">Severity</th>
-          <th style="padding:6px;text-align:left;">Field</th>
-          <th style="padding:6px;text-align:left;">Message</th>
-        </tr>
-      </thead>
-      <tbody>{rows}</tbody>
-    </table>"""
+    for finding in violations:
+        location = finding.get("location", {})
+        field = location.get("field", finding.get("field", "")) if isinstance(location, dict) else finding.get("field", "")
+        rows += (
+            "<tr>"
+            f"<td><code>{finding.get('rule_id', '—')}</code></td>"
+            f"<td>{_badge(finding.get('severity', 'INFO'))}</td>"
+            f"<td><code>{field}</code></td>"
+            f"<td>{finding.get('message', '')}<br/><small>Evidence: <code>{finding.get('evidence', {})}</code></small></td>"
+            "</tr>"
+        )
+    return f"<table style='width:100%;border-collapse:collapse;font-size:0.9em;'><tbody>{rows}</tbody></table>"
 
 
 def _render_context_flags(flags: list[dict]) -> str:
@@ -85,6 +75,8 @@ def _render_context_flags(flags: list[dict]) -> str:
     </table>"""
 
 
+
+
 def _render_ai_flags(ai_flags: dict) -> str:
     logger.info("_render_ai_flags received: %s", ai_flags)
     if not ai_flags:
@@ -94,6 +86,7 @@ def _render_ai_flags(ai_flags: dict) -> str:
     risk = ai_flags.get("overall_risk", "UNKNOWN")
     quality = ai_flags.get("description_quality", "UNKNOWN")
     recommendation = ai_flags.get("recommendation", "")
+    response_status = ai_flags.get("response_status", "UNKNOWN")
     available = ai_flags.get("ai_available", False)
     ai_label = "🤖 AI Advisory" if available else "⚙️ Rule-Based Advisory (AI Unavailable)"
 
@@ -107,7 +100,6 @@ def _render_ai_flags(ai_flags: dict) -> str:
       <td>{flag.get('line_number') or '—'}</td>
     </tr>"""
 
-    #  Build table if there are flags, show green tick only if truly empty
     if ai_flags.get("flags"):
         flag_table = f"""
     <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
@@ -121,36 +113,39 @@ def _render_ai_flags(ai_flags: dict) -> str:
       </thead>
       <tbody>{flag_rows}</tbody>
     </table>"""
+    elif risk in {"MEDIUM", "HIGH"} or quality in {"VAGUE", "CONTRADICTING"}:
+        flag_table = (
+            '<p style="color:#d4a017;">⚠️ The advisory has a non-clear assessment '
+            'but did not provide itemised flags. Manual review is required.</p>'
+        )
     else:
-        flag_table = '<p style="color:green;"> No AI flags.</p>'
+        flag_table = '<p style="color:green;">✅ No AI flags.</p>'
 
     return f"""
     <p><strong>{ai_label}</strong></p>
     <p>Overall Risk: <strong style="color:{risk_colors.get(risk,'black')};">{risk}</strong>
-       &nbsp;|&nbsp; Description Quality: <strong>{quality}</strong></p>
+       &nbsp;|&nbsp; Description Quality: <strong>{quality}</strong>
+       &nbsp;|&nbsp; Response Status: <strong>{response_status}</strong></p>
     <p><em>{recommendation}</em></p>
     {flag_table}"""
+
 
 
 # ── Summary bar ───────────────────────────────────────────────────────────────
 def _summary_counts(packet: dict) -> tuple[int, int]:
     violations = packet["validation"].get("rule_violations", [])
-    context    = packet["validation"].get("context_flags", [])
-    ai         = packet["validation"].get("ai_flags", {})
-
-    # Guard: if ai_flags was accidentally stored as a list, wrap it
+    context = packet["validation"].get("context_flags", [])
+    intake_warnings = packet["validation"].get("bom_warnings", [])
+    ai = packet["validation"].get("ai_flags", {})
     if isinstance(ai, list):
         ai = {"flags": ai}
 
-    errors = (
-        sum(1 for v in violations if v.get("severity") == "ERROR") +
-        sum(1 for f in context    if f.get("severity") == "ERROR")
-    )
-    warnings = (
-        sum(1 for v in violations if v.get("severity") == "WARNING") +
-        sum(1 for f in context    if f.get("severity") == "WARNING") +
-        len(ai.get("flags", []))
-    )
+    errors = sum(1 for item in violations if item.get("gate_effect") == "FAIL")
+    errors += sum(1 for item in context if item.get("severity") == "ERROR")
+    warnings = sum(1 for item in violations if item.get("gate_effect") == "REVIEW")
+    warnings += sum(1 for item in context if item.get("severity") == "WARNING")
+    warnings += len(ai.get("flags", []))
+    warnings += len(intake_warnings)
     return errors, warnings
 
 
@@ -170,7 +165,7 @@ def build_dashboard_html(packet: dict) -> str:
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>ECN Dashboard — {header.get('ecn_id','')}</title>
+  <title>ECN Dashboard — {header.get('change_notice_number','')}</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
            margin: 0; background: #f4f6f9; color: #333; }}
@@ -208,7 +203,7 @@ def build_dashboard_html(packet: dict) -> str:
 <div class="topbar">
   <h1>📋 ECN Review Dashboard</h1>
   <div class="meta">
-    ECN: <strong>{header.get('ecn_id','N/A')}</strong> &nbsp;|&nbsp;
+    Change Notice Number: <strong>{header.get('change_notice_number','N/A')}</strong> &nbsp;|&nbsp;
     Author: {header.get('author','N/A')} &nbsp;|&nbsp;
     Date: {header.get('date','N/A')} &nbsp;|&nbsp;
     Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}

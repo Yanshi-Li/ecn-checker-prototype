@@ -276,8 +276,8 @@ def _check_new_part_active(
 ) -> list:
     """
     ECN-C-006: For every REPLACE or ADD row in ecn_changes, verify that
-    newPartNumber (or new_value) exists in parts.csv and is not obsolete/inactive.
-    Fires only when a parts file was also supplied in the same run_checks call.
+    newPartNumber (or new_value) exists in the parts master and is not obsolete/inactive.
+    Fires only when a parts-master file was also supplied in the same run_checks call.
     """
     issues = []
     col = _col_map(headers)
@@ -453,7 +453,7 @@ def run_checker(data_dir: str | "os.PathLike[str]", output_dir: str | "os.PathLi
     out_path.mkdir(parents=True, exist_ok=True)
 
     file_data: dict[str, str] = {}
-    for csv_name in ["ecn_header.csv", "ecn_changes.csv", "parts.csv", "bom.csv"]:
+    for csv_name in ["ecn_header.csv", "ecn_changes.csv", "parts_master.csv", "bom.csv"]:
         csv_path = data_path / csv_name
         if csv_path.exists():
             file_data[csv_name] = csv_path.read_text(encoding="utf-8")
@@ -463,8 +463,8 @@ def run_checker(data_dir: str | "os.PathLike[str]", output_dir: str | "os.PathLi
     change_rows = list(csv.DictReader(io.StringIO(file_data.get("ecn_changes.csv", "")))) if "ecn_changes.csv" in file_data else []
 
     parts_lookup: dict[str, str] = {}
-    if "parts.csv" in file_data:
-        for row in csv.DictReader(io.StringIO(file_data["parts.csv"])):
+    if "parts_master.csv" in file_data:
+        for row in csv.DictReader(io.StringIO(file_data["parts_master.csv"])):
             pn = (row.get("partNumber") or row.get("part_number") or "").strip()
             if pn:
                 parts_lookup[pn.lower()] = pn

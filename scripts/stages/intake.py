@@ -8,6 +8,10 @@ import csv
 import logging
 import os
 import re
+import shutil
+import subprocess
+import tempfile
+
 from email import policy
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
@@ -32,21 +36,22 @@ except ImportError:
     HAS_PDF = False
 
 # ── Required ECN Fields ───────────────────────────────────────────────────────
+# Only these ECN form headers are validated by R01.
 REQUIRED_ECN_FIELDS = [
-    "change_notice_number",
-    "name_of_change",
-    "reason_for_change",
     "description_of_change",
-    "products_affected",
-    "change_actions",
-    "date",
+    "name_of_change",
+    "change_notice_number",
+    "reason_for_change",
 ]
 
 # ── PDF Field Aliases ─────────────────────────────────────────────────────────
 KEY_ALIASES = {
     # Identification
     "change notice number":     "change_notice_number",
+    "engineering change number": "change_notice_number",
+    "number":                   "change_notice_number",
     "name of change":           "name_of_change",
+    "name":                     "name_of_change",
     "project":                  "project",
     "product group":            "product_group",
     "change category":          "change_category",
@@ -57,6 +62,7 @@ KEY_ALIASES = {
     "description of change":    "description_of_change",
     "products affected":        "products_affected",
     "change actions":           "change_actions",
+    "cost impact":              "cost_impact",
     "implementation date":      "date",
     # Roles
     "checker":                  "checker",
@@ -67,8 +73,11 @@ KEY_ALIASES = {
 
 # ── Known ECN Field Markers (in order of appearance) ─────────────────────────
 _FIELD_MARKERS = [
+    "Engineering Change Number",
     "Change Notice Number",
+    "Number",
     "Name of Change",
+    "Name",
     "Project",
     "Product Group",
     "Change Category",
@@ -78,6 +87,7 @@ _FIELD_MARKERS = [
     "Description of Change",
     "Products Affected",
     "Change Actions",
+    "Cost Impact",
     "Implementation Date",
     "Checker",
     "Reviewer",
@@ -206,6 +216,7 @@ def _parse_pdf_fields(text: str) -> dict:
         "a3_number",
         "products_affected",
         "change_actions",
+        "cost_impact",
         "date",
         "checker",
         "reviewer",
@@ -345,10 +356,12 @@ def _normalize_excel_key(value: str) -> str:
 
 
 def _lookup_value(mapping: dict, *candidates: str) -> str:
-    """Return the first mapped value whose normalized key matches a candidate."""
+    """Return the first non-empty value whose normalized key matches a candidate."""
     for candidate in candidates:
         for key, value in mapping.items():
-            if key == candidate or key.startswith(candidate) or key.endswith(candidate):
+            if (
+                key == candidate or key.startswith(candidate) or key.endswith(candidate)
+            ) and value:
                 return value
     return ""
 
@@ -361,10 +374,10 @@ def _normalize_mbom_row(row: dict) -> dict | None:
     }
     part_number = _lookup_value(
         normalized,
-        "part number",
-        "component part number",
         "existing child part number",
         "new child part number",
+        "component part number",
+        "part number",
     )
     if not part_number:
         return None
@@ -373,15 +386,37 @@ def _normalize_mbom_row(row: dict) -> dict | None:
         "part_number": part_number,
         "description": _lookup_value(
             normalized,
+            "existing child part description",
+            "new child part description",
             "part description",
             "description",
-            "new child part description",
+        ),
+        "parent_part_no": _lookup_value(normalized, "parent part number"),
+        "parent_part_description": _lookup_value(
+            normalized, "parent part description"
         ),
         "quantity": _lookup_value(normalized, "qty", "quantity") or "1",
         "unit": _lookup_value(normalized, "select unit of measure") or "EA",
         "action": _lookup_value(normalized, "select action", "action"),
         "source": _lookup_value(normalized, "select bom database"),
     }
+
+
+def _combine_mbom_headers(parent_row: list[str], child_row: list[str]) -> list[str]:
+    """Combine a grouped MBOM header row with its Number/Description subheaders."""
+    headers = []
+    current_group = ""
+    for parent, child in zip(parent_row, child_row):
+        parent_label = str(parent).strip()
+        child_label = str(child).strip()
+        if parent_label:
+            current_group = parent_label
+        headers.append(
+            f"{current_group} {child_label}".strip()
+            if child_label in {"Number", "Description"} and current_group
+            else parent_label or child_label
+        )
+    return headers
 
 
 def _coerce_mbom_rows(rows: list[dict]) -> list[dict]:
@@ -399,26 +434,67 @@ def _coerce_mbom_rows(rows: list[dict]) -> list[dict]:
 
 
 # ── Excel Loader ──────────────────────────────────────────────────────────────
-def load_excel(filepath: str) -> list[dict]:
-    """Load an Excel file into a list of row dicts (requires pandas)."""
+def _extract_excel_ecn_header(grid: list[list[str]]) -> dict:
+    """Extract a label/value ECN form header from worksheet rows."""
+    for row_index, row in enumerate(grid):
+        recognized_columns = [
+            column_index
+            for column_index, cell in enumerate(row)
+            if _normalize_excel_key(cell) in KEY_ALIASES
+        ]
+        if len(recognized_columns) < 2:
+            continue
+
+        header = {}
+        for column_index in recognized_columns:
+            label = _normalize_excel_key(row[column_index])
+            canonical_key = KEY_ALIASES[label]
+            value = ""
+            for value_row in grid[row_index + 1:]:
+                if column_index < len(value_row) and str(value_row[column_index]).strip():
+                    value = str(value_row[column_index]).strip()
+                    break
+            header[canonical_key] = value
+        return header
+    return {}
+
+
+def load_excel(filepath: str, role: str = "bom") -> list[dict] | dict:
+    """Load an Excel ECN form or MBOM worksheet (requires pandas)."""
     if not HAS_PANDAS:
         raise ImportError("pandas is required: pip install pandas openpyxl")
 
+        
     df = pd.read_excel(filepath, header=None, dtype=str).fillna("")
     grid = df.values.tolist()
+    if role == "ecn":
+        header = _extract_excel_ecn_header(grid)
+        if header:
+            logger.info("Excel ECN loaded: %s (%d fields extracted)", filepath, len(header))
+            return header
+
     header_index = None
     header = []
     for idx, row in enumerate(grid):
         normalized = [_normalize_excel_key(str(cell)) for cell in row]
-        if any(
-            "part number" in cell
-            or "select action" in cell
-            or "select bom database" in cell
+        is_part_master_header = any(
+            "part number" in cell or "select action" in cell
             for cell in normalized
-        ):
+        )
+        is_structure_header = (
+            "parent part" in normalized
+            and (
+                "existing child part" in normalized
+                or "new child part" in normalized
+            )
+        )
+        if is_structure_header and idx + 1 < len(grid):
+            header_index = idx + 1
+            header = _combine_mbom_headers(row, grid[idx + 1])
+            break
+        if is_part_master_header and header_index is None:
             header_index = idx
             header = [str(cell).strip() for cell in row]
-            break
 
     if header_index is not None:
         rows = []
@@ -552,10 +628,8 @@ def _parse_html_table_fields(raw_html: str) -> dict:
     parser.close()
 
     html_aliases = {
-        "number": "change_notice_number",
-        "name": "name_of_change",
         "created on": "date",
-        }
+    }
     fields = {}
     pending_key = None
 
@@ -656,24 +730,24 @@ def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
     text = (email_text or "").strip()
     if not text:
         return {
-            "ecn_id":        "",
-            "title":         "ECN from email",
-            "description":   "",
-            "author":        from_header or "email-submitter",
-            "date":          "",
+            "change_notice_number": "",
+            "title": "ECN from email",
+            "description": "",
+            "author": from_header or "email-submitter",
+            "date": "",
             "affected_parts": "",
-            "change_type":   "modify",
+            "change_type": "modify",
         }
 
     normalized_text = re.sub(r"\s+", " ", text)
     labels = [
-        ("ecn_id",         r"(?:ECN\s*ID|ECN\s*NUMBER|ECN)"),
-        ("title",          r"Title"),
+        ("change_notice_number", r"Change\s+Notice\s+Number"),
+        ("title", r"Title"),
         ("affected_parts", r"Affected\s+assembly|Affected\s+part|Affected\s+parts"),
-        ("change_type",    r"Change\s+type|Action|Request\s+type"),
-        ("description",    r"Description|Summary|Change\s+summary|Change\s+request"),
-        ("date",           r"Date|Effective\s+date|Submitted\s+date|Request\s+date"),
-        ("author",         r"Author|Submitted\s+by|Requested\s+by|From"),
+        ("change_type", r"Change\s+type|Action|Request\s+type"),
+        ("description", r"Description|Summary|Change\s+summary|Change\s+request"),
+        ("date", r"Date|Effective\s+date|Submitted\s+date|Request\s+date"),
+        ("author", r"Author|Submitted\s+by|Requested\s+by|From"),
     ]
     fields: dict[str, str] = {}
 
@@ -686,35 +760,21 @@ def _parse_email_header_fields(email_text: str, from_header: str = "") -> dict:
             if value:
                 fields[field_name] = value
 
-    if not fields.get("ecn_id"):
-        match = re.search(r"(?i)\bECN[-: ]*([A-Z0-9-]+)\b", normalized_text)
-        if match:
-            fields["ecn_id"] = match.group(1)
-
-    if not fields.get("title"):
-        match = re.search(
-            r"(?is)Title\s*[:\-]?\s*(.*?)(?=(?:\bAffected\s+assembly\b|\bChange\s+type\b|\bDescription\b|\bDate\b|\bRequested\s+by\b)|$)",
-            normalized_text
-        )
-        if match:
-            fields["title"] = match.group(1).strip().strip(" \t\n\r:*#-")
-
     header = {
-        "ecn_id":         fields.get("ecn_id") or "",
-        "title":          fields.get("title") or "ECN from email",
-        "description":    fields.get("description") or "",
-        "author":         fields.get("author") or from_header or "email-submitter",
-        "date":           _normalize_email_date(fields.get("date") or ""),
+        "change_notice_number": fields.get("change_notice_number") or "",
+        "title": fields.get("title") or "ECN from email",
+        "description": fields.get("description") or "",
+        "author": fields.get("author") or from_header or "email-submitter",
+        "date": _normalize_email_date(fields.get("date") or ""),
         "affected_parts": fields.get("affected_parts") or "",
-        "change_type":    (fields.get("change_type") or "modify").strip().lower(),
+        "change_type": (fields.get("change_type") or "modify").strip().lower(),
     }
 
     if not header["change_type"]:
         header["change_type"] = "modify"
-    if header["ecn_id"] and header["ecn_id"].lower().startswith("id:"):
-        header["ecn_id"] = header["ecn_id"].split(":", 1)[1].strip()
 
     return header
+
 
 
 # ── Email Loader ──────────────────────────────────────────────────────────────
@@ -747,11 +807,66 @@ def validate_ecn_header(header: dict) -> dict:
     Check for missing required ECN fields.
     Returns a validation dict with a list of missing fields.
     """
+    normalized_header = _normalize_ecn_header(header)
     packet = {"validation": {"missing_fields": []}}
     for field in REQUIRED_ECN_FIELDS:
-        if not header.get(field):
+        if not normalized_header.get(field):
             packet["validation"]["missing_fields"].append(field)
     return packet
+
+
+# ── Legacy Excel conversion ───────────────────────────────────────────────────
+def _convert_xls_to_xlsx(filepath: str) -> str:
+    """Convert a legacy .xls file to a temporary .xlsx file before loading."""
+    source = Path(filepath).resolve()
+    temp_dir = Path(tempfile.mkdtemp(prefix="ecn-xls-"))
+    output = temp_dir / f"{source.stem}.xlsx"
+
+    converter = shutil.which("soffice") or shutil.which("libreoffice")
+    if converter:
+        command = [
+            converter,
+            "--headless",
+            "--convert-to", "xlsx",
+            "--outdir", str(temp_dir),
+            str(source),
+        ]
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    elif os.name == "nt":
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if powershell:
+            script = (
+                "$excel = New-Object -ComObject Excel.Application; "
+                "$excel.Visible = $false; $excel.DisplayAlerts = $false; "
+                "$book = $excel.Workbooks.Open($env:ECN_XLS_INPUT); "
+                "$book.SaveAs($env:ECN_XLS_OUTPUT, 51); $book.Close($false); "
+                "$excel.Quit()"
+            )
+            environment = os.environ.copy()
+            environment["ECN_XLS_INPUT"] = str(source)
+            environment["ECN_XLS_OUTPUT"] = str(output)
+            subprocess.run(
+                [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+        else:
+            raise RuntimeError(
+                "Reading .xls files requires LibreOffice or Microsoft Excel. "
+                "Install an approved converter, then retry intake."
+            )
+    else:
+        raise RuntimeError(
+            "Reading .xls files requires LibreOffice. "
+            "Install an approved converter, then retry intake."
+        )
+
+    if not output.exists():
+        raise RuntimeError(f"Excel conversion did not create {output}")
+    logger.info("Converted legacy Excel file: %s -> %s", source, output)
+    return str(output)
 
 
 # ── Auto-detect File Loader ───────────────────────────────────────────────────
@@ -763,8 +878,14 @@ def load_file(filepath: str, role: str = "ecn") -> list[dict] | dict:
     ext = Path(filepath).suffix.lower()
     if ext == ".csv":
         return load_csv(filepath)
-    if ext in (".xlsx", ".xls"):
-        return load_excel(filepath)
+    if ext == ".xls":
+        converted_filepath = _convert_xls_to_xlsx(filepath)
+        try:
+            return load_excel(converted_filepath, role=role)
+        finally:
+            shutil.rmtree(Path(converted_filepath).parent, ignore_errors=True)
+    if ext == ".xlsx":
+        return load_excel(filepath, role=role)
     if ext == ".pdf":
         return load_pdf_bom(filepath) if role == "bom" else load_pdf(filepath)
     if ext in (".html", ".htm") and role == "ecn":
@@ -774,27 +895,35 @@ def load_file(filepath: str, role: str = "ecn") -> list[dict] | dict:
     raise ValueError(f"Unsupported file type: {ext}")
 
 
+
+
 # ── Packet builder ────────────────────────────────────────────────────────────
+def _normalize_ecn_header(header: dict) -> dict:
+    """Map supported ECN form labels to the canonical validation keys."""
+    normalized = {}
+    for key, value in header.items():
+        label = _normalize_excel_key(key)
+        canonical_key = KEY_ALIASES.get(label, key)
+        normalized[canonical_key] = "" if value is None else str(value).strip()
+    return normalized
+
+
 def build_ecn_packet(ecn_data, bom_data, source_files=None) -> dict:
     """Build a normalized ECN packet from loaded ECN and BOM data."""
-    # ── Normalize ECN header ──────────────────────────────────────────────────
     if isinstance(ecn_data, dict):
-        header = ecn_data
+        header = _normalize_ecn_header(ecn_data)
         changes = []
     elif isinstance(ecn_data, list):
-        header = ecn_data[0] if ecn_data else {}
+        header = _normalize_ecn_header(ecn_data[0]) if ecn_data else {}
         changes = ecn_data[1:] if len(ecn_data) > 1 else []
     else:
         header = {}
         changes = []
 
-    # ── Ensure rule_engine required keys always exist ─────────────────────────
     header.setdefault("change_type", "modify")
-    header.setdefault("effective_date", header.get("date", ""))
-    header.setdefault("ecn_title", header.get("name_of_change", ""))
-    header.setdefault("affected_assembly", header.get("products_affected", ""))
 
     # ── Build packet ──────────────────────────────────────────────────────────
+
     packet = {
         "header": header,
         "changes": changes,
@@ -816,28 +945,74 @@ def build_ecn_packet(ecn_data, bom_data, source_files=None) -> dict:
     return packet
 
 
+# ── Submission source helpers ─────────────────────────────────────────────────
+def _ecn_number(value: str) -> str:
+    """Return the numeric ECN identifier used when checking source filenames."""
+    match = re.search(r"(?<!\d)(\d{5,})(?!\d)", str(value or ""))
+    return match.group(1) if match else ""
+
+
+def _bom_source_metadata(filepath: str, ecn_number: str) -> tuple[str, str | None]:
+    """Classify a BOM filename and return an optional filename mismatch warning."""
+    stem = Path(filepath).stem.upper()
+    if "MBOM" in stem:
+        bom_type = "MBOM"
+    elif "EBOM" in stem:
+        bom_type = "EBOM"
+    else:
+        bom_type = "UNKNOWN"
+
+    file_number = _ecn_number(Path(filepath).stem)
+    warning = None
+    if ecn_number and file_number and file_number != ecn_number:
+        warning = (
+            f"BOM filename {Path(filepath).name!r} contains ECN number "
+            f"{file_number}, but the ECN number is {ecn_number}. "
+            "Please check the file name."
+        )
+    return bom_type, warning
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
-def run_intake(ecn_filepath: str, bom_filepath: str) -> dict:
-    """
-    Main intake entry point called by the orchestrator (run_hybrid.py).
-        Returns a fully structured ECN packet.
-    """
+def run_intake(ecn_filepath: str, bom_filepath: str | None = None) -> dict:
+    """Load one required ECN and zero or one BOM for a single comparison."""
+    if not ecn_filepath:
+        raise ValueError("An ECN file is required.")
 
     ecn_data = load_file(ecn_filepath, role="ecn")
-    bom_data = load_file(bom_filepath, role="bom")
-
+    bom_data: list[dict] = []
+    bom_warnings: list[dict] = []
 
     packet = build_ecn_packet(
         ecn_data,
         bom_data,
-        source_files={"ecn": ecn_filepath, "bom": bom_filepath},
+        source_files={"ecn": ecn_filepath, "boms": []},
     )
 
+    if bom_filepath:
+        loaded_rows = load_file(bom_filepath, role="bom")
+        ecn_number = _ecn_number(packet["header"].get("change_notice_number", ""))
+        bom_type, mismatch_warning = _bom_source_metadata(bom_filepath, ecn_number)
+        for index, row in enumerate(loaded_rows, start=1):
+            row["source_file"] = bom_filepath
+            row["bom_type"] = bom_type
+            row.setdefault("line_number", str(index))
+        packet["bom"] = loaded_rows
+        packet["source_files"]["boms"] = [bom_filepath]
+        if mismatch_warning:
+            bom_warnings.append({
+                "type": "SOURCE_FILE_MISMATCH",
+                "severity": "WARNING",
+                "source_file": bom_filepath,
+                "message": mismatch_warning,
+            })
+
+    packet["validation"]["bom_supplied"] = bool(bom_filepath)
+    packet["validation"]["bom_warnings"] = bom_warnings
     logger.info(
         "Intake complete — %d ECN fields, %d BOM rows, %d missing fields",
         len(packet["header"]),
         len(packet["bom"]),
         len(packet["validation"]["missing_fields"]),
     )
-
     return packet
