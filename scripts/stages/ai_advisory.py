@@ -365,9 +365,14 @@ def _call_openai(prompt: str, config: dict) -> dict:
                                           "Always respond with valid JSON only."},
             {"role": "user", "content": prompt},
         ],
-        response_format={"type": "json_object"},
-        temperature=0.2,
+                        response_format={"type": "json_object"},
+        # The configured reasoning model only accepts temperature=1.
+        # Keep this compatible with both the corporate LiteLLM gateway and
+        # standard OpenAI-compatible providers.
+        temperature=1,
         max_tokens=1500,
+
+
     )
     raw = response.choices[0].message.content.strip()
     return _try_parse_json(raw)
