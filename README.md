@@ -34,6 +34,27 @@ See [docs/architecture.md](docs/architecture.md) for the workflow, [docs/rules_s
 
 Legacy `.xls` intake requires an approved local converter: LibreOffice (`soffice`) or Microsoft Excel on Windows. The converted file is temporary and is removed after loading; the submitted source file is not modified.
 
+## Streamlit intake and validation reports
+
+Run the public Streamlit interface with:
+
+```powershell
+streamlit run streamlit_app.py
+```
+
+The app supports both uploaded files and manual intake. Manual intake uses the
+canonical staged intake fields: `change_notice_number`, `name_of_change`,
+`reason_for_change`, `description_of_change`, `products_affected`,
+`change_actions`, and `date`, plus optional intake fields and canonical BOM
+rows.
+
+After validation, the user can explicitly send a validation report to
+`yanshili645@gmail.com`. The email is a report only; it does not approve or
+reject an ECN. SMTP configuration is required before the button can send.
+See [docs/streamlit-deploy.md](docs/streamlit-deploy.md) for deployment
+configuration.
+
+## Command-line workflow
 PDF routing is role-aware: an ECN PDF is parsed as fields, while a BOM PDF is parsed as MBOM tables. PDF BOM extraction looks for a table header containing **Part Number** and **Action**, then maps recognized columns such as description, quantity, unit, action, and source. The checked-in HTML ECN and MBOM PDF examples in `data/` have regression coverage.
 
 ## Setup — local
@@ -141,6 +162,32 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers and 
 
 | Path | Description |
 |---|---|
+| `scripts/app.py` | Flask web server — upload UI and validation endpoint |
+| `scripts/ecn_checker.py` | Core validation rule engine |
+| `scripts/run_hybrid.py` | End-to-end CLI pipeline |
+| `scripts/stages/validation_notification.py` | Validation report email builder and SMTP sender |
+| `streamlit_app.py` | Streamlit upload/manual intake and report UI |
+| `data/` | Sample CSV inputs used by the prototype |
+| `out/` | Generated dashboard and AI summary outputs |
+| `docs/` | Architecture, rule, and test documentation |
+| `tests/` | Regression tests |
+
+### Repository structure (clean layout)
+
+```text
+scripts/    # pipeline stages and orchestration code
+data/       # sample ECN/BOM/parts/history input files
+tests/      # regression and module tests
+docs/       # architecture/rules/test scenario docs
+templates/  # web UI templates
+out/        # generated outputs (ignored in git)
+```
+
+## Running tests
+
+```bash
+pytest -q
+```
 | `scripts/run_hybrid.py` | CLI orchestration of all stages and notifications |
 | `scripts/stages/` | Intake, rule, AI, context, merge, dashboard, and email stage implementations |
 | `streamlit_app.py` | Streamlit upload, gate-results, and explicit notification interface |

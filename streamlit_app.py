@@ -1,5 +1,9 @@
 """Public Streamlit interface for the ECN Checker pipeline."""
 
+import csv
+import datetime as dt
+import importlib.util
+import io
 import hmac
 import importlib.util
 import os
@@ -7,7 +11,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
+
 
 ROOT = Path(__file__).resolve().parent
 SCRIPTS = ROOT / "scripts"
@@ -39,6 +45,8 @@ rule_engine_mod = _load("rule_engine")
 ai_advisory_mod = _load("ai_advisory")
 context_engine_mod = _load("context_engine")
 merge_step_mod = _load("merge_step")
+validation_notification_mod = _load("validation_notification")
+
 email_notification_mod = _load("email_notification")
 
 run_intake = intake_mod.run_intake
@@ -109,6 +117,91 @@ def _require_access() -> bool:
         st.error("Incorrect password.")
     return False
 
+send_validation_email = validation_notification_mod.send_validation_email
+DEFAULT_RECIPIENT = validation_notification_mod.DEFAULT_RECIPIENT
+
+
+ECN_MANUAL_FIELDS = [
+    "change_notice_number",
+    "name_of_change",
+    "reason_for_change",
+    "description_of_change",
+    "products_affected",
+    "change_actions",
+    "date",
+    "project",
+    "product_group",
+    "change_category",
+    "associated_a3",
+    "a3_number",
+    "checker",
+    "reviewer",
+    "chief_engineer",
+    "bom_coordinator",
+]
+BOM_MANUAL_FIELDS = [
+    "line_number",
+    "part_number",
+    "description",
+    "quantity",
+    "unit",
+    "action",
+    "parent_part_no",
+]
+
+
+def _csv_text(rows: list[dict], fieldnames: list[str]) -> str:
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows({field: row.get(field, "") for field in fieldnames} for row in rows)
+    return output.getvalue()
+
+
+def manual_ecn_csv(values: dict[str, object]) -> str:
+    """Serialize canonical manual ECN intake fields for the existing loader."""
+    row = {field: "" if values.get(field) is None else str(values.get(field)) for field in ECN_MANUAL_FIELDS}
+    return _csv_text([row], ECN_MANUAL_FIELDS)
+
+
+def manual_bom_csv(rows: list[dict[str, object]]) -> str:
+    """Serialize canonical manual BOM rows for the existing loader."""
+    normalized = []
+    for index, row in enumerate(rows, start=1):
+        normalized.append({
+            "line_number": row.get("line_number") or index,
+            "part_number": row.get("part_number", ""),
+            "description": row.get("description", ""),
+            "quantity": row.get("quantity", "1"),
+            "unit": row.get("unit", "EA"),
+            "action": row.get("action", ""),
+            "parent_part_no": row.get("parent_part_no", ""),
+        })
+    return _csv_text(normalized, BOM_MANUAL_FIELDS)
+
+
+def validate_manual_input(values: dict[str, object], bom_rows: list[dict[str, object]]) -> list[str]:
+    """Return user-facing errors before invoking the authoritative pipeline."""
+    errors = [f"{field.replace('_', ' ').title()} is required." for field in intake_mod.REQUIRED_ECN_FIELDS if not str(values.get(field, "")).strip()]
+    if not bom_rows:
+        errors.append("At least one BOM row is required.")
+    for index, row in enumerate(bom_rows, start=1):
+        if not str(row.get("part_number", "")).strip():
+            errors.append(f"BOM row {index} requires a part number.")
+        quantity = str(row.get("quantity", "")).strip()
+        try:
+            if not quantity or float(quantity) <= 0:
+                raise ValueError
+        except ValueError:
+            errors.append(f"BOM row {index} quantity must be a positive number.")
+    return errors
+
+
+def _write_text(text: str, suffix: str = ".csv") -> str:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", suffix=suffix, delete=False) as temp_file:
+        temp_file.write(text)
+        return temp_file.name
+
 
 def _write_upload(uploaded_file) -> str:
     """Persist a Streamlit upload so the existing intake stage can read it."""
@@ -149,6 +242,59 @@ def _render_findings(title: str, findings: list[dict]) -> None:
             st.info(f"No {title.lower()} found.")
 
 
+def _streamlit_secrets() -> dict[str, object]:
+    try:
+        return dict(st.secrets)
+    except Exception:
+        return {}
+
+
+def _render_manual_form() -> tuple[dict[str, object], list[dict[str, object]]] | None:
+    st.subheader("Manual intake")
+    st.caption("Enter the canonical ECN intake fields used by the validation pipeline.")
+    values: dict[str, object] = {}
+    required = {
+        "change_notice_number": "Change Notice Number",
+        "name_of_change": "Name of Change",
+        "reason_for_change": "Reason for Change",
+        "description_of_change": "Description of Change",
+        "products_affected": "Products Affected",
+        "change_actions": "Change Actions",
+    }
+    for field, label in required.items():
+        values[field] = st.text_area(label, key=f"manual_{field}") if field in {"reason_for_change", "description_of_change", "products_affected", "change_actions"} else st.text_input(label, key=f"manual_{field}")
+    date_value = st.date_input("Date", value=None, key="manual_date")
+    values["date"] = date_value.isoformat() if isinstance(date_value, (dt.date, dt.datetime)) else ""
+
+    with st.expander("Optional canonical fields"):
+        optional = {
+            "project": "Project", "product_group": "Product Group", "change_category": "Change Category",
+            "associated_a3": "Associated A3", "a3_number": "A3 Number", "checker": "Checker",
+            "reviewer": "Reviewer", "chief_engineer": "Chief Engineer", "bom_coordinator": "BOM Coordinator",
+        }
+        for field, label in optional.items():
+            values[field] = st.text_input(label, key=f"manual_{field}")
+
+    st.subheader("BOM lines")
+    default_rows = pd.DataFrame([{
+        "line_number": 1, "part_number": "", "description": "", "quantity": "1",
+        "unit": "EA", "action": "", "parent_part_no": "",
+    }])
+    edited = st.data_editor(
+        default_rows,
+        num_rows="dynamic",
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "line_number": st.column_config.NumberColumn("Line Number", min_value=1, step=1),
+            "quantity": st.column_config.TextColumn("Quantity"),
+        },
+        key="manual_bom_editor",
+    )
+    rows = edited.fillna("").to_dict(orient="records")
+    return values, rows
+
+
 def _render_ai_notes(ai_notes: dict) -> None:
     flags = ai_notes.get("flags", [])
     with st.expander(f"AI Notes ({len(flags)})"):
@@ -166,39 +312,48 @@ def main() -> None:
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
     # Password access control is temporarily disabled for local testing.
     st.title("ECN Checker")
-    st.caption("Upload one ECN and optionally one BOM, then run the validation pipeline.")
-    st.info(
-        "Notifications require a separate button click after checks complete. "
-        "They remain dry runs unless DRY_RUN is explicitly disabled."
-    )
+    st.caption("Validate an Engineering Change Notice and BOM, then send the report for review.")
+    st.info("Validation does not approve or reject an ECN. Email sends a validation report only.")
 
-    upload_column, bom_column = st.columns(2)
-    with upload_column:
-        ecn_file = st.file_uploader(
-            "Step 1 — Upload ECN file",
-            type=ECN_FILE_TYPES,
-            help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
-        )
-    with bom_column:
-        bom_file = st.file_uploader(
-            "Step 2 — Upload BOM file (optional)",
-            type=BOM_FILE_TYPES,
-            help="Upload one MBOM or EBOM. Run the ECN separately for each BOM file.",
-        )
+    mode = st.radio("Input method", ["Upload files", "Manual intake"], horizontal=True, key="input_mode")
+    temporary_paths: list[str] = []
+    can_run = False
+    if mode == "Upload files":
+        upload_column, bom_column = st.columns(2)
+        with upload_column:
+            ecn_file = st.file_uploader(
+                "Step 1 — Upload ECN file",
+                type=SUPPORTED_FILE_TYPES,
+                help="CSV, Excel, PDF, or EML files are supported by the intake stage.",
+            )
+        with bom_column:
+            bom_file = st.file_uploader(
+                "Step 2 — Upload BOM file",
+                type=SUPPORTED_FILE_TYPES,
+                help="CSV, Excel, PDF, or EML files are supported by the intake stage.",
+            )
+        can_run = bool(ecn_file and bom_file)
+    else:
+        manual_input = _render_manual_form()
+        can_run = manual_input is not None
 
-    if st.button("Run Checks", type="primary", disabled=not ecn_file):
-        temporary_paths = []
+    if st.button("Run Checks", type="primary", disabled=not can_run):
         try:
-            temporary_paths.append(_write_upload(ecn_file))
-            if bom_file:
-                temporary_paths.append(_write_upload(bom_file))
+            if mode == "Upload files":
+                temporary_paths = [_write_upload(ecn_file), _write_upload(bom_file)]
+            else:
+                values, bom_rows = manual_input
+                errors = validate_manual_input(values, bom_rows)
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                    return
+                temporary_paths = [_write_text(manual_ecn_csv(values)), _write_text(manual_bom_csv(bom_rows))]
             with st.spinner("Running ECN validation checks..."):
-                st.session_state["packet"] = _run_pipeline(
-                    temporary_paths[0],
-                    temporary_paths[1] if len(temporary_paths) == 2 else None,
-                )
+                st.session_state["packet"] = _run_pipeline(*temporary_paths)
+                st.session_state.pop("email_status", None)
         except Exception as exc:
-            st.error(f"The uploaded files could not be processed: {exc}")
+            st.error(f"The input could not be processed: {exc}")
         finally:
             for path in temporary_paths:
                 Path(path).unlink(missing_ok=True)
@@ -220,6 +375,22 @@ def main() -> None:
     _render_findings("Warnings", gate.get("warnings", []))
     _render_ai_notes(gate.get("ai_notes", {}))
 
+    st.divider()
+    st.subheader("Email validation report")
+    st.caption(f"The report will be sent to {DEFAULT_RECIPIENT}. This does not approve or reject the ECN.")
+    email_status = st.session_state.get("email_status")
+    if email_status and email_status.get("sent"):
+        st.success(email_status["message"])
+    elif st.button("Send Validation Email"):
+        with st.spinner("Sending validation report..."):
+            result = send_validation_email(packet, secrets=_streamlit_secrets())
+        st.session_state["email_status"] = result
+        if result["sent"]:
+            st.success(result["message"])
+        elif result["status"] == "not_configured":
+            st.warning(result["message"] + " Configure SMTP settings before sending.")
+        else:
+            st.error(result["message"])
     st.subheader("Notification Email")
     engineer_email = st.text_input("Engineer email", key="notification_engineer_email")
     ce_email = st.text_input("Chief Engineer email", key="notification_ce_email")
@@ -250,3 +421,15 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
+
