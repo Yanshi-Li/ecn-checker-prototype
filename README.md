@@ -51,6 +51,26 @@ Then open **http://localhost:5000** in your browser.
 3. Click **Check My Files**.
 4. Review per-file errors and warnings inline — fix any issues and re-upload.
 
+## Streamlit intake and validation reports
+
+Run the public Streamlit interface with:
+
+```powershell
+streamlit run streamlit_app.py
+```
+
+The app supports both uploaded files and manual intake. Manual intake uses the
+canonical staged intake fields: `change_notice_number`, `name_of_change`,
+`reason_for_change`, `description_of_change`, `products_affected`,
+`change_actions`, and `date`, plus optional intake fields and canonical BOM
+rows.
+
+After validation, the user can explicitly send a validation report to
+`yanshili645@gmail.com`. The email is a report only; it does not approve or
+reject an ECN. SMTP configuration is required before the button can send.
+See [docs/streamlit-deploy.md](docs/streamlit-deploy.md) for deployment
+configuration.
+
 ## Command-line workflow
 
 Run the full pipeline with:
@@ -120,6 +140,8 @@ deterministic fallback.
 | `scripts/app.py` | Flask web server — upload UI and validation endpoint |
 | `scripts/ecn_checker.py` | Core validation rule engine |
 | `scripts/run_hybrid.py` | End-to-end CLI pipeline |
+| `scripts/stages/validation_notification.py` | Validation report email builder and SMTP sender |
+| `streamlit_app.py` | Streamlit upload/manual intake and report UI |
 | `data/` | Sample CSV inputs used by the prototype |
 | `out/` | Generated dashboard and AI summary outputs |
 | `docs/` | Architecture, rule, and test documentation |
