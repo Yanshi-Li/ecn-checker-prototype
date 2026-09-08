@@ -47,11 +47,36 @@ REQUIRED_ECN_FIELDS = [
 # ── PDF Field Aliases ─────────────────────────────────────────────────────────
 KEY_ALIASES = {
     # Identification
-    "change notice number":     "change_notice_number",
+        "change notice number":     "change_notice_number",
+
+
     "engineering change number": "change_notice_number",
+    "ecn id":                   "change_notice_number",
+    "ecnid":                    "change_notice_number",
+    
     "number":                   "change_notice_number",
     "name of change":           "name_of_change",
+    "title":                    "name_of_change",
     "name":                     "name_of_change",
+    "initiator":                "author",
+    "submitted by":             "author",
+    "description":              "description_of_change",
+    "reason for change":        "reason_for_change",
+    "reasonforchange":          "reason_for_change",
+    "change actions":           "change_actions",
+    "changeactions":            "change_actions",
+    "affected assembly":        "products_affected",
+    "affected parts":           "products_affected",
+    "affectedparts":            "products_affected",
+    "date initiated":           "date",
+            "effective date":            "date",
+
+
+        "effective date":            "date",
+
+
+
+
     "project":                  "project",
     "product group":            "product_group",
     "change category":          "change_category",
@@ -333,15 +358,41 @@ def load_pdf(filepath: str) -> dict:
 
 
 # ── CSV Loader ────────────────────────────────────────────────────────────────
-def load_csv(filepath: str) -> list[dict]:
-    """Load a CSV file into a list of row dicts."""
+def load_csv(filepath: str, role: str = "bom") -> list[dict] | dict:
+    """Load and normalize CSV data for the ECN or BOM role."""
     rows = []
-    with open(filepath, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+    with open(filepath, newline="", encoding="utf-8-sig") as file:
+        reader = csv.DictReader(file)
         for row in reader:
-            rows.append({k.strip().lower(): v.strip() for k, v in row.items()})
-    logger.info("CSV loaded: %s (%d rows)", filepath, len(rows))
-    return rows
+            rows.append({
+                (key or "").strip(): (value or "").strip()
+                for key, value in row.items()
+            })
+
+    if role == "ecn":
+        header = _normalize_ecn_header(rows[0]) if rows else {}
+        logger.info("CSV ECN loaded: %s (%d fields extracted)", filepath, len(header))
+        return header
+
+    normalized_rows = []
+    for index, row in enumerate(rows, start=1):
+        normalized = _normalize_mbom_row(row)
+        if normalized:
+            line_values = {
+                _normalize_excel_key(key): (value or "").strip()
+                for key, value in row.items()
+            }
+            normalized["line_number"] = (
+                _lookup_value(line_values, "line number", "linenumber")
+                or str(index)
+            )
+            normalized_rows.append(normalized)
+
+    logger.info("CSV BOM loaded: %s (%d rows)", filepath, len(normalized_rows))
+    return normalized_rows
+
+
+
 
 
 # ── Excel Helpers ─────────────────────────────────────────────────────────────
@@ -391,12 +442,27 @@ def _normalize_mbom_row(row: dict) -> dict | None:
             "part description",
             "description",
         ),
-        "parent_part_no": _lookup_value(normalized, "parent part number"),
+                        "parent_part_no": _lookup_value(
+
+            normalized,
+            "parent part number",
+            "parent part no",
+            "parentpartnumber",
+        ),
+
+
+
         "parent_part_description": _lookup_value(
             normalized, "parent part description"
         ),
         "quantity": _lookup_value(normalized, "qty", "quantity") or "1",
-        "unit": _lookup_value(normalized, "select unit of measure") or "EA",
+                        "unit": _lookup_value(
+
+            normalized, "select unit of measure", "uom", "unit"
+        ) or "EA",
+
+
+
         "action": _lookup_value(normalized, "select action", "action"),
         "source": _lookup_value(normalized, "select bom database"),
     }
@@ -465,7 +531,15 @@ def load_excel(filepath: str, role: str = "bom") -> list[dict] | dict:
         raise ImportError("pandas is required: pip install pandas openpyxl")
 
         
-    df = pd.read_excel(filepath, header=None, dtype=str).fillna("")
+    # Only .xlsx files reach this function: legacy .xls files are converted
+    # by load_file first. Explicitly select openpyxl so pandas never probes
+    # for the optional xlrd legacy-Excel reader.
+    df = pd.read_excel(
+        filepath,
+        header=None,
+        dtype=str,
+        engine="openpyxl",
+    ).fillna("")
     grid = df.values.tolist()
     if role == "ecn":
         header = _extract_excel_ecn_header(grid)
@@ -870,23 +944,43 @@ def _convert_xls_to_xlsx(filepath: str) -> str:
 
 
 # ── Auto-detect File Loader ───────────────────────────────────────────────────
+def _is_legacy_excel_file(filepath: str) -> bool:
+    """Return whether a file uses the legacy OLE compound-document format."""
+    try:
+        return Path(filepath).read_bytes()[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+    except OSError:
+        return False
+
+
 def load_file(filepath: str, role: str = "ecn") -> list[dict] | dict:
+
     """Auto-detect file type and load it for the supplied ECN or BOM role."""
     if role not in {"ecn", "bom"}:
         raise ValueError(f"Unsupported file role: {role}")
 
+        ext = Path(filepath).suffix.lower()
+
+
+        
     ext = Path(filepath).suffix.lower()
     if ext == ".csv":
-        return load_csv(filepath)
-    if ext == ".xls":
+
+
+        return load_csv(filepath, role=role)
+
+
+    if ext in {".xls", ".xlsx"}:
+        if ext == ".xlsx" and not _is_legacy_excel_file(filepath):
+            return load_excel(filepath, role=role)
+
         converted_filepath = _convert_xls_to_xlsx(filepath)
         try:
             return load_excel(converted_filepath, role=role)
         finally:
             shutil.rmtree(Path(converted_filepath).parent, ignore_errors=True)
-    if ext == ".xlsx":
-        return load_excel(filepath, role=role)
+
     if ext == ".pdf":
+
         return load_pdf_bom(filepath) if role == "bom" else load_pdf(filepath)
     if ext in (".html", ".htm") and role == "ecn":
         return load_html(filepath)

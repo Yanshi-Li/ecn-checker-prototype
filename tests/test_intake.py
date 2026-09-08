@@ -113,8 +113,75 @@ def test_load_xls_converts_before_excel_loading(tmp_path, monkeypatch):
     assert calls == [str(source), (str(converted), "ecn")]
 
 
+def test_load_misnamed_legacy_xlsx_converts_before_openpyxl(tmp_path, monkeypatch):
+    source = tmp_path / "legacy.xlsx"
+    converted = tmp_path / "converted.xlsx"
+    source.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1legacy")
+    converted.write_bytes(b"xlsx workbook")
+    calls = []
+
+    import stages.intake as intake
+
+    monkeypatch.setattr(
+        intake,
+        "_convert_xls_to_xlsx",
+        lambda filepath: calls.append(filepath) or str(converted),
+    )
+    monkeypatch.setattr(
+        intake,
+        "load_excel",
+        lambda filepath, role: calls.append((filepath, role)) or {"loaded": True},
+    )
+
+    assert intake.load_file(str(source), role="bom") == {"loaded": True}
+    assert calls == [str(source), (str(converted), "bom")]
+
+
+def test_load_csv_ecn_maps_common_export_columns(tmp_path):
+
+    path = tmp_path / "ECN4002659.csv"
+    path.write_text(
+        "ecnId,ecn_number,date_initiated,initiator,title,description,status,affectedAssembly,effectiveDate,qualityApproval,reasonForChange,changeActions\n"
+        "ECN-4002659,4002659,2026-08-10,Lily,Controller update,Replace the controller,DRAFT,PH12,2026-09-01,FALSE,Reliability,Update BOM\n",
+        encoding="utf-8",
+    )
+
+    header = load_file(str(path), role="ecn")
+
+    assert header["change_notice_number"] == "ECN-4002659"
+    assert header["name_of_change"] == "Controller update"
+    assert header["description_of_change"] == "Replace the controller"
+    assert header["reason_for_change"] == "Reliability"
+    assert validate_ecn_header(header)["validation"]["missing_fields"] == []
+
+
+def test_load_csv_bom_normalizes_rows(tmp_path):
+    path = tmp_path / "4002659-MBOM.csv"
+    path.write_text(
+        "lineNumber,Part_Number,Description,Qty,UOM,Action,ParentPartNumber\n"
+        "1,AB-1002,Replacement bracket,2,EA,ADD,DW900\n",
+        encoding="utf-8",
+    )
+
+    rows = load_file(str(path), role="bom")
+
+    assert len(rows) == 1
+
+
+
+
+    assert rows[0]["line_number"] == "1"
+    assert rows[0]["part_number"] == "AB-1002"
+    assert rows[0]["description"] == "Replacement bracket"
+    assert rows[0]["quantity"] == "2"
+    assert rows[0]["unit"] == "EA"
+    assert rows[0]["action"] == "ADD"
+    assert rows[0]["parent_part_no"] == "DW900"
+
+
 
 def test_load_excel_ecn_form(tmp_path):
+
 
     path = tmp_path / "ECN.xlsx"
     from openpyxl import Workbook

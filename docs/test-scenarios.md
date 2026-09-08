@@ -8,6 +8,9 @@ The prototype is evaluated using sample ECN submissions across the main intake c
 - email-based ECN text export
 - form-generated ECN text
 - upload-based BOM / part master CSV and Excel files
+- CSV ECN exports with Windchill-style column names
+- legacy `.xls` conversion to `.xlsx` without importing `xlrd`
+
 - MBOM table extraction from PDF
 
 
@@ -30,12 +33,18 @@ checked-in Windchill source documents under `data/`:
 | `ECN 4078575 DD PH12 Motor Controller - PCB 519123 rev B1 Modules Update.html` | ECN; standalone HTML table fields are normalized into the ECN header schema | ECN `4078575`; all required header fields present |
 | `4078575-MBOM_xlsx.pdf` | BOM; PDF tables are normalized using the MBOM column aliases | Four sequential `ADD` rows, parts `567953`–`567956` |
 | `4078575-MBOM_xlsx.pdf` | ECN; same PDF dispatched through the ECN PDF-form loader | A header dictionary, confirming PDF dispatch is role-aware |
+| temporary CSV fixture | ECN; `ecnId`, `title`, `description`, and `reasonForChange` are mapped to canonical header fields | Required-field validation passes |
+| temporary CSV fixture | BOM; common `lineNumber`, `Part_Number`, `Qty`, `UOM`, and `ParentPartNumber` columns are normalized | Canonical BOM row fields are populated |
+
 
 The end-to-end intake scenario runs `run_intake()` with the HTML ECN and PDF
 BOM, then verifies there are no missing required ECN fields, four BOM rows, and
-both source paths in the packet. Tests also reject unsupported `load_file()`
-roles. These document-based tests depend on the corresponding files remaining
-in `data/`.
+both source paths in the packet. CSV tests exercise ECN and BOM intake through
+the same `load_file()` seam, while the `.xls` test verifies conversion is
+selected before the `openpyxl` loader and does not require `xlrd`. Tests also
+reject unsupported `load_file()` roles. These document-based tests depend on
+the corresponding files remaining in `data/`.
+
 
 ## Rule catalogue regression scenarios
 
@@ -53,18 +62,17 @@ and [the rule schema](rules_schema.md) for the migration contract.
 
 ## Node 3 semantic advisory test matrix
 
-The policy catalogue assigns the following semantic rules to AI Advisory. The
-current advisory implementation is tested for its existing semantic behavior;
-the policy IDs become emitted finding IDs when unified-finding migration is
-implemented.
+The policy catalogue assigns S01–S05 to AI Advisory. The advisory prompt is
+built from the active catalogue definitions and runtime findings use canonical
+S rule IDs; legacy A rule IDs are not emitted.
 
 | Policy rule | Semantic expectation | Test focus |
 |---|---|---|
-| S01 | Description semantically aligns to BOM change intent | Flag missing BOM context when BOM parts are not described |
+| S01 | Description semantically aligns to BOM change intent | LLM rule; fallback reports `NOT_EVALUATED` |
 | S02 | Parts mentioned in description appear in BOM rows | Flag description-only parts not present in BOM |
 | S03 | Description verbs align with BOM task/action | Flag contradiction between "replace/add/remove" language and BOM action |
 | S04 | Products affected align with BOM parent assemblies | Flag mismatch between `affected_parts` and BOM parent assembly fields |
-| S05 | Part description starts with naming noun | Flag part descriptions that start with action verbs (for example "Replace ...") |
+| S05 | Part description starts with naming noun | LLM rule; fallback reports `NOT_EVALUATED` |
 
 
 ### AI response integrity scenarios
