@@ -5,7 +5,6 @@ import datetime as dt
 import importlib.util
 import io
 import hmac
-import importlib.util
 import os
 import sys
 import tempfile
@@ -237,7 +236,7 @@ def _finding_rows(findings: list[dict]) -> list[dict]:
 def _render_findings(title: str, findings: list[dict]) -> None:
     with st.expander(f"{title} ({len(findings)})"):
         if findings:
-            st.dataframe(_finding_rows(findings), hide_index=True, use_container_width=True)
+            st.dataframe(_finding_rows(findings), hide_index=True, width="stretch")
         else:
             st.info(f"No {title.lower()} found.")
 
@@ -284,7 +283,7 @@ def _render_manual_form() -> tuple[dict[str, object], list[dict[str, object]]] |
         default_rows,
         num_rows="dynamic",
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "line_number": st.column_config.NumberColumn("Line Number", min_value=1, step=1),
             "quantity": st.column_config.TextColumn("Quantity"),
@@ -303,7 +302,7 @@ def _render_ai_notes(ai_notes: dict) -> None:
         if ai_notes.get("recommendation"):
             st.write(ai_notes["recommendation"])
         if flags:
-            st.dataframe(_finding_rows(flags), hide_index=True, use_container_width=True)
+            st.dataframe(_finding_rows(flags), hide_index=True, width="stretch")
         else:
             st.info("No AI advisory flags found.")
 
@@ -312,8 +311,7 @@ def main() -> None:
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
     # Password access control is temporarily disabled for local testing.
     st.title("ECN Checker")
-    st.caption("Validate an Engineering Change Notice and BOM, then send the report for review.")
-    st.info("Validation does not approve or reject an ECN. Email sends a validation report only.")
+
 
     mode = st.radio("Input method", ["Upload files", "Manual intake"], horizontal=True, key="input_mode")
     temporary_paths: list[str] = []
@@ -323,14 +321,14 @@ def main() -> None:
         with upload_column:
             ecn_file = st.file_uploader(
                 "Step 1 — Upload ECN file",
-                type=SUPPORTED_FILE_TYPES,
-                help="CSV, Excel, PDF, or EML files are supported by the intake stage.",
+                type=ECN_FILE_TYPES,
+                help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
             )
         with bom_column:
             bom_file = st.file_uploader(
                 "Step 2 — Upload BOM file",
-                type=SUPPORTED_FILE_TYPES,
-                help="CSV, Excel, PDF, or EML files are supported by the intake stage.",
+                type=BOM_FILE_TYPES,
+                help="CSV, Excel, or PDF files are supported by the intake stage.",
             )
         can_run = bool(ecn_file and bom_file)
     else:
