@@ -109,6 +109,20 @@ class _FakeSMTP:
         self.sent = (sender, recipients, message)
 
 
+class _FailingSMTP:
+    def __init__(self, host, port):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def starttls(self):
+        raise RuntimeError("SMTP password should not appear in logs")
+
+
 def test_send_validation_email_uses_fixed_recipient_without_mutating_packet():
     packet = _packet("PASS")
     result = notification.send_validation_email(
@@ -125,3 +139,23 @@ def test_send_validation_email_reports_missing_configuration_without_leaking_sec
     result = notification.send_validation_email(_packet(), environ={"SMTP_USER": "sender@example.com"})
     assert result == {"sent": False, "status": "not_configured", "message": "SMTP is not configured."}
     assert "secret" not in result["message"]
+
+
+def test_send_validation_email_logs_safe_failure_details(caplog):
+    result = notification.send_validation_email(
+        _packet(),
+        secrets={
+            "SMTP_HOST": "smtp.example.com",
+            "SMTP_PORT": "587",
+            "SMTP_USER": "sender@example.com",
+            "SMTP_PASS": "secret",
+        },
+        smtp_factory=_FailingSMTP,
+    )
+
+    assert result == {"sent": False, "status": "failed", "message": "Email could not be sent."}
+    assert "SMTP delivery failed during starttls (RuntimeError) to smtp.example.com:587" in caplog.text
+    assert "SMTP password should not appear in logs" not in caplog.text
+    assert "secret" not in caplog.text
+
+

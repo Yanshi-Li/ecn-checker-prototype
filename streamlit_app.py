@@ -236,7 +236,7 @@ def _finding_rows(findings: list[dict]) -> list[dict]:
 def _render_findings(title: str, findings: list[dict]) -> None:
     with st.expander(f"{title} ({len(findings)})"):
         if findings:
-            st.dataframe(_finding_rows(findings), hide_index=True, use_container_width=True)
+            st.dataframe(_finding_rows(findings), hide_index=True, width="stretch")
         else:
             st.info(f"No {title.lower()} found.")
 
@@ -283,7 +283,7 @@ def _render_manual_form() -> tuple[dict[str, object], list[dict[str, object]]] |
         default_rows,
         num_rows="dynamic",
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "line_number": st.column_config.NumberColumn("Line Number", min_value=1, step=1),
             "quantity": st.column_config.TextColumn("Quantity"),
@@ -302,7 +302,7 @@ def _render_ai_notes(ai_notes: dict) -> None:
         if ai_notes.get("recommendation"):
             st.write(ai_notes["recommendation"])
         if flags:
-            st.dataframe(_finding_rows(flags), hide_index=True, use_container_width=True)
+            st.dataframe(_finding_rows(flags), hide_index=True, width="stretch")
         else:
             st.info("No AI advisory flags found.")
 

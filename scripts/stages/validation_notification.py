@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import smtplib
 from email.mime.text import MIMEText
 from typing import Mapping
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_RECIPIENT = "yanshili645@gmail.com"
 SMTP_KEYS = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS")
+
 
 
 def _value(source: Mapping[str, object] | None, key: str) -> str:
@@ -101,12 +105,26 @@ def send_validation_email(
     message["From"] = settings["SMTP_USER"]
     message["To"] = recipient
 
+    phase = "connect"
     try:
         with smtp_factory(settings["SMTP_HOST"], int(settings["SMTP_PORT"])) as server:
+            phase = "starttls"
             server.starttls()
+            phase = "login"
             server.login(settings["SMTP_USER"], settings["SMTP_PASS"])
+            phase = "sendmail"
             server.sendmail(settings["SMTP_USER"], [recipient], message.as_string())
-    except Exception:
+    except Exception as exc:
+        # Never log SMTP credentials, addresses, or exception text: provider
+        # errors can echo request data. The exception type and phase are enough
+        # to distinguish connection, TLS, authentication, and delivery errors.
+        logger.error(
+            "SMTP delivery failed during %s (%s) to %s:%s",
+            phase,
+            type(exc).__name__,
+            settings["SMTP_HOST"],
+            settings["SMTP_PORT"],
+        )
         return {"sent": False, "status": "failed", "message": "Email could not be sent."}
 
     return {"sent": True, "status": "sent", "message": f"Validation report sent to {recipient}."}
