@@ -22,9 +22,9 @@ Engineer submits ECN + BOM File from email / form / upload
          │ Structured Data
          ▼
 ┌─────────────────────┐
-│  Stage 2: Rule      │  R01 Required Fields  R02 Part Number Format
-│  Engine             │  R03 Duplicate Lines  R04 Zero-Qty Check
-└────────┬────────────┘  R05 Change Type      R06 Date Format
+│  Stage 2: Rule      │  Catalogue-driven H01/H03 required fields,
+│  Engine             │  H11 quantity, H12 duplicates; R02 compatibility check
+└────────┬────────────┘
          │ Errors Found → Real-Time Warning shown to Engineer
          ▼
 ┌─────────────────────┐
@@ -35,45 +35,84 @@ Engineer submits ECN + BOM File from email / form / upload
          ▼
 ┌─────────────────────┐
 │  Stage 4: Context   │  Parts Master: Active / Obsolete / Phase-Out
-│  Engine (RAG)       │  Historical ECN Conflict Check
+│  Engine (RAG)       │  Part-master status and data checks
 └────────┬────────────┘
          │
          ▼
 ┌─────────────────────┐
-│  Stage 5: Dashboard │  Engineer View: Fix Errors in Real-Time
-│  (HTML)             │  BOM Coordinator View: Full Audit Package
+│  Stage 5: Dashboard │  Engineer View: validation and gate results
+│  (HTML)             │  Audit package and advisory context
 └────────┬────────────┘
-         │ Audit Package Ready
+         │ Gate decision
          ▼
 ┌─────────────────────┐
-│  Stage 6: BOM       │  APPROVE → ECN Released + Email
-│  Coordinator        │  REJECT  → ECN to Draft + Feedback Email
+│  Stage 6: Email     │  FAIL → Engineer: fix and resubmit
+│  Notification       │  PASS → Engineer + CE: ready for CE review
 └─────────────────────┘
 
-## Rule IDs
 
-| ID  | Description                        | Severity |
-|-----|------------------------------------|----------|
-| R01 | Required fields present            | ERROR    |
-| R02 | Part number format valid           | ERROR    |
-| R03 | No duplicate BOM lines             | WARNING  |
-| R04 | No zero/negative quantity          | ERROR    |
-| R05 | Change type in approved list       | WARNING  |
-| R06 | Date in YYYY-MM-DD format          | WARNING  |
+## Rule policy and current runtime checks
+
+The versioned policy catalogue is [`docs/rules_list.json`](rules_list.json). It
+contains 32 approved rules with stable IDs: hard rules `H01`–`H23`, semantic
+rules `S01`–`S05`, and data rules `D01`–`D04`. Each definition declares its
+scope, evaluator, severity, gate effect, message, and evidence inputs. The
+human-readable policy source is [`docs/rules_origin.txt`](rules_origin.txt),
+and the full schema and target finding contract are in
+[`docs/rules_schema.md`](rules_schema.md).
+
+`scripts/rule_catalogue.py` validates the catalogue at stage startup and maps
+rules to their intended owners:
+
+| Intended owner | Evaluators | Policy IDs |
+|---|---|---|
+| Rule Engine | `deterministic` | H01–H03, H06–H08, H11–H12, H14–H22 |
+| Context Engine | `reference_lookup` | H09–H10, H13, D01–D04 |
+| AI Advisory | `semantic_heuristic`, `llm_advisory` | H04–H05, H23, S01–S05 |
+
+### Implementation status
+
+The catalogue is both policy source of truth and runtime selection registry. Entries
+with `runtime_status: "active"` are dispatched by their `check` through the Rule
+Engine registry. The active deterministic migration is:
+
+| Catalogue ID | Implemented check | Legacy compatibility |
+|---|---|---|
+| H01, H03 | Required name and description | none; canonical IDs are emitted |
+| H11 | Positive decimal quantity, including catalogue applicability and precision | none; canonical ID is emitted |
+| H12 | Duplicate BOM change lines | none; canonical ID is emitted |
+
+Unmigrated catalogue entries are explicitly marked `runtime_status: "planned"`
+and are not executed by this incremental change. R02 remains an explicit
+compatibility check because `rules_origin.txt` and the catalogue contain no
+approved part-number-format rule. It is not a catalogue finding and remains
+clearly marked with `legacy_rule_id`.
+
+Context checks likewise emit flag types such as `DISCONTINUED_PART`,
+`MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`. The merge step
+uses those legacy `ERROR` values and configured context flag types for the
+current PASS/FAIL decision. The AI Advisory prompt is generated from active
+catalogue definitions for S01–S05, and its flags carry canonical rule IDs plus
+catalogue metadata and evidence. Legacy A rule IDs are not emitted. S01 and
+S05 are LLM-owned; when the provider is unavailable the fallback reports them
+as `NOT_EVALUATED` and evaluates only the semantic-heuristic rules S02–S04.
+AI findings remain advisory and do not close the gate.
+
 
 ## Key Files
 
 | File                          | Role                          |
 |-------------------------------|-------------------------------|
 | `scripts/run_hybrid.py`       | Main orchestrator / CLI       |
-| `scripts/intake.py`           | Stage 1: Parse ECN + BOM      |
-| `scripts/rule_engine.py`      | Stage 2: Deterministic rules  |
-| `scripts/ai_advisory.py`      | Stage 3: AI / fallback checks |
-| `scripts/context_engine.py`   | Stage 4: Parts + history RAG  |
-| `scripts/dashboard.py`        | Stage 5: HTML dashboard       |
-| `scripts/approval_workflow.py`| Stage 6: Approve/reject/email |
-| `data/parts_master.csv`       | Parts status database         |
-| `data/ecn_history.csv`        | Historical ECN records        |
+| `scripts/stages/intake.py` | Stage 1: Parse ECN + BOM |
+| `scripts/stages/rule_engine.py` | Stage 2: Deterministic rules |
+| `scripts/stages/ai_advisory.py` | Stage 3: AI / fallback checks |
+| `scripts/rule_catalogue.py` | Validates the rule catalogue and returns rules by intended stage owner |
+| `scripts/stages/context_engine.py` | Stage 4: Parts/reference-data checks |
+| `scripts/stages/dashboard.py` | Stage 5: HTML dashboard |
+| `scripts/stages/email_notification.py` | Stage 6: gate-driven SendGrid email |
+
+| `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
 | `data/ecn_intake.csv`         | Sample ECN input              |
 | `data/bom.csv`                | Sample BOM input              |
 
@@ -85,5 +124,30 @@ Engineer submits ECN + BOM File from email / form / upload
 | `GEMINI_MODEL`   | Optional Gemini model override (default: `gemini-2.5-flash`)   |
 | `OPENAI_API_KEY` | Enables AI Advisory (Stage 3) via OpenAI API                   |
 | `OPENAI_MODEL`   | Optional OpenAI model override (default: `gpt-4o-mini`)        |
+| `SENDGRID_API_KEY` | Enables SendGrid notification delivery (Stage 6)              |
+| `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address for Stage 6 notifications   |
+| `DRY_RUN` | Defaults to `true`; set explicitly false only to send email          |
 
-## Running
+
+## AI advisory response contract
+
+Stage 3 stores an advisory object with `overall_risk`, `description_quality`,
+`flags`, `recommendation`, `ai_available`, and `response_status`. A provider may
+return an empty `flags` list only for a `LOW` / `CLEAR` assessment. Every model
+flag must identify one of S01–S05; invalid or missing rule IDs produce an
+`AI_RESPONSE_INCOMPLETE` advisory flag and set `response_status` to
+`INCOMPLETE`. If a provider returns `MEDIUM` or `HIGH` risk, or `VAGUE` or
+`CONTRADICTING` quality, without supporting flags, the same integrity flag is
+added. This is advisory only; it makes missing evidence visible and requires
+manual review rather than silently showing “No AI flags.”
+
+## Key design decisions
+
+- ECN Conflict Log is not available in the current implementation.
+
+
+                                
+                                
+                                
+                                
+                                

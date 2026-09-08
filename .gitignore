@@ -24,6 +24,5 @@ Thumbs.db
 .env
 .streamlit/secrets.toml
 config-local.properties
-
 .continue/config.yaml
-
+.continue/skills/

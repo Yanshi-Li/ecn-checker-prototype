@@ -38,6 +38,11 @@ For Streamlit Community Cloud, add the same keys under **Settings → Secrets**.
 Secrets take precedence over environment variables. Never commit SMTP
 credentials.
 
+Password access control is temporarily disabled, so `APP_PASSWORD` is not required and the interface opens directly. Re-enable the `_require_access()` check in `streamlit_app.py` before deploying the app beyond this temporary testing period. The app runs intake, validation, advisory, context, and merge stages when **Run Checks** is selected. It does not send email on page load or when checks run. A user must separately enter the notification recipients and select **Send Notification Email**. Keep `DRY_RUN=true` in Streamlit secrets unless live SendGrid delivery has been explicitly approved.
+
+## SendGrid sender verification
+
+Before enabling real notification sends, verify the domain used by `EMAIL_FROM_ADDRESS` in the SendGrid dashboard. Use **Domain Authentication** (SPF/DKIM DNS records) for the long-term production setup, or **Single Sender Verification** for limited testing. SendGrid rejects mail from an unverified sender. This verification applies only to the sender address/domain; recipient domains, including `fisherpaykel.com`, require no SendGrid verification.
 
 For local development, run:
 

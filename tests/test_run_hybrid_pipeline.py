@@ -1,7 +1,15 @@
+
+
+
+
+
+
+
 import argparse
 import importlib.util
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 RUN_HYBRID_PATH = ROOT / "scripts" / "run_hybrid.py"
@@ -18,7 +26,7 @@ def test_pipeline_runs_with_semantic_advisory_and_outputs(tmp_path, monkeypatch)
     out_dir = tmp_path / "out"
 
     ecn_path.write_text(
-        "ecn_id,title,description,author,date,affected_parts,change_type\n"
+        "Change Notice Number,title,description,author,date,affected_parts,change_type\n"
         "ECN-SEM-001,Semantic test,Replace AB-1001 with AB-1002 for reliability,QA User,2026-08-14,RF600,add\n",
         encoding="utf-8",
     )
@@ -28,23 +36,53 @@ def test_pipeline_runs_with_semantic_advisory_and_outputs(tmp_path, monkeypatch)
         encoding="utf-8",
     )
 
+        
     monkeypatch.setattr(run_hybrid, "ROOT", tmp_path)
     monkeypatch.setattr(run_hybrid.dashboard_mod, "OUT_DIR", out_dir)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     args = argparse.Namespace(
         ecn=str(ecn_path),
         bom=str(bom_path),
         engineer_email="engineer@example.com",
-        coordinator_email="coordinator@example.com",
-        auto_decision="none",
-        reject_reason="",
+        ce_email="ce@example.com",
     )
+
     packet = run_hybrid.run_pipeline(args)
 
     ai_flags = packet["validation"]["ai_flags"]
+
     assert ai_flags["ai_available"] is False
-    assert any(flag.get("rule_id") == "A03" for flag in ai_flags["flags"])
-    assert any(flag.get("rule_id") == "A04" for flag in ai_flags["flags"])
-    assert any(flag.get("rule_id") == "A05" for flag in ai_flags["flags"])
+    assert any(flag.get("rule_id") == "S03" for flag in ai_flags["flags"])
+
+    assert any(flag.get("rule_id") == "S04" for flag in ai_flags["flags"])
+    assert any(flag.get("rule_id") == "S05" and flag.get("evaluation_status") == "NOT_EVALUATED"
+               for flag in ai_flags["flags"])
+    assert not any(flag.get("rule_id", "").startswith("A") for flag in ai_flags["flags"])
+
     assert (out_dir / "dashboard.html").exists()
     assert (out_dir / "ai_summary.md").exists()
+
+
+
+def test_pipeline_normalizes_none_bom_before_checking_length(monkeypatch):
+    args = argparse.Namespace(
+        ecn="ecn.html",
+        bom=None,
+        engineer_email="engineer@example.com",
+        ce_email="ce@example.com",
+    )
+
+    class IntakeReached(Exception):
+        pass
+
+    def fake_run_intake(ecn_path, bom_path):
+        assert ecn_path == "ecn.html"
+        assert bom_path is None
+        raise IntakeReached
+
+    monkeypatch.setattr(run_hybrid, "run_intake", fake_run_intake)
+
+    with pytest.raises(IntakeReached):
+        run_hybrid.run_pipeline(args)

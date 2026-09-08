@@ -4,3 +4,5 @@ openpyxl
 pdfplumber
 httpx
 openai
+sendgrid
+pytest
