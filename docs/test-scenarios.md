@@ -53,18 +53,17 @@ and [the rule schema](rules_schema.md) for the migration contract.
 
 ## Node 3 semantic advisory test matrix
 
-The policy catalogue assigns the following semantic rules to AI Advisory. The
-current advisory implementation is tested for its existing semantic behavior;
-the policy IDs become emitted finding IDs when unified-finding migration is
-implemented.
+The policy catalogue assigns S01–S05 to AI Advisory. The advisory prompt is
+built from the active catalogue definitions and runtime findings use canonical
+S rule IDs; legacy A rule IDs are not emitted.
 
 | Policy rule | Semantic expectation | Test focus |
 |---|---|---|
-| S01 | Description semantically aligns to BOM change intent | Flag missing BOM context when BOM parts are not described |
+| S01 | Description semantically aligns to BOM change intent | LLM rule; fallback reports `NOT_EVALUATED` |
 | S02 | Parts mentioned in description appear in BOM rows | Flag description-only parts not present in BOM |
 | S03 | Description verbs align with BOM task/action | Flag contradiction between "replace/add/remove" language and BOM action |
 | S04 | Products affected align with BOM parent assemblies | Flag mismatch between `affected_parts` and BOM parent assembly fields |
-| S05 | Part description starts with naming noun | Flag part descriptions that start with action verbs (for example "Replace ...") |
+| S05 | Part description starts with naming noun | LLM rule; fallback reports `NOT_EVALUATED` |
 
 
 ### AI response integrity scenarios

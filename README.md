@@ -10,7 +10,7 @@ The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the curre
 
 1. **Intake** — parses the required ECN and optional single BOM, adds source-file metadata, and normalizes them into one packet.
 2. **Rule Engine** — applies the currently implemented deterministic checks for required ECN fields, part-number format, duplicate BOM lines, and quantity.
-3. **AI Advisory** — reviews ECN/BOM semantics using OpenAI first (or Gemini when OpenAI is not configured); otherwise it uses deterministic advisory heuristics.
+3. **AI Advisory** — reviews catalogue-defined semantic rules S01–S05 using OpenAI first, retries with Gemini when OpenAI fails and Gemini is configured, and otherwise evaluates S02–S04 heuristically while reporting LLM-owned S01/S05 as `NOT_EVALUATED`. Legacy A rule IDs are not emitted.
 4. **Context Engine** — checks BOM parts directly against `data/Part_Master.csv` and writes audit artifacts under `out/context_engine/`; it does not generate a parts-master copy.
 5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors and selected part issues close the gate, while warnings and AI notes remain advisory.
 6. **Dashboard** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; the Streamlit app renders the gate findings directly.
@@ -103,7 +103,7 @@ For local CLI use, the AI advisory reads a repository-root `.env` file; process 
 
 | Variable | Purpose | Used by | Example/default |
 |---|---|---|---|
-| `GEMINI_API_KEY` | Enables Gemini AI advisory when no OpenAI key is configured. | CLI and Streamlit | `your-gemini-api-key` |
+| `GEMINI_API_KEY` | Enables Gemini AI advisory when OpenAI is unavailable or fails. | CLI and Streamlit | `your-gemini-api-key` |
 | `GEMINI_MODEL` | Gemini model override. | CLI and Streamlit | `gemini-2.5-flash` |
 | `GEMINI_BASE_URL` | Gemini OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://generativelanguage.googleapis.com/v1beta/openai/` |
 | `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory; preferred when both AI keys are set. | CLI and Streamlit | `your-openai-api-key` |
@@ -131,7 +131,7 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers and 
 - Intake is template- and label-driven. ECN PDF parsing relies on known field labels; HTML parsing is designed for label/value tables (including the checked-in Windchill export); and email parsing expects recognizable labels such as ECN ID, Title, Description, and Change Type.
 - PDF BOM extraction only recognizes extractable tables with MBOM-like **Part Number** and **Action** headers. Scanned PDFs and differently structured tables may yield no rows or need a parser enhancement.
 - Each comparison intentionally accepts at most one BOM. The CLI can repeat `--bom` up to four times, but processes each BOM independently and writes suffixed dashboard/summary artifacts for multi-BOM runs. A BOM filename containing a different ECN number is retained as a non-gating warning asking the user to check the filename.
-- AI review is advisory only and is limited to the first 20 BOM lines sent to the model. If no usable provider/key is available, the rule-based fallback is used.
+- AI review is advisory only and is limited to the first 20 BOM lines sent to the model. OpenAI is attempted first; if it fails and Gemini is configured, Gemini is attempted before the catalogue-driven fallback evaluates S02–S04 and marks S01/S05 `NOT_EVALUATED`.
 - The gate does not fail for every context warning. It closes for rule findings with `gate_effect == "FAIL"`, `DISCONTINUED_PART`, `MISSING_SUPPLIER`, and `UOM_MISMATCH`; source filename warnings, other context flags, rule warnings, and AI findings are advisory.
 - BOM structure records append on each run under `out/context_engine/`; clean or manage these generated artifacts as appropriate for repeatable local work.
 - ECN Conflict Log is not available in the current implementation.

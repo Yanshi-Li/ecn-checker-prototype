@@ -91,10 +91,12 @@ clearly marked with `legacy_rule_id`.
 Context checks likewise emit flag types such as `DISCONTINUED_PART`,
 `MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`. The merge step
 uses those legacy `ERROR` values and configured context flag types for the
-current PASS/FAIL decision. Catalogue findings use the unified finding contract, including catalogue severity,
-gate effect, rule version, location, and evidence. The merge step closes the gate
-for rule findings only when `gate_effect == "FAIL"`. Context flags and AI findings
-remain on their existing contracts and are not part of this migration.
+current PASS/FAIL decision. The AI Advisory prompt is generated from active
+catalogue definitions for S01–S05, and its flags carry canonical rule IDs plus
+catalogue metadata and evidence. Legacy A rule IDs are not emitted. S01 and
+S05 are LLM-owned; when the provider is unavailable the fallback reports them
+as `NOT_EVALUATED` and evaluates only the semantic-heuristic rules S02–S04.
+AI findings remain advisory and do not close the gate.
 
 
 ## Key Files
@@ -131,12 +133,13 @@ remain on their existing contracts and are not part of this migration.
 
 Stage 3 stores an advisory object with `overall_risk`, `description_quality`,
 `flags`, `recommendation`, `ai_available`, and `response_status`. A provider may
-return an empty `flags` list only for a `LOW` / `CLEAR` assessment. If a provider
-returns `MEDIUM` or `HIGH` risk, or `VAGUE` or `CONTRADICTING` quality, without
-supporting flags, the checker adds an `AI_RESPONSE_INCOMPLETE` advisory flag and
-sets `response_status` to `INCOMPLETE`. This is advisory only; it makes the
-missing evidence visible and requires manual review rather than silently showing
-“No AI flags.”
+return an empty `flags` list only for a `LOW` / `CLEAR` assessment. Every model
+flag must identify one of S01–S05; invalid or missing rule IDs produce an
+`AI_RESPONSE_INCOMPLETE` advisory flag and set `response_status` to
+`INCOMPLETE`. If a provider returns `MEDIUM` or `HIGH` risk, or `VAGUE` or
+`CONTRADICTING` quality, without supporting flags, the same integrity flag is
+added. This is advisory only; it makes missing evidence visible and requires
+manual review rather than silently showing “No AI flags.”
 
 ## Key design decisions
 

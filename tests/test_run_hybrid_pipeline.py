@@ -54,9 +54,13 @@ def test_pipeline_runs_with_semantic_advisory_and_outputs(tmp_path, monkeypatch)
     ai_flags = packet["validation"]["ai_flags"]
 
     assert ai_flags["ai_available"] is False
-    assert any(flag.get("rule_id") == "A03" for flag in ai_flags["flags"])
-    assert any(flag.get("rule_id") == "A04" for flag in ai_flags["flags"])
-    assert any(flag.get("rule_id") == "A05" for flag in ai_flags["flags"])
+    assert any(flag.get("rule_id") == "S03" for flag in ai_flags["flags"])
+
+    assert any(flag.get("rule_id") == "S04" for flag in ai_flags["flags"])
+    assert any(flag.get("rule_id") == "S05" and flag.get("evaluation_status") == "NOT_EVALUATED"
+               for flag in ai_flags["flags"])
+    assert not any(flag.get("rule_id", "").startswith("A") for flag in ai_flags["flags"])
+
     assert (out_dir / "dashboard.html").exists()
     assert (out_dir / "ai_summary.md").exists()
 
