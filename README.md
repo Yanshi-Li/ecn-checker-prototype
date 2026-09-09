@@ -20,7 +20,7 @@ The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the curre
 
 `docs/rules_list.json` is the versioned machine-readable policy catalogue. It retains the business-rule IDs `H01`–`H23`, `S01`–`S05`, and `D01`–`D04`, and assigns each rule to a deterministic, reference-data, semantic-heuristic, or LLM-advisory evaluator. `scripts/rule_catalogue.py` validates that file and provides the ownership mapping used by the pipeline stages.
 
-The catalogue is the policy and migration source of truth; `docs/rules_origin.txt` preserves its approved human-readable source. Active entries (`runtime_status: "active"`) are dispatched through registered stage evaluators and emit the unified finding contract. The incremental migration currently activates H01, H03, H11, and H12; explicitly planned entries are not runtime checks. R02 remains a clearly marked compatibility check because it has no catalogue policy entry.
+The catalogue is the policy and migration source of truth; `docs/rules_origin.txt` preserves its approved human-readable source. Active entries (`runtime_status: "active"`) are dispatched through registered stage evaluators and emit the unified finding contract. The incremental migration currently activates H01, H03, H11, H12, and H24; explicitly planned entries are not runtime checks. The part-number format check is now canonical H24 and is selected from the catalogue like the other deterministic checks.
 
 See [docs/architecture.md](docs/architecture.md) for the workflow, [docs/rules_schema.md](docs/rules_schema.md) for the rule contract, and [docs/rules_origin.txt](docs/rules_origin.txt) for the readable policy table.
 

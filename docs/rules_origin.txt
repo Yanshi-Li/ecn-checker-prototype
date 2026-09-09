@@ -27,6 +27,7 @@
 | H21 | Existing Child Description must be present if there is a Part Number | BOM Structure | 🔴 Blocker | Existing Child Description is missing |
 | H22 | New Child Description must be present if there is a Part Number | BOM Structure | 🔴 Blocker | New Child Description is missing |
 | H23 | Description of Change contains two or more words from: "electrical", "water", "safety concern" | Change Details | 🟡 Warning | Words "electrical", "water", "safety concern" need to be checked, better to change to others |
+| H24 | Part number must contain 5 or 6 digits when provided | BOM Structure | 🔴 Blocker | Part number must contain 5 or 6 digits when provided |
 
 ---
 

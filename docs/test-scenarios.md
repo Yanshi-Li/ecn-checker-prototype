@@ -48,15 +48,15 @@ the corresponding files remaining in `data/`.
 
 ## Rule catalogue regression scenarios
 
-`tests/test_rule_catalogue.py` validates the policy registry independently of
-the legacy runtime checks. It verifies that `docs/rules_list.json` is valid,
+`tests/test_rule_catalogue.py` validates the policy registry and its active
+rule-engine evaluator mapping. It verifies that `docs/rules_list.json` is valid,
 contains every ID in `docs/rules_origin.txt`, rejects duplicate IDs and unknown
 evaluators, and maps each policy rule to its intended pipeline stage. This
 ensures a policy-file edit cannot silently create an ambiguous or unowned rule.
 
-The catalogue is not yet a dispatcher for the legacy evaluators. Therefore,
-these tests prove catalogue integrity and ownership only; they do not prove
-that every `H`, `S`, or `D` rule is enforced in a pipeline run. See
+Active deterministic catalogue entries are dispatched by the rule-engine
+registry. These tests prove catalogue integrity and evaluator ownership; they
+do not claim that planned `H`, `S`, or `D` rules are enforced in a pipeline run. See
 [the architecture implementation-status note](architecture.md#implementation-status)
 and [the rule schema](rules_schema.md) for the migration contract.
 

@@ -437,7 +437,7 @@ def _check_quantity_anomalies(bom: list[dict], parts_db: dict) -> list[dict]:
                                f"has quantity {qty} exceeding reference max of {max_qty}.",
                 })
         except ValueError:
-            pass  # non-numeric quantities already caught by R04
+            pass  # non-numeric quantities are handled by the active quantity rule
 
     return flags
 
