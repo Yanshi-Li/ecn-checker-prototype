@@ -28,13 +28,13 @@ def test_active_catalogue_is_valid_and_contains_each_source_rule():
 
     assert DEFAULT_CATALOGUE_PATH == ROOT / "docs" / "rules_list.json"
     assert catalogue["source"] == "docs/rules_origin.txt"
-    assert len(catalogue["rules"]) == 32
+    assert len(catalogue["rules"]) == 33
     assert catalogue_ids == source_ids
 
 
 def test_rules_are_assigned_to_their_owning_pipeline_stage():
     assert {rule["id"] for rule in rules_for_engine("rule_engine")} == {
-        "H01", "H03", "H11", "H12",
+        "H01", "H03", "H11", "H12", "H24",
     }
     assert {rule["id"] for rule in rules_for_engine("context_engine")} == {
         "D01", "D02", "D03", "D04",
@@ -42,6 +42,15 @@ def test_rules_are_assigned_to_their_owning_pipeline_stage():
     assert {rule["id"] for rule in rules_for_engine("ai_advisory")} == {
         "H23", "S01", "S02", "S03", "S04", "S05",
     }
+
+
+def test_every_active_rule_engine_check_has_an_evaluator():
+    from rule_engine import EVALUATOR_REGISTRY
+
+    assert all(
+        rule["check"] in EVALUATOR_REGISTRY
+        for rule in rules_for_engine("rule_engine")
+    )
 
 
 def test_catalogue_rejects_duplicate_rule_ids(tmp_path):

@@ -36,7 +36,7 @@ except ImportError:
     HAS_PDF = False
 
 # ── Required ECN Fields ───────────────────────────────────────────────────────
-# Only these ECN form headers are validated by R01.
+# These canonical ECN form headers are validated by active catalogue rules H01/H03.
 REQUIRED_ECN_FIELDS = [
     "description_of_change",
     "name_of_change",

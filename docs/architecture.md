@@ -23,7 +23,7 @@ Engineer submits ECN + BOM File from email / form / upload
          ▼
 ┌─────────────────────┐
 │  Stage 2: Rule      │  Catalogue-driven H01/H03 required fields,
-│  Engine             │  H11 quantity, H12 duplicates; R02 compatibility check
+│  Engine             │  H11 quantity, H12 duplicates, and H24 part-number format
 └────────┬────────────┘
          │ Errors Found → Real-Time Warning shown to Engineer
          ▼
@@ -81,12 +81,12 @@ Engine registry. The active deterministic migration is:
 | H01, H03 | Required name and description | none; canonical IDs are emitted |
 | H11 | Positive decimal quantity, including catalogue applicability and precision | none; canonical ID is emitted |
 | H12 | Duplicate BOM change lines | none; canonical ID is emitted |
+| H24 | Part-number format | none; canonical ID is emitted |
 
 Unmigrated catalogue entries are explicitly marked `runtime_status: "planned"`
-and are not executed by this incremental change. R02 remains an explicit
-compatibility check because `rules_origin.txt` and the catalogue contain no
-approved part-number-format rule. It is not a catalogue finding and remains
-clearly marked with `legacy_rule_id`.
+and are not executed by this incremental change. The part-number format policy is represented by the approved H24 catalogue
+entry and emits the unified finding contract; no Rxx compatibility finding is
+emitted by the staged rule engine.
 
 Context checks likewise emit flag types such as `DISCONTINUED_PART`,
 `MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`. The merge step

@@ -3,15 +3,13 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from typing import Any, Callable
 
 from rule_catalogue import load_rule_catalogue, rules_for_engine
 
 
-PART_NUMBER_PATTERN = re.compile(r"^\d{5,6}$")
-Evaluator = Callable[[dict, dict], list[dict]]
+Evaluator = Callable[[dict, dict, dict], list[dict]]
 
 
 class UnknownRuleEvaluatorError(ValueError):
@@ -131,18 +129,26 @@ def evaluate_positive_decimal(packet: dict, rule: dict, catalogue: dict) -> list
     return findings
 
 
-def evaluate_compatibility_part_number(packet: dict) -> list[dict]:
-    """R02 remains temporary: rules_origin has no canonical part-format rule."""
+def evaluate_part_number_format(packet: dict, rule: dict, catalogue: dict) -> list[dict]:
+    """Require supplied BOM part numbers to contain the configured digit count."""
+    parameters = rule.get("parameters", {})
+    minimum_digits = parameters.get("minimum_digits", 5)
+    maximum_digits = parameters.get("maximum_digits", 6)
+    expected = f"{minimum_digits} or {maximum_digits} digits when provided"
     findings = []
     for row in packet.get("bom", []):
-        part = row.get("part_number", "").strip()
-        if part and not PART_NUMBER_PATTERN.fullmatch(part):
-            findings.append({
-                "rule_id": "R02", "legacy_rule_id": "R02", "severity": "ERROR", "gate_effect": "FAIL",
-                "field": "part_number", "line": row.get("line_number", "?"),
-                "value": part,
-                "message": f"Part number '{part}' on line {row.get('line_number', '?')} must contain 5 or 6 digits when provided (e.g. 12345 or 123456).",
-            })
+        part = str(row.get("part_number", "")).strip()
+        valid = part.isdigit() and minimum_digits <= len(part) <= maximum_digits
+        if part and not valid:
+            line = row.get("line_number", "?")
+            findings.append(_finding(
+                rule, catalogue,
+                location={"line_number": line, "field": "bom.part_number"},
+                                message=rule["message"],
+                expected=expected,
+                actual=part,
+                evidence={"line_number": line, "part_number": part},
+            ))
     return findings
 
 
@@ -150,11 +156,12 @@ EVALUATOR_REGISTRY: dict[str, Evaluator] = {
     "required": evaluate_required,
     "no_duplicate_change_lines": evaluate_no_duplicate_change_lines,
     "positive_decimal": evaluate_positive_decimal,
+    "part_number_format": evaluate_part_number_format,
 }
 
 
 def run_rule_engine(packet: dict) -> dict:
-    """Execute active catalogue rules and the explicit R02 compatibility rule."""
+    """Execute active deterministic rules selected by the policy catalogue."""
     catalogue = load_rule_catalogue()
     violations = []
     for rule in rules_for_engine("rule_engine", catalogue):
@@ -164,6 +171,5 @@ def run_rule_engine(packet: dict) -> dict:
                 f"Rule {rule['id']} references unknown rule-engine evaluator {rule['check']!r}."
             )
         violations.extend(evaluator(packet, rule, catalogue))
-    violations.extend(evaluate_compatibility_part_number(packet))
     packet["validation"]["rule_violations"] = violations
     return packet

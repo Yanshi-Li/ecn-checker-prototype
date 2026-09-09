@@ -18,40 +18,48 @@ def _violations(packet, rule_id):
             if v["rule_id"] == rule_id]
 
 
-def test_R02_bad_part_number():
+def test_H24_bad_part_number():
     packet = _base_packet(bom=[
         {"part_number": "BADPN", "quantity": "1", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
-    assert any(v["rule_id"] == "R02" for v in result["validation"]["rule_violations"])
+    finding = _violations(result, "H24")[0]
+    assert finding["rule_id"] == "H24"
+    assert finding["severity"] == "BLOCKER"
+    assert finding["gate_effect"] == "FAIL"
+    assert finding["evaluation_status"] == "FAIL"
+    assert finding["location"] == {"line_number": "1", "field": "bom.part_number"}
+    assert finding["evidence"] == {"line_number": "1", "part_number": "BADPN"}
+
 
 
 @pytest.mark.parametrize("part_number", ["12345", "123456"])
-def test_R02_good_part_number(part_number):
+def test_H24_good_part_number(part_number):
     packet = _base_packet(bom=[
         {"part_number": part_number, "quantity": "1", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
-    assert not _violations(result, "R02")
+    assert not _violations(result, "H24")
 
 
 @pytest.mark.parametrize("part_number", ["1234", "1234567", "AB-1234"])
-def test_R02_rejects_part_numbers_outside_five_to_six_digits(part_number):
+def test_H24_rejects_part_numbers_outside_five_to_six_digits(part_number):
     packet = _base_packet(bom=[
         {"part_number": part_number, "quantity": "1", "line_number": "1"}
     ])
     result = run_rule_engine(packet)
-    assert _violations(result, "R02")
+    assert _violations(result, "H24")
+
 
 
 @pytest.mark.parametrize("row", [
     {"part_number": "", "quantity": "1", "line_number": "1"},
     {"quantity": "1", "line_number": "1"},
 ])
-def test_R02_allows_missing_part_number(row):
+def test_H24_allows_missing_part_number(row):
     result = run_rule_engine(_base_packet(bom=[row]))
 
-    assert not _violations(result, "R02")
+    assert not _violations(result, "H24")
 
 
 def test_H12_duplicate_parts():
