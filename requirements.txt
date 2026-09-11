@@ -1,8 +1,12 @@
-streamlit
+                    streamlit
 pandas
 openpyxl
 pdfplumber
 httpx
 openai
 sendgrid
+psycopg[binary]
 pytest
+
+
+
