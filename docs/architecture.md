@@ -99,7 +99,22 @@ as `NOT_EVALUATED` and evaluates only the semantic-heuristic rules S02–S04.
 AI findings remain advisory and do not close the gate.
 
 
+## Batch orchestration
+
+`scripts/batch_orchestration.py` is the pure execution seam for normalized batch
+inputs. It validates ECN/BOM mappings before any case runs, creates one
+independent case for each ECN/BOM assignment (or one ECN-only case), preserves
+`ABSENT`, `EMPTY`, and `PRESENT` BOM states, and invokes the existing single-case
+validator supplied by the caller. An executor failure becomes an `ERROR` case;
+other cases continue. Progress callbacks expose completed, remaining, current
+case, and outcome counts without coupling the module to Streamlit.
+
+The module does not read files, persist data, send email, or duplicate rule
+logic. Its `BatchResult.rerun()` operation appends a new attempt for an existing
+case, leaving earlier attempts available for evaluation metrics.
+
 ## Key Files
+
 
 | File                          | Role                          |
 |-------------------------------|-------------------------------|
