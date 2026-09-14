@@ -451,8 +451,9 @@ def main() -> None:
     if not packet:
         return
 
-        gate = packet["gate"]
+    gate = packet["gate"]
     decision = gate["decision"]
+
     if decision == "PASS":
         st.success("PASS — No gate-closing findings were identified.")
     else:
