@@ -61,19 +61,123 @@ def create_session(
     return int(row[0])
 
 
-def start_precheck(connection, session_id: int) -> int:
+def create_evaluation_batch(
+    connection,
+    session_id: int,
+    metadata: Mapping[str, object] | None = None,
+) -> int:
+    """Create a batch belonging to an identified evaluation session."""
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            INSERT INTO evaluation_batches (session_id, metadata)
+            VALUES (%s, %s)
+            RETURNING id
+            """,
+            (session_id, Jsonb(dict(metadata or {}))),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def create_logical_ecn(
+    connection,
+    batch_id: int,
+    logical_ecn_key: str,
+    metadata: Mapping[str, object] | None = None,
+) -> int:
+    """Add one normalized logical ECN to a batch."""
+    key = logical_ecn_key.strip()
+    if not key:
+        raise ValueError("logical_ecn_key must not be empty")
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            INSERT INTO logical_ecns (batch_id, logical_ecn_key, metadata)
+            VALUES (%s, %s, %s)
+            RETURNING id
+            """,
+            (batch_id, key, Jsonb(dict(metadata or {}))),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def create_bom_input(
+    connection,
+    batch_id: int,
+    bom_key: str,
+    bom_state: str,
+    metadata: Mapping[str, object] | None = None,
+) -> int:
+    """Add an unassigned BOM input to a batch."""
+    key = bom_key.strip()
+    state = bom_state.strip().upper()
+    if not key:
+        raise ValueError("bom_key must not be empty")
+    if state not in {"ABSENT", "EMPTY", "PRESENT"}:
+        raise ValueError("bom_state must be ABSENT, EMPTY, or PRESENT")
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            INSERT INTO bom_inputs (batch_id, bom_key, bom_state, metadata)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (batch_id, key, state, Jsonb(dict(metadata or {}))),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def assign_bom_input(connection, bom_input_id: int, logical_ecn_id: int) -> None:
+    """Assign a BOM input to exactly one logical ECN."""
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            UPDATE bom_inputs
+            SET assigned_logical_ecn_id = %s
+            WHERE id = %s AND assigned_logical_ecn_id IS NULL
+            RETURNING id
+            """,
+            (logical_ecn_id, bom_input_id),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("BOM input is missing or already assigned")
+
+
+def create_precheck_case(
+    connection,
+    batch_id: int,
+    logical_ecn_id: int,
+    bom_input_id: int | None = None,
+) -> int:
+    """Create one independent ECN-only or ECN/BOM comparison case."""
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            INSERT INTO precheck_cases (batch_id, logical_ecn_id, bom_input_id)
+            VALUES (%s, %s, %s)
+            RETURNING id
+            """,
+            (batch_id, logical_ecn_id, bom_input_id),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def start_precheck(connection, session_id: int, case_id: int | None = None) -> int:
     """Create a pre-check attempt and its start event."""
     with connection.transaction():
         cursor = connection.execute(
             """
-            INSERT INTO precheck_attempts (session_id, started_at)
-            VALUES (%s, CURRENT_TIMESTAMP)
+            INSERT INTO precheck_attempts (session_id, case_id, started_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
             RETURNING id
             """,
-            (session_id,),
+            (session_id, case_id),
         )
         attempt_id = int(cursor.fetchone()[0])
         connection.execute(
+
             """
             INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type)
             VALUES (%s, %s, 'precheck_started')
