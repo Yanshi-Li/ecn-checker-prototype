@@ -25,6 +25,14 @@ BOM_FILE_TYPES = ["csv", "xlsx", "xls", "pdf"]
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+from scripts.evaluation_store import (  # noqa: E402
+    complete_precheck,
+    connect_evaluation_db,
+    create_session,
+    initialise_schema,
+    start_precheck,
+)
+
 
 def _load(name: str):
     """Load a stage by file path to avoid package-name shadowing."""
@@ -74,6 +82,21 @@ def _get_config_value(key: str, default: str = "") -> str:
     return os.environ.get(key, default).strip()
 
 
+def _evaluation_db_config() -> dict[str, str]:
+    """Read evaluation database settings without exposing the password."""
+    return {
+        key: _get_config_value(key)
+        for key in (
+            "ECN_DB_HOST",
+            "ECN_DB_PORT",
+            "ECN_DB_NAME",
+            "ECN_DB_USER",
+            "ECN_DB_PASSWORD",
+        )
+        if _get_config_value(key)
+    }
+
+
 def _password_matches(submitted_password: str, configured_password: str) -> bool:
     """Compare non-empty passwords without leaking a partial-match timing signal."""
     return bool(configured_password) and hmac.compare_digest(
@@ -117,7 +140,7 @@ def _require_access() -> bool:
     return False
 
 send_validation_email = validation_notification_mod.send_validation_email
-DEFAULT_RECIPIENT = validation_notification_mod.DEFAULT_RECIPIENT
+
 
 
 ECN_MANUAL_FIELDS = [
@@ -307,15 +330,64 @@ def _render_ai_notes(ai_notes: dict) -> None:
             st.info("No AI advisory flags found.")
 
 
+def _start_evaluation_precheck(tester_email: str, tester_name: str):
+    """Create or reuse the current session and start a pre-check attempt."""
+    db_config = _evaluation_db_config()
+    if not db_config.get("ECN_DB_PASSWORD"):
+        return None
+
+    session_email = tester_email.strip()
+    try:
+        with connect_evaluation_db(db_config) as connection:
+            # Keep local setup self-contained: the dedicated application role
+            # owns this database and can create the evaluation tables.
+            initialise_schema(connection)
+            session_id = st.session_state.get("evaluation_session_id")
+            if (
+                session_id is None
+                or st.session_state.get("evaluation_session_tester_email") != session_email
+            ):
+                session_id = create_session(connection, session_email, tester_name.strip())
+                st.session_state["evaluation_session_id"] = session_id
+                st.session_state["evaluation_session_tester_email"] = session_email
+
+            return session_id, start_precheck(connection, session_id)
+    except Exception:
+        return None
+
+
+def _complete_evaluation_precheck(
+    evaluation: tuple[int, int] | None,
+    system_decision: str,
+    result_payload: dict[str, int],
+):
+    """Persist completion data and return duration, or None if persistence fails."""
+    if evaluation is None:
+        return None
+    session_id, attempt_id = evaluation
+    try:
+        with connect_evaluation_db(_evaluation_db_config()) as connection:
+            return complete_precheck(
+                connection, attempt_id, session_id, system_decision, result_payload
+            )
+    except Exception:
+        return None
+
+
 def main() -> None:
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
     # Password access control is temporarily disabled for local testing.
     st.title("ECN Checker")
 
+    st.subheader("Tester identification")
+    tester_email = st.text_input("Tester email", key="evaluation_tester_email")
+    tester_name = st.text_input("Tester name (optional)", key="evaluation_tester_name")
+    st.caption("Your email identifies this evaluation session; it is stored with the results.")
 
     mode = st.radio("Input method", ["Upload files", "Manual intake"], horizontal=True, key="input_mode")
     temporary_paths: list[str] = []
-    can_run = False
+    can_run = bool(tester_email.strip())
+
     if mode == "Upload files":
         upload_column, bom_column = st.columns(2)
         with upload_column:
@@ -330,10 +402,10 @@ def main() -> None:
                 type=BOM_FILE_TYPES,
                 help="CSV, Excel, or PDF files are supported by the intake stage.",
             )
-        can_run = bool(ecn_file and bom_file)
+        can_run = can_run and bool(ecn_file and bom_file)
     else:
         manual_input = _render_manual_form()
-        can_run = manual_input is not None
+        can_run = can_run and manual_input is not None
 
     if st.button("Run Checks", type="primary", disabled=not can_run):
         try:
@@ -347,9 +419,28 @@ def main() -> None:
                         st.error(error)
                     return
                 temporary_paths = [_write_text(manual_ecn_csv(values)), _write_text(manual_bom_csv(bom_rows))]
+
+            evaluation = _start_evaluation_precheck(tester_email, tester_name)
+            if evaluation is None and _evaluation_db_config().get("ECN_DB_PASSWORD"):
+                st.warning("Evaluation data could not be saved; validation will continue.")
+
             with st.spinner("Running ECN validation checks..."):
-                st.session_state["packet"] = _run_pipeline(*temporary_paths)
+                packet = _run_pipeline(*temporary_paths)
+                st.session_state["packet"] = packet
                 st.session_state.pop("email_status", None)
+
+            gate = packet["gate"]
+            result_payload = {
+                "blocker_count": len(gate.get("blockers", [])),
+                "part_issue_count": len(gate.get("part_issues", [])),
+                "warning_count": len(gate.get("warnings", [])),
+            }
+            duration = _complete_evaluation_precheck(evaluation, gate["decision"], result_payload)
+            if evaluation is not None and duration is None:
+                st.warning("Evaluation data could not be completed; validation results are still available.")
+            if duration is not None:
+                st.session_state["checking_duration_seconds"] = duration
+
         except Exception as exc:
             st.error(f"The input could not be processed: {exc}")
         finally:
@@ -360,12 +451,15 @@ def main() -> None:
     if not packet:
         return
 
-    gate = packet["gate"]
+        gate = packet["gate"]
     decision = gate["decision"]
     if decision == "PASS":
         st.success("PASS — No gate-closing findings were identified.")
     else:
         st.error("FAIL — Resolve gate-closing findings before proceeding.")
+    duration = st.session_state.get("checking_duration_seconds")
+    if duration is not None:
+        st.caption(f"Checking duration: {duration:.2f} seconds")
 
     _render_findings("Blockers", gate.get("blockers", []))
     _render_findings("Part Issues", gate.get("part_issues", []))
@@ -375,20 +469,33 @@ def main() -> None:
 
     st.divider()
     st.subheader("Email validation report")
-    st.caption(f"The report will be sent to {DEFAULT_RECIPIENT}. This does not approve or reject the ECN.")
+    validation_recipient = st.text_input(
+        "Validation report recipient",
+        key="validation_recipient_email",
+        help="Enter the email address that should receive this validation report.",
+    )
+    st.caption("This report does not approve or reject the ECN.")
     email_status = st.session_state.get("email_status")
     if email_status and email_status.get("sent"):
         st.success(email_status["message"])
     elif st.button("Send Validation Email"):
-        with st.spinner("Sending validation report..."):
-            result = send_validation_email(packet, secrets=_streamlit_secrets())
-        st.session_state["email_status"] = result
-        if result["sent"]:
-            st.success(result["message"])
-        elif result["status"] == "not_configured":
-            st.warning(result["message"] + " Configure SMTP settings before sending.")
+        if not validation_recipient.strip():
+            st.info("Enter an email address before sending the validation report.")
         else:
-            st.error(result["message"])
+            with st.spinner("Sending validation report..."):
+                result = send_validation_email(
+                    packet,
+                    recipient=validation_recipient.strip(),
+                    secrets=_streamlit_secrets(),
+                )
+            st.session_state["email_status"] = result
+            if result["sent"]:
+                st.success(result["message"])
+            elif result["status"] == "not_configured":
+                st.warning(result["message"] + " Configure SMTP settings before sending.")
+            else:
+                st.error(result["message"])
+
     st.subheader("Notification Email")
     engineer_email = st.text_input("Engineer email", key="notification_engineer_email")
     ce_email = st.text_input("Chief Engineer email", key="notification_ce_email")
@@ -402,7 +509,9 @@ def main() -> None:
                 result = send_fail_email(packet, engineer_email.strip())
             else:
                 result = send_pass_email(
-                    packet, engineer_email.strip(), ce_email.strip()
+                    packet,
+                    engineer_email.strip(),
+                    ce_email.strip(),
                 )
 
             recipients = ", ".join(result["recipients"])
@@ -410,7 +519,7 @@ def main() -> None:
             message = (
                 f"Notification {status}. Recipients: {recipients}. "
                 f"Subject: {result['subject']}. Dry run: {result['dry_run']}."
-            )
+                        )
             if result["sent"]:
                 st.success(message)
             else:
@@ -419,15 +528,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-

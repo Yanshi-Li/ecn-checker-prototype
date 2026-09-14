@@ -20,10 +20,8 @@ Manual BOM rows use `line_number`, `part_number`, `description`, `quantity`,
 `unit`, `action`, and `parent_part_no`. They are serialized and passed through
 the same CSV-driven pipeline as uploaded files.
 
-After checks complete, the user may explicitly click **Send Validation Email**.
-The report is sent to `yanshili645@gmail.com`; it is not an approval or
-rejection action and does not invoke the approval workflow. The button reports
-whether SMTP is unavailable or the send failed.
+After checks complete, the user enters a recipient and may explicitly click **Send Validation Email**. The report is not an approval or rejection action and does not invoke the approval workflow. The button reports whether SMTP is unavailable or the send failed.
+
 
 For local development, configure these environment variables:
 

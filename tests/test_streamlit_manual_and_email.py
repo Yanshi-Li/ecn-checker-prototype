@@ -123,20 +123,34 @@ class _FailingSMTP:
         raise RuntimeError("SMTP password should not appear in logs")
 
 
-def test_send_validation_email_uses_fixed_recipient_without_mutating_packet():
+def test_send_validation_email_uses_supplied_recipient_without_mutating_packet():
     packet = _packet("PASS")
     result = notification.send_validation_email(
         packet,
-        secrets={"SMTP_HOST": "smtp.example.com", "SMTP_PORT": "587", "SMTP_USER": "sender@example.com", "SMTP_PASS": "secret"},
+        recipient="tester@example.com",
+        secrets={
+            "SMTP_HOST": "smtp.example.com",
+            "SMTP_PORT": "587",
+            "SMTP_USER": "sender@example.com",
+            "SMTP_PASS": "secret",
+        },
         smtp_factory=_FakeSMTP,
     )
+
     assert result["sent"] is True
-    assert _FakeSMTP.instance.sent[1] == ["yanshili645@gmail.com"]
+    assert _FakeSMTP.instance.sent[1] == ["tester@example.com"]
     assert "approval" not in packet
 
 
+
 def test_send_validation_email_reports_missing_configuration_without_leaking_secret():
-    result = notification.send_validation_email(_packet(), environ={"SMTP_USER": "sender@example.com"})
+    result = notification.send_validation_email(
+        _packet(),
+        recipient="tester@example.com",
+        environ={"SMTP_USER": "sender@example.com"},
+    )
+
+
     assert result == {"sent": False, "status": "not_configured", "message": "SMTP is not configured."}
     assert "secret" not in result["message"]
 
@@ -144,8 +158,10 @@ def test_send_validation_email_reports_missing_configuration_without_leaking_sec
 def test_send_validation_email_logs_safe_failure_details(caplog):
     result = notification.send_validation_email(
         _packet(),
+        recipient="tester@example.com",
         secrets={
             "SMTP_HOST": "smtp.example.com",
+
             "SMTP_PORT": "587",
             "SMTP_USER": "sender@example.com",
             "SMTP_PASS": "secret",

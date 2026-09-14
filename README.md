@@ -48,9 +48,8 @@ canonical staged intake fields: `change_notice_number`, `name_of_change`,
 `change_actions`, and `date`, plus optional intake fields and canonical BOM
 rows.
 
-After validation, the user can explicitly send a validation report to
-`yanshili645@gmail.com`. The email is a report only; it does not approve or
-reject an ECN. SMTP configuration is required before the button can send.
+After validation, the user can enter a recipient and explicitly send a validation report. The email is a report only; it does not approve or reject an ECN. SMTP configuration is required before the button can send.
+
 See [docs/streamlit-deploy.md](docs/streamlit-deploy.md) for deployment
 configuration.
 
