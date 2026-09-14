@@ -36,7 +36,7 @@
 | Rule ID | Rule | Field | Severity | Example | Error Message |
 |---|---|---|---|---|---|
 | S01 | Description of Change must semantically match BOM change actions | Description vs BOM | 🟡 Advisory | Description says "remove SA-220 with no replacement" but MBOM shows Add SA-330 | The meaning between description of change and BOM is different |
-| S02 | Each part mentioned in Description of Change must appear in BOM rows | Description vs BOM | 🔴 Blocker | Description mentions HE-1021 but no corresponding BOM row found | The part mentioned in description of change is not found in BOM rows |
+| S02 | Each part mentioned in Description of Change must appear in BOM rows | Description vs BOM | 🟡 Advisory | Description mentions HE-1021 but no corresponding BOM row found | The part mentioned in description of change is not found in BOM rows |
 | S03 | Change action verbs must align between Description of Change and BOM task | Description vs BOM Task | 🟡 Advisory | Description says "Replace" but BOM task is "Add" | Change action does not match in description of change and BOM task |
 | S04 | Products Affected must align with assemblies in BOM | Products Affected vs BOM | 🟡 Advisory | Products Affected lists RF600 but BOM parent is from DW900 assembly | Products Affected does not align with assemblies in BOM |
 | S05 | Part description should start with a noun, naming word, or an abbreviation | Part Description in BOM | 🟡 Advisory | Part Description says "Pink BBQ Cover" instead of "Cover BBQ Pink" | Part description does not start with a noun, naming word, or an abbreviation |

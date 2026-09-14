@@ -10,8 +10,8 @@ from typing import Mapping
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_RECIPIENT = "yanshili645@gmail.com"
 SMTP_KEYS = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS")
+
 
 
 
@@ -89,7 +89,8 @@ def build_validation_email(packet: dict) -> tuple[str, str]:
 
 def send_validation_email(
     packet: dict,
-    recipient: str = DEFAULT_RECIPIENT,
+    recipient: str,
+
     secrets: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
     smtp_factory=smtplib.SMTP,

@@ -48,9 +48,8 @@ canonical staged intake fields: `change_notice_number`, `name_of_change`,
 `change_actions`, and `date`, plus optional intake fields and canonical BOM
 rows.
 
-After validation, the user can explicitly send a validation report to
-`yanshili645@gmail.com`. The email is a report only; it does not approve or
-reject an ECN. SMTP configuration is required before the button can send.
+After validation, the user can enter a recipient and explicitly send a validation report. The email is a report only; it does not approve or reject an ECN. SMTP configuration is required before the button can send.
+
 See [docs/streamlit-deploy.md](docs/streamlit-deploy.md) for deployment
 configuration.
 
@@ -101,7 +100,13 @@ PDF routing is role-aware: an ECN PDF is parsed as fields, while a BOM PDF is pa
 
    The CLI accepts `--ecn`, `--bom`, `--engineer-email`, and `--ce-email`. `DRY_RUN` is an environment/secret setting, not a CLI option. CLI output includes `out/dashboard.html`, `out/ai_summary.md`, and context-engine CSV artifacts.
 
-6. Run the Streamlit interface locally.
+6. Initialise the local evaluation tables. This command prompts for the database password without storing it in the repository.
+
+   ```powershell
+   py scripts/initialise_evaluation_db.py
+   ```
+
+7. Run the Streamlit interface locally.
 
    ```bash
    streamlit run streamlit_app.py
@@ -112,7 +117,7 @@ PDF routing is role-aware: an ECN PDF is parsed as fields, while a BOM PDF is pa
 
 ### Dependencies
 
-`requirements.txt` currently installs: `streamlit`, `pandas`, `openpyxl`, `pdfplumber`, `httpx`, `openai`, `sendgrid`, and `pytest` (for the test suite).
+`requirements.txt` currently installs: `streamlit`, `pandas`, `openpyxl`, `pdfplumber`, `httpx`, `openai`, `sendgrid`, `psycopg[binary]`, and `pytest` (for the test suite).
 
 ## Setup — Streamlit Cloud deployment
 
@@ -133,6 +138,11 @@ For local CLI use, the AI advisory reads a repository-root `.env` file; process 
 | `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Streamlit | `your-sendgrid-api-key` |
 | `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address. Required only when live email is enabled. | CLI and Streamlit | `verified-sender@example.com` |
 | `DRY_RUN` | Controls whether notifications are only logged rather than sent. | CLI and Streamlit | `true` (default); set `false`, `0`, `no`, or `off` to enable delivery |
+| `ECN_DB_HOST` | Local evaluation database host. | Evaluation store | `localhost` |
+| `ECN_DB_PORT` | Local evaluation database port. | Evaluation store | `5432` |
+| `ECN_DB_NAME` | Evaluation database name. | Evaluation store | `ecn_prechecker_evaluation` |
+| `ECN_DB_USER` | Restricted evaluation database role. | Evaluation store | `ecn_app` |
+| `ECN_DB_PASSWORD` | Password for the evaluation database role. | Evaluation store | No default; keep it out of source control |
 
 ## Running tests
 
