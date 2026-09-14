@@ -99,7 +99,22 @@ as `NOT_EVALUATED` and evaluates only the semantic-heuristic rules S02–S04.
 AI findings remain advisory and do not close the gate.
 
 
+## Batch intake and filename matching
+
+`scripts/batch_intake.py` is the raw-file adapter for batch testing. It accepts
+files or directories, recursively discovers supported ECN/BOM files, and
+extracts exactly one seven-digit identifier from each filename. A BOM is matched
+to an ECN only when those filename identifiers are equal. Missing identifiers,
+ambiguous filenames, unsupported formats, duplicate ECN identifiers, and BOMs
+with no matching ECN are reported as intake errors before execution.
+
+A matched BOM with no normalized rows is represented as `EMPTY`; a matched BOM
+with rows is `PRESENT`. Original paths and filename identifiers remain in
+metadata. The adapter delegates parsing to the existing staged `load_file()`
+implementation and does not duplicate file-format logic.
+
 ## Batch orchestration
+
 
 `scripts/batch_orchestration.py` is the pure execution seam for normalized batch
 inputs. It validates ECN/BOM mappings before any case runs, creates one
