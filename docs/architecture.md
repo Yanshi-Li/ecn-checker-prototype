@@ -113,10 +113,24 @@ with rows is `PRESENT`. Original paths and filename identifiers remain in
 metadata. The adapter delegates parsing to the existing staged `load_file()`
 implementation and does not duplicate file-format logic.
 
+## Streamlit batch workflow
+
+The Streamlit interface offers a separate **Batch pre-check** input mode while
+preserving the existing single-case upload and manual-intake modes. Testers
+identify themselves with an email before preparing a batch. Multiple ECN and BOM
+files can be uploaded, parsed through the shared batch intake adapter, and
+previewed as filename-identifier mappings before execution.
+
+Batch preparation is deliberately a safety checkpoint: unsupported files,
+missing or ambiguous seven-digit identifiers, duplicate ECNs, and unmatched BOMs
+are displayed as intake errors and prevent validation from starting. The current
+Streamlit slice provides mapping preview only; batch execution and grouped result
+rendering remain separate follow-up work. No batch email is sent automatically.
+
 ## Batch orchestration
 
-
 `scripts/batch_orchestration.py` is the pure execution seam for normalized batch
+
 inputs. It validates ECN/BOM mappings before any case runs, creates one
 independent case for each ECN/BOM assignment (or one ECN-only case), preserves
 `ABSENT`, `EMPTY`, and `PRESENT` BOM states, and invokes the existing single-case
@@ -141,6 +155,11 @@ case, leaving earlier attempts available for evaluation metrics.
 | `scripts/stages/context_engine.py` | Stage 4: Parts/reference-data checks |
 | `scripts/stages/dashboard.py` | Stage 5: HTML dashboard |
 | `scripts/stages/email_notification.py` | Stage 6: gate-driven SendGrid email |
+| `scripts/batch_intake.py` | Raw-file batch preparation and filename matching |
+| `scripts/batch_orchestration.py` | Independent normalized batch case execution |
+| `scripts/run_batch.py` | Batch command-line runner |
+| `streamlit_app.py` | Single-case and batch mapping Streamlit workflows |
+
 
 | `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
 | `data/ecn_intake.csv`         | Sample ECN input              |

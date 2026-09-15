@@ -12,6 +12,13 @@ sys.modules[spec.name] = streamlit_app
 spec.loader.exec_module(streamlit_app)
 
 notification = streamlit_app.validation_notification_mod
+from scripts.batch_intake import BatchIntakeError, BatchPreparation
+from scripts.batch_orchestration import BomInput, LogicalEcnInput, NormalizedBatch
+
+
+
+
+
 
 
 def _valid_values():
@@ -65,6 +72,62 @@ def test_manual_bom_csv_generates_line_numbers_and_defaults():
     assert rows[0]["unit"] == "EA"
     assert rows[1]["line_number"] == "2"
     assert rows[1]["quantity"] == "2.5"
+
+
+def test_batch_preview_rows_groups_boms_by_filename_identifier():
+    preparation = BatchPreparation(
+        NormalizedBatch(
+            logical_ecns=(
+                LogicalEcnInput("4078575", {}, {"source_file": "ECN-4078575.csv"}),
+                LogicalEcnInput("4002659", {}, {"source_file": "ECN-4002659.csv"}),
+            ),
+            bom_inputs=(
+                BomInput(
+                    "4078575-MBOM.csv",
+                    "PRESENT",
+                    {},
+                    {"source_file": "4078575-MBOM.csv"},
+                    suggested_ecn_key="4078575",
+                ),
+            ),
+            mappings={"4078575-MBOM.csv": "4078575"},
+            mapping_confirmed=True,
+        ),
+        (),
+    )
+
+    rows = streamlit_app.batch_preview_rows(preparation)
+
+    assert rows == [
+        {
+            "ECN": "4002659",
+            "ECN file": "ECN-4002659.csv",
+            "BOM": "—",
+            "BOM state": "ABSENT",
+            "Status": "Ready (ECN only)",
+        },
+        {
+            "ECN": "4078575",
+            "ECN file": "ECN-4078575.csv",
+            "BOM": "4078575-MBOM.csv",
+            "BOM state": "PRESENT",
+            "Status": "Ready",
+        },
+    ]
+
+
+def test_batch_error_rows_expose_role_file_and_problem():
+    preparation = BatchPreparation(
+        NormalizedBatch(logical_ecns=(), bom_inputs=()),
+        (BatchIntakeError(Path("bad.txt"), "bom", "unsupported bom file format"),),
+    )
+
+    assert streamlit_app.batch_error_rows(preparation) == [{
+        "Role": "BOM",
+        "File": "bad.txt",
+        "Problem": "unsupported bom file format",
+    }]
+
 
 
 def test_validate_manual_input_reports_required_fields_and_bom_errors():

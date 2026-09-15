@@ -25,6 +25,7 @@ BOM_FILE_TYPES = ["csv", "xlsx", "xls", "pdf"]
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+from scripts.batch_intake import BatchPreparation, build_batch_from_paths  # noqa: E402
 from scripts.evaluation_store import (  # noqa: E402
     complete_precheck,
     connect_evaluation_db,
@@ -53,7 +54,6 @@ ai_advisory_mod = _load("ai_advisory")
 context_engine_mod = _load("context_engine")
 merge_step_mod = _load("merge_step")
 validation_notification_mod = _load("validation_notification")
-
 email_notification_mod = _load("email_notification")
 
 run_intake = intake_mod.run_intake
@@ -64,6 +64,7 @@ log_approved_change = context_engine_mod.log_approved_change
 run_merge_step = merge_step_mod.run_merge_step
 send_fail_email = email_notification_mod.send_fail_email
 send_pass_email = email_notification_mod.send_pass_email
+send_validation_email = validation_notification_mod.send_validation_email
 
 
 def _get_config_value(key: str, default: str = "") -> str:
@@ -139,9 +140,6 @@ def _require_access() -> bool:
         st.error("Incorrect password.")
     return False
 
-send_validation_email = validation_notification_mod.send_validation_email
-
-
 
 ECN_MANUAL_FIELDS = [
     "change_notice_number",
@@ -182,7 +180,10 @@ def _csv_text(rows: list[dict], fieldnames: list[str]) -> str:
 
 def manual_ecn_csv(values: dict[str, object]) -> str:
     """Serialize canonical manual ECN intake fields for the existing loader."""
-    row = {field: "" if values.get(field) is None else str(values.get(field)) for field in ECN_MANUAL_FIELDS}
+    row = {
+        field: "" if values.get(field) is None else str(values.get(field))
+        for field in ECN_MANUAL_FIELDS
+    }
     return _csv_text([row], ECN_MANUAL_FIELDS)
 
 
@@ -190,21 +191,29 @@ def manual_bom_csv(rows: list[dict[str, object]]) -> str:
     """Serialize canonical manual BOM rows for the existing loader."""
     normalized = []
     for index, row in enumerate(rows, start=1):
-        normalized.append({
-            "line_number": row.get("line_number") or index,
-            "part_number": row.get("part_number", ""),
-            "description": row.get("description", ""),
-            "quantity": row.get("quantity", "1"),
-            "unit": row.get("unit", "EA"),
-            "action": row.get("action", ""),
-            "parent_part_no": row.get("parent_part_no", ""),
-        })
+        normalized.append(
+            {
+                "line_number": row.get("line_number") or index,
+                "part_number": row.get("part_number", ""),
+                "description": row.get("description", ""),
+                "quantity": row.get("quantity", "1"),
+                "unit": row.get("unit", "EA"),
+                "action": row.get("action", ""),
+                "parent_part_no": row.get("parent_part_no", ""),
+            }
+        )
     return _csv_text(normalized, BOM_MANUAL_FIELDS)
 
 
-def validate_manual_input(values: dict[str, object], bom_rows: list[dict[str, object]]) -> list[str]:
+def validate_manual_input(
+    values: dict[str, object], bom_rows: list[dict[str, object]]
+) -> list[str]:
     """Return user-facing errors before invoking the authoritative pipeline."""
-    errors = [f"{field.replace('_', ' ').title()} is required." for field in intake_mod.REQUIRED_ECN_FIELDS if not str(values.get(field, "")).strip()]
+    errors = [
+        f"{field.replace('_', ' ').title()} is required."
+        for field in intake_mod.REQUIRED_ECN_FIELDS
+        if not str(values.get(field, "")).strip()
+    ]
     if not bom_rows:
         errors.append("At least one BOM row is required.")
     for index, row in enumerate(bom_rows, start=1):
@@ -220,7 +229,9 @@ def validate_manual_input(values: dict[str, object], bom_rows: list[dict[str, ob
 
 
 def _write_text(text: str, suffix: str = ".csv") -> str:
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", suffix=suffix, delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", newline="", suffix=suffix, delete=False
+    ) as temp_file:
         temp_file.write(text)
         return temp_file.name
 
@@ -231,6 +242,50 @@ def _write_upload(uploaded_file) -> str:
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
         temp_file.write(uploaded_file.getvalue())
         return temp_file.name
+
+
+def batch_preview_rows(preparation: BatchPreparation) -> list[dict[str, str]]:
+    """Return a display-oriented preview of safe ECN/BOM mappings."""
+    ecns = {ecn.key: ecn for ecn in preparation.batch.logical_ecns}
+    bom_by_ecn: dict[str, list] = {}
+    for bom in preparation.batch.bom_inputs:
+        target = preparation.batch.mappings.get(bom.key) if preparation.batch.mappings else None
+        if target:
+            bom_by_ecn.setdefault(target, []).append(bom)
+
+    rows: list[dict[str, str]] = []
+    for ecn_key in sorted(ecns):
+        boms = bom_by_ecn.get(ecn_key, [])
+        if not boms:
+            rows.append(
+                {
+                    "ECN": ecn_key,
+                    "ECN file": str(ecns[ecn_key].metadata.get("source_file", "")),
+                    "BOM": "—",
+                    "BOM state": "ABSENT",
+                    "Status": "Ready (ECN only)",
+                }
+            )
+            continue
+        for bom in boms:
+            rows.append(
+                {
+                    "ECN": ecn_key,
+                    "ECN file": str(ecns[ecn_key].metadata.get("source_file", "")),
+                    "BOM": bom.key,
+                    "BOM state": bom.state,
+                    "Status": "Ready",
+                }
+            )
+    return rows
+
+
+def batch_error_rows(preparation: BatchPreparation) -> list[dict[str, str]]:
+    """Return intake errors in a shape suitable for a Streamlit table."""
+    return [
+        {"Role": error.role.upper(), "File": str(error.path), "Problem": error.message}
+        for error in preparation.errors
+    ]
 
 
 def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
@@ -248,7 +303,9 @@ def _finding_rows(findings: list[dict]) -> list[dict]:
     """Convert gate findings to the concise table shape used by the UI."""
     return [
         {
-            "Finding": finding.get("rule_id") or finding.get("flag_type") or finding.get("type", "—"),
+            "Finding": finding.get("rule_id")
+            or finding.get("flag_type")
+            or finding.get("type", "—"),
             "Severity": finding.get("severity", "ADVISORY"),
             "Message": finding.get("message") or finding.get("detail", ""),
         }
@@ -284,24 +341,51 @@ def _render_manual_form() -> tuple[dict[str, object], list[dict[str, object]]] |
         "change_actions": "Change Actions",
     }
     for field, label in required.items():
-        values[field] = st.text_area(label, key=f"manual_{field}") if field in {"reason_for_change", "description_of_change", "products_affected", "change_actions"} else st.text_input(label, key=f"manual_{field}")
+        values[field] = (
+            st.text_area(label, key=f"manual_{field}")
+            if field
+            in {
+                "reason_for_change",
+                "description_of_change",
+                "products_affected",
+                "change_actions",
+            }
+            else st.text_input(label, key=f"manual_{field}")
+        )
     date_value = st.date_input("Date", value=None, key="manual_date")
-    values["date"] = date_value.isoformat() if isinstance(date_value, (dt.date, dt.datetime)) else ""
+    values["date"] = (
+        date_value.isoformat() if isinstance(date_value, (dt.date, dt.datetime)) else ""
+    )
 
     with st.expander("Optional canonical fields"):
         optional = {
-            "project": "Project", "product_group": "Product Group", "change_category": "Change Category",
-            "associated_a3": "Associated A3", "a3_number": "A3 Number", "checker": "Checker",
-            "reviewer": "Reviewer", "chief_engineer": "Chief Engineer", "bom_coordinator": "BOM Coordinator",
+            "project": "Project",
+            "product_group": "Product Group",
+            "change_category": "Change Category",
+            "associated_a3": "Associated A3",
+            "a3_number": "A3 Number",
+            "checker": "Checker",
+            "reviewer": "Reviewer",
+            "chief_engineer": "Chief Engineer",
+            "bom_coordinator": "BOM Coordinator",
         }
         for field, label in optional.items():
             values[field] = st.text_input(label, key=f"manual_{field}")
 
     st.subheader("BOM lines")
-    default_rows = pd.DataFrame([{
-        "line_number": 1, "part_number": "", "description": "", "quantity": "1",
-        "unit": "EA", "action": "", "parent_part_no": "",
-    }])
+    default_rows = pd.DataFrame(
+        [
+            {
+                "line_number": 1,
+                "part_number": "",
+                "description": "",
+                "quantity": "1",
+                "unit": "EA",
+                "action": "",
+                "parent_part_no": "",
+            }
+        ]
+    )
     edited = st.data_editor(
         default_rows,
         num_rows="dynamic",
@@ -384,25 +468,87 @@ def main() -> None:
     tester_name = st.text_input("Tester name (optional)", key="evaluation_tester_name")
     st.caption("Your email identifies this evaluation session; it is stored with the results.")
 
-    mode = st.radio("Input method", ["Upload files", "Manual intake"], horizontal=True, key="input_mode")
+    mode = st.radio(
+        "Input method",
+        ["Upload files", "Batch pre-check", "Manual intake"],
+        horizontal=True,
+        key="input_mode",
+    )
     temporary_paths: list[str] = []
     can_run = bool(tester_email.strip())
+    batch_preparation: BatchPreparation | None = None
+    manual_input = None
+    ecn_file = None
+    bom_file = None
 
-    if mode == "Upload files":
+    if mode in {"Upload files", "Batch pre-check"}:
+        batch_mode = mode == "Batch pre-check"
         upload_column, bom_column = st.columns(2)
         with upload_column:
-            ecn_file = st.file_uploader(
-                "Step 1 — Upload ECN file",
+            ecn_upload = st.file_uploader(
+                "Step 1 — Upload ECN file(s)",
                 type=ECN_FILE_TYPES,
+                accept_multiple_files=batch_mode,
                 help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
             )
         with bom_column:
-            bom_file = st.file_uploader(
-                "Step 2 — Upload BOM file",
+            bom_upload = st.file_uploader(
+                "Step 2 — Upload BOM file(s)",
                 type=BOM_FILE_TYPES,
+                accept_multiple_files=batch_mode,
                 help="CSV, Excel, or PDF files are supported by the intake stage.",
             )
-        can_run = can_run and bool(ecn_file and bom_file)
+
+        if batch_mode:
+            ecn_files = ecn_upload or []
+            bom_files = bom_upload or []
+            can_prepare = can_run and bool(ecn_files)
+            if st.button("Prepare Batch Mapping", disabled=not can_prepare):
+                batch_paths: list[str] = []
+                try:
+                    batch_paths = [
+                        *[_write_upload(upload) for upload in ecn_files],
+                        *[_write_upload(upload) for upload in bom_files],
+                    ]
+                    ecn_count = len(ecn_files)
+                    batch_preparation = build_batch_from_paths(
+                        batch_paths[:ecn_count],
+                        batch_paths[ecn_count:],
+                    )
+                    st.session_state["batch_preparation"] = batch_preparation
+                except Exception as exc:
+                    st.error(f"The batch could not be prepared: {exc}")
+                    st.session_state.pop("batch_preparation", None)
+                finally:
+                    for path in batch_paths:
+                        Path(path).unlink(missing_ok=True)
+
+            batch_preparation = st.session_state.get("batch_preparation")
+            if batch_preparation is not None:
+                st.subheader("Batch mapping preview")
+                if batch_preparation.errors:
+                    st.error("Resolve the intake errors before running this batch.")
+                    st.dataframe(
+                        batch_error_rows(batch_preparation),
+                        hide_index=True,
+                        width="stretch",
+                    )
+                else:
+                    st.dataframe(
+                        batch_preview_rows(batch_preparation),
+                        hide_index=True,
+                        width="stretch",
+                    )
+                    st.info(
+                        "Batch execution will be enabled after mapping confirmation "
+                        "is implemented."
+                    )
+            # Batch execution is deliberately a separate implementation slice.
+            can_run = False
+        else:
+            ecn_file = ecn_upload
+            bom_file = bom_upload
+            can_run = can_run and bool(ecn_file and bom_file)
     else:
         manual_input = _render_manual_form()
         can_run = can_run and manual_input is not None
@@ -418,7 +564,10 @@ def main() -> None:
                     for error in errors:
                         st.error(error)
                     return
-                temporary_paths = [_write_text(manual_ecn_csv(values)), _write_text(manual_bom_csv(bom_rows))]
+                temporary_paths = [
+                    _write_text(manual_ecn_csv(values)),
+                    _write_text(manual_bom_csv(bom_rows)),
+                ]
 
             evaluation = _start_evaluation_precheck(tester_email, tester_name)
             if evaluation is None and _evaluation_db_config().get("ECN_DB_PASSWORD"):
@@ -435,9 +584,13 @@ def main() -> None:
                 "part_issue_count": len(gate.get("part_issues", [])),
                 "warning_count": len(gate.get("warnings", [])),
             }
-            duration = _complete_evaluation_precheck(evaluation, gate["decision"], result_payload)
+            duration = _complete_evaluation_precheck(
+                evaluation, gate["decision"], result_payload
+            )
             if evaluation is not None and duration is None:
-                st.warning("Evaluation data could not be completed; validation results are still available.")
+                st.warning(
+                    "Evaluation data could not be completed; validation results are still available."
+                )
             if duration is not None:
                 st.session_state["checking_duration_seconds"] = duration
 
@@ -516,11 +669,17 @@ def main() -> None:
                 )
 
             recipients = ", ".join(result["recipients"])
-            status = "sent" if result["sent"] else "dry run" if result["dry_run"] else "not sent"
+            status = (
+                "sent"
+                if result["sent"]
+                else "dry run"
+                if result["dry_run"]
+                else "not sent"
+            )
             message = (
                 f"Notification {status}. Recipients: {recipients}. "
                 f"Subject: {result['subject']}. Dry run: {result['dry_run']}."
-                        )
+            )
             if result["sent"]:
                 st.success(message)
             else:
