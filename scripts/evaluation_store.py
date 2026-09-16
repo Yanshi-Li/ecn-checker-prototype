@@ -164,8 +164,76 @@ def create_precheck_case(
         return int(cursor.fetchone()[0])
 
 
+def update_precheck_case_status(connection, case_id: int, status: str) -> None:
+    """Store the latest status for one independent batch case."""
+    normalized = status.strip().upper()
+    if normalized not in {"PASS", "FAIL", "ERROR", "NOT_RUN"}:
+        raise ValueError("status must be PASS, FAIL, ERROR, or NOT_RUN")
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            UPDATE precheck_cases
+            SET status = %s
+            WHERE id = %s
+            RETURNING id
+            """,
+            (normalized, case_id),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("pre-check case was not found")
+
+
+def complete_evaluation_batch(connection, batch_id: int, status: str) -> None:
+    """Mark a persisted batch as completed with its aggregate status."""
+    normalized = status.strip().upper()
+    if normalized not in {"COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "CANCELLED"}:
+        raise ValueError("invalid evaluation batch status")
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            UPDATE evaluation_batches
+            SET status = %s, completed_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING id
+            """,
+            (normalized, batch_id),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("evaluation batch was not found")
+
+
+def fail_precheck(
+    connection, attempt_id: int, session_id: int, error_message: str
+) -> None:
+    """Record an execution error without inventing a PASS/FAIL decision."""
+    message = str(error_message).strip() or "Unknown pre-check error"
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            UPDATE precheck_attempts
+            SET completed_at = CURRENT_TIMESTAMP,
+                result_payload = %s
+            WHERE id = %s AND session_id = %s
+            RETURNING id
+            """,
+            (Jsonb({"error": message}), attempt_id, session_id),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("pre-check attempt was not found for this session")
+        connection.execute(
+            """
+            INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+            VALUES (%s, %s, 'precheck_failed', %s)
+            """,
+            (session_id, attempt_id, Jsonb({"error": message})),
+        )
+
+
 def start_precheck(connection, session_id: int, case_id: int | None = None) -> int:
     """Create a pre-check attempt and its start event."""
+
     with connection.transaction():
         cursor = connection.execute(
             """

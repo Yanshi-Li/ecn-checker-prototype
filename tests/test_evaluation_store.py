@@ -111,14 +111,33 @@ def test_create_bom_input_rejects_unknown_bom_state():
     with pytest.raises(ValueError, match="bom_state"):
         evaluation_store.create_bom_input(object(), 1, "BOM-001", "MISSING")
 
+
+def test_update_case_and_complete_batch_validate_and_persist_statuses():
+    connection = _FakeConnection(rows=[(41,), (51,)])
+
+    evaluation_store.update_precheck_case_status(connection, 41, "pass")
+    evaluation_store.complete_evaluation_batch(connection, 51, "COMPLETED_WITH_ERRORS")
+
+    assert connection.committed
+    assert any("UPDATE precheck_cases" in statement for statement, _ in connection.executed)
+    assert any("UPDATE evaluation_batches" in statement for statement, _ in connection.executed)
+
+
+def test_fail_precheck_records_error_event_without_system_decision():
+    connection = _FakeConnection(rows=[(61,)])
+
+    evaluation_store.fail_precheck(connection, 61, 7, "parser failed")
+
+    statements = [statement for statement, _ in connection.executed]
+    assert any("UPDATE precheck_attempts" in statement for statement in statements)
+    assert any("'precheck_failed'" in statement for statement in statements)
+
+
+def test_status_helpers_reject_unknown_values():
+    with pytest.raises(ValueError, match="status"):
+        evaluation_store.update_precheck_case_status(object(), 1, "UNKNOWN")
+    with pytest.raises(ValueError, match="invalid evaluation batch status"):
+        evaluation_store.complete_evaluation_batch(object(), 1, "UNKNOWN")
+
+
 # End of evaluation store tests.
-
-
-
-
-
-
-
-
-
-

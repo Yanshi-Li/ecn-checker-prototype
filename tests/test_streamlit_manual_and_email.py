@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 
 
+
+
 ROOT = Path(__file__).parent.parent
 spec = importlib.util.spec_from_file_location("streamlit_app_under_test", ROOT / "streamlit_app.py")
 streamlit_app = importlib.util.module_from_spec(spec)
@@ -139,7 +141,47 @@ def test_batch_preview_rows_groups_boms_by_filename_identifier():
     ]
 
 
+def test_persisted_batch_case_records_attempt_and_decision(monkeypatch):
+    case = streamlit_app.BatchCase(
+        "ECN-1:ECN_ONLY",
+        LogicalEcnInput("ECN-1", {}, {"source_file": "ecn.csv"}),
+        None,
+    )
+    calls = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(streamlit_app, "_evaluation_db_config", lambda: {"ECN_DB_PASSWORD": "x"})
+    monkeypatch.setattr(streamlit_app, "connect_evaluation_db", lambda config: Connection())
+    monkeypatch.setattr(streamlit_app, "start_precheck", lambda connection, session, case_id: 10)
+    monkeypatch.setattr(streamlit_app, "_execute_batch_case", lambda value: {"decision": "PASS", "packet": _packet("PASS")})
+    monkeypatch.setattr(
+        streamlit_app,
+        "complete_precheck",
+        lambda connection, attempt, session, decision, payload: calls.append((attempt, decision, payload)),
+    )
+    monkeypatch.setattr(
+        streamlit_app,
+        "update_precheck_case_status",
+        lambda connection, case_id, status: calls.append((case_id, status)),
+    )
+
+    result = streamlit_app._execute_persisted_batch_case(
+        case, {"session_id": 3, "case_ids": {case.case_id: 7}}
+    )
+
+    assert result["decision"] == "PASS"
+    assert calls[0][0:2] == (10, "PASS")
+    assert calls[1] == (7, "PASS")
+
+
 def test_batch_error_rows_expose_role_file_and_problem():
+
     preparation = BatchPreparation(
         NormalizedBatch(logical_ecns=(), bom_inputs=()),
         (BatchIntakeError(Path("bad.txt"), "bom", "unsupported bom file format"),),

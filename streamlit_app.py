@@ -29,12 +29,21 @@ from scripts.batch_intake import BatchPreparation, build_batch_from_paths  # noq
 from scripts.batch_orchestration import BatchCase, BatchResult, run_batch  # noqa: E402
 
 from scripts.evaluation_store import (  # noqa: E402
+    assign_bom_input,
+    complete_evaluation_batch,
     complete_precheck,
     connect_evaluation_db,
+    create_bom_input,
+    create_evaluation_batch,
+    create_logical_ecn,
+    create_precheck_case,
     create_session,
+    fail_precheck,
     initialise_schema,
     start_precheck,
+    update_precheck_case_status,
 )
+
 
 
 def _load(name: str):
@@ -308,7 +317,113 @@ def _execute_batch_case(case: BatchCase) -> dict[str, object]:
     return {"decision": packet["gate"]["decision"], "packet": packet}
 
 
+def _start_batch_evaluation(
+    tester_email: str,
+    tester_name: str,
+    batch,
+) -> dict[str, object] | None:
+    """Create the PostgreSQL records needed to persist every batch case."""
+    db_config = _evaluation_db_config()
+    if not db_config.get("ECN_DB_PASSWORD"):
+        return None
+
+    try:
+        with connect_evaluation_db(db_config) as connection:
+            initialise_schema(connection)
+            session_email = tester_email.strip()
+            session_id = st.session_state.get("evaluation_session_id")
+            if (
+                session_id is None
+                or st.session_state.get("evaluation_session_tester_email") != session_email
+            ):
+                session_id = create_session(connection, session_email, tester_name.strip())
+                st.session_state["evaluation_session_id"] = session_id
+                st.session_state["evaluation_session_tester_email"] = session_email
+
+            batch_id = create_evaluation_batch(
+                connection,
+                session_id,
+                {"case_count": len(batch.logical_ecns), "source": "streamlit"},
+            )
+            ecn_ids = {
+                ecn.key: create_logical_ecn(connection, batch_id, ecn.key, ecn.metadata)
+                for ecn in batch.logical_ecns
+            }
+            bom_ids = {}
+            for bom in batch.bom_inputs:
+                bom_id = create_bom_input(
+                    connection, batch_id, bom.key, bom.state, bom.metadata
+                )
+                bom_ids[bom.key] = bom_id
+                target = (batch.mappings or {}).get(bom.key, bom.suggested_ecn_key)
+                if target:
+                    assign_bom_input(connection, bom_id, ecn_ids[target])
+
+            case_ids = {}
+            for ecn in batch.logical_ecns:
+                assigned = [
+                    bom
+                    for bom in batch.bom_inputs
+                    if (batch.mappings or {}).get(bom.key, bom.suggested_ecn_key)
+                    == ecn.key
+                ]
+                for bom in assigned or [None]:
+                    case_id = create_precheck_case(
+                        connection,
+                        batch_id,
+                        ecn_ids[ecn.key],
+                        bom_ids.get(bom.key) if bom else None,
+                    )
+                    case_ids[f"{ecn.key}:{bom.key if bom else 'ECN_ONLY'}"] = case_id
+            return {"session_id": session_id, "batch_id": batch_id, "case_ids": case_ids}
+    except Exception:
+        return None
+
+
+def _execute_persisted_batch_case(
+    case: BatchCase, persistence: dict[str, object]
+) -> dict[str, object]:
+    """Run a case and persist its attempt without hiding validation errors."""
+    db_config = _evaluation_db_config()
+    case_id = persistence["case_ids"][case.case_id]
+    session_id = persistence["session_id"]
+    with connect_evaluation_db(db_config) as connection:
+        attempt_id = start_precheck(connection, session_id, case_id)
+    try:
+        result = _execute_batch_case(case)
+    except Exception as exc:
+        with connect_evaluation_db(db_config) as connection:
+            fail_precheck(connection, attempt_id, session_id, str(exc))
+            update_precheck_case_status(connection, case_id, "ERROR")
+        raise
+
+    gate = result["packet"]["gate"]
+    payload = {
+        "blocker_count": len(gate.get("blockers", [])),
+        "part_issue_count": len(gate.get("part_issues", [])),
+        "warning_count": len(gate.get("warnings", [])),
+    }
+    with connect_evaluation_db(db_config) as connection:
+        complete_precheck(connection, attempt_id, session_id, result["decision"], payload)
+        update_precheck_case_status(connection, case_id, result["decision"])
+    return result
+
+
+def _complete_batch_evaluation(
+    persistence: dict[str, object] | None, status: str
+) -> None:
+    """Mark the batch complete, allowing the UI result to remain available."""
+    if persistence is None:
+        return
+    try:
+        with connect_evaluation_db(_evaluation_db_config()) as connection:
+            complete_evaluation_batch(connection, persistence["batch_id"], status)
+    except Exception:
+        st.warning("Batch results are available, but the final status could not be saved.")
+
+
 def _render_batch_result(result: BatchResult) -> None:
+
     """Render independent batch outcomes and their validation findings."""
     counts = result.metrics.latest_counts
     st.subheader("Batch results")
@@ -650,13 +765,25 @@ def main() -> None:
                         ),
                     )
 
+                persistence = _start_batch_evaluation(tester_email, tester_name, execution_preparation.batch)
+
+                if persistence is None and _evaluation_db_config().get("ECN_DB_PASSWORD"):
+                    st.warning("Evaluation batch could not be started; validation will continue.")
+                executor = lambda case: (
+                    _execute_persisted_batch_case(case, persistence)
+                    if persistence is not None
+                    else _execute_batch_case(case)
+                )
+
                 with st.spinner("Running batch ECN validation checks..."):
                     batch_result = run_batch(
                         execution_preparation.batch,
-                        _execute_batch_case,
+                        executor,
                         progress_callback=report_batch_progress,
                     )
+                _complete_batch_evaluation(persistence, batch_result.status)
                 progress_bar.progress(1.0, text="Batch pre-check complete")
+
                 st.session_state["batch_result"] = batch_result
                 st.session_state.pop("packet", None)
                 st.session_state.pop("email_status", None)
