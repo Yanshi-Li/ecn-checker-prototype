@@ -12,7 +12,12 @@ sys.modules[spec.name] = streamlit_app
 spec.loader.exec_module(streamlit_app)
 
 notification = streamlit_app.validation_notification_mod
-from scripts.batch_intake import BatchIntakeError, BatchPreparation
+from scripts.batch_intake import (
+    BatchIntakeError,
+    BatchPreparation,
+    extract_filename_identifier,
+)
+
 from scripts.batch_orchestration import BomInput, LogicalEcnInput, NormalizedBatch
 
 
@@ -62,8 +67,26 @@ def test_manual_ecn_csv_uses_canonical_headers_and_escapes_values():
     assert "ecn_number" not in csv_text.splitlines()[0]
 
 
+def test_streamlit_upload_temp_path_preserves_filename_identifier():
+    class FakeUpload:
+        name = "ECN-4078575.csv"
+
+        @staticmethod
+        def getvalue():
+            return b"change_notice_number\n4078575\n"
+
+    temporary_path = Path(streamlit_app._write_upload(FakeUpload()))
+    try:
+        assert extract_filename_identifier(temporary_path) == "4078575"
+        assert temporary_path.name.startswith("ECN-4078575_")
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+
 def test_manual_bom_csv_generates_line_numbers_and_defaults():
     csv_text = streamlit_app.manual_bom_csv([{"part_number": "P-1"}, {"part_number": "P-2", "quantity": "2.5"}])
+
     assert "line_number,part_number,description,quantity,unit,action,parent_part_no" in csv_text
     rows = list(csv.DictReader(io.StringIO(csv_text)))
     assert rows[0]["line_number"] == "1"

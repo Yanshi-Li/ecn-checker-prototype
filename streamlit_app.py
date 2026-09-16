@@ -26,6 +26,8 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from scripts.batch_intake import BatchPreparation, build_batch_from_paths  # noqa: E402
+from scripts.batch_orchestration import BatchCase, BatchResult, run_batch  # noqa: E402
+
 from scripts.evaluation_store import (  # noqa: E402
     complete_precheck,
     connect_evaluation_db,
@@ -237,11 +239,21 @@ def _write_text(text: str, suffix: str = ".csv") -> str:
 
 
 def _write_upload(uploaded_file) -> str:
-    """Persist a Streamlit upload so the existing intake stage can read it."""
-    suffix = Path(uploaded_file.name).suffix.lower()
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+    """Persist an upload while retaining its identifying filename in the path.
+
+    Batch intake matches ECN and BOM files by exact seven-digit identifiers in
+    their filenames. A random temporary filename would discard that identifier,
+    so use the uploaded stem as the temporary-file prefix.
+    """
+    original_name = Path(uploaded_file.name)
+    suffix = original_name.suffix.lower()
+    prefix = f"{original_name.stem}_"
+    with tempfile.NamedTemporaryFile(prefix=prefix, suffix=suffix, delete=False) as temp_file:
         temp_file.write(uploaded_file.getvalue())
         return temp_file.name
+
+
+
 
 
 def batch_preview_rows(preparation: BatchPreparation) -> list[dict[str, str]]:
@@ -286,6 +298,39 @@ def batch_error_rows(preparation: BatchPreparation) -> list[dict[str, str]]:
         {"Role": error.role.upper(), "File": str(error.path), "Problem": error.message}
         for error in preparation.errors
     ]
+
+
+def _execute_batch_case(case: BatchCase) -> dict[str, object]:
+    """Run one normalized batch case through the authoritative pipeline."""
+    ecn_path = str(case.logical_ecn.metadata["source_file"])
+    bom_path = str(case.bom.metadata["source_file"]) if case.bom else None
+    packet = _run_pipeline(ecn_path, bom_path)
+    return {"decision": packet["gate"]["decision"], "packet": packet}
+
+
+def _render_batch_result(result: BatchResult) -> None:
+    """Render independent batch outcomes and their validation findings."""
+    counts = result.metrics.latest_counts
+    st.subheader("Batch results")
+    st.write(
+        f"Completed: {counts.get('PASS', 0)} PASS, "
+        f"{counts.get('FAIL', 0)} FAIL, "
+        f"{counts.get('ERROR', 0)} ERROR"
+    )
+    for case in result.cases:
+        bom_label = case.bom.key if case.bom else "ECN only"
+        with st.expander(f"{case.logical_ecn.key} — {bom_label} — {case.status}"):
+            st.caption(f"Case: {case.case_id}")
+            if case.status == "ERROR":
+                st.error(case.error)
+                continue
+            packet = case.result.get("packet", {}) if case.result else {}
+            gate = packet.get("gate", {})
+            _render_findings("Blockers", gate.get("blockers", []))
+            _render_findings("Part Issues", gate.get("part_issues", []))
+            _render_findings("Conflict Alerts", gate.get("conflict_alerts", []))
+            _render_findings("Warnings", gate.get("warnings", []))
+            _render_ai_notes(gate.get("ai_notes", {}))
 
 
 def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
@@ -499,8 +544,15 @@ def main() -> None:
                 help="CSV, Excel, or PDF files are supported by the intake stage.",
             )
 
+                
+        
+        
+
         if batch_mode:
+
+
             ecn_files = ecn_upload or []
+
             bom_files = bom_upload or []
             can_prepare = can_run and bool(ecn_files)
             if st.button("Prepare Batch Mapping", disabled=not can_prepare):
@@ -540,21 +592,76 @@ def main() -> None:
                         width="stretch",
                     )
                     st.info(
-                        "Batch execution will be enabled after mapping confirmation "
-                        "is implemented."
+                        "Review the mapping above, then click Run Checks to execute "
+                        "each ECN/BOM case independently."
                     )
-            # Batch execution is deliberately a separate implementation slice.
-            can_run = False
+                can_run = can_run and not batch_preparation.errors
+            else:
+                can_run = False
+
         else:
             ecn_file = ecn_upload
+
+
+
+
+
+
             bom_file = bom_upload
             can_run = can_run and bool(ecn_file and bom_file)
+
     else:
+
         manual_input = _render_manual_form()
         can_run = can_run and manual_input is not None
 
+
     if st.button("Run Checks", type="primary", disabled=not can_run):
+
+
         try:
+
+            if mode == "Batch pre-check":
+
+                # Rebuild the preparation here because the preview's temporary
+                # files were deleted after the previous Streamlit rerun.
+                temporary_paths = [
+                    *[_write_upload(upload) for upload in ecn_files],
+                    *[_write_upload(upload) for upload in bom_files],
+                ]
+                ecn_count = len(ecn_files)
+                execution_preparation = build_batch_from_paths(
+                    temporary_paths[:ecn_count],
+                    temporary_paths[ecn_count:],
+                )
+                if execution_preparation.errors:
+                    for error in batch_error_rows(execution_preparation):
+                        st.error(f"{error['Role']}: {error['File']}: {error['Problem']}")
+                    return
+
+                progress_bar = st.progress(0, text="Starting batch pre-check...")
+
+                def report_batch_progress(progress) -> None:
+                    progress_bar.progress(
+                        progress.completed / progress.total,
+                        text=(
+                            f"Checking {progress.completed}/{progress.total}: "
+                            f"{progress.current_case_id}"
+                        ),
+                    )
+
+                with st.spinner("Running batch ECN validation checks..."):
+                    batch_result = run_batch(
+                        execution_preparation.batch,
+                        _execute_batch_case,
+                        progress_callback=report_batch_progress,
+                    )
+                progress_bar.progress(1.0, text="Batch pre-check complete")
+                st.session_state["batch_result"] = batch_result
+                st.session_state.pop("packet", None)
+                st.session_state.pop("email_status", None)
+                return
+
             if mode == "Upload files":
                 temporary_paths = [_write_upload(ecn_file), _write_upload(bom_file)]
             else:
@@ -600,11 +707,19 @@ def main() -> None:
             for path in temporary_paths:
                 Path(path).unlink(missing_ok=True)
 
+    if mode == "Batch pre-check":
+        batch_result = st.session_state.get("batch_result")
+        if batch_result is not None:
+            _render_batch_result(batch_result)
+        return
+
+
     packet = st.session_state.get("packet")
     if not packet:
         return
 
     gate = packet["gate"]
+
     decision = gate["decision"]
 
     if decision == "PASS":
@@ -688,3 +803,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    
