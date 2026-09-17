@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import importlib.util
 import io
+import json
 import hmac
 import os
 import sys
@@ -477,18 +478,32 @@ def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
     return packet
 
 
+def _display_value(value: object) -> str:
+    """Convert structured finding values into Arrow-compatible text."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
 def _finding_rows(findings: list[dict]) -> list[dict]:
-    """Convert gate findings to the concise table shape used by the UI."""
+    """Convert gate findings to an Arrow-compatible table shape."""
     return [
         {
-            "Finding": finding.get("rule_id")
-            or finding.get("flag_type")
-            or finding.get("type", "—"),
-            "Severity": finding.get("severity", "ADVISORY"),
-            "Message": finding.get("message") or finding.get("detail", ""),
+            "Finding": _display_value(
+                finding.get("rule_id")
+                or finding.get("flag_type")
+                or finding.get("type", "—")
+            ),
+            "Severity": _display_value(finding.get("severity", "ADVISORY")),
+            "Message": _display_value(finding.get("message") or finding.get("detail", "")),
+            "Location": _display_value(finding.get("location")),
+            "Evidence": _display_value(finding.get("evidence")),
         }
         for finding in findings
     ]
+
 
 
 def _render_findings(title: str, findings: list[dict]) -> None:
@@ -671,7 +686,7 @@ def _render_reviewer_dashboard() -> None:
             st.subheader(f"Attempt {detail['attempt_id']} — {detail['system_decision']}")
             st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds"), "Tester judgement": detail.get("tester_judgement") or "Not recorded"})
             st.json(detail.get("payload", {}))
-            st.dataframe(detail.get("findings", []), hide_index=True, width="stretch")
+            st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
             for file in detail.get("files", []):
                 original = evaluation_queries.get_original_file(connection, int(selected), file["role"])
                 if original:

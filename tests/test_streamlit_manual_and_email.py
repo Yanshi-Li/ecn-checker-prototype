@@ -62,7 +62,19 @@ def _packet(decision="FAIL"):
     }
 
 
+def test_finding_rows_stringify_structured_values_for_arrow():
+    rows = streamlit_app._finding_rows([
+        {"rule_id": "H01", "evidence": {"field": "description"}, "location": {"field": "header"}},
+        {"rule_id": "H02", "evidence": "plain text", "location": "bom"},
+    ])
+
+    assert rows[0]["Evidence"] == '{"field": "description"}'
+    assert rows[0]["Location"] == '{"field": "header"}'
+    assert rows[1]["Evidence"] == "plain text"
+
+
 def test_manual_ecn_csv_uses_canonical_headers_and_escapes_values():
+
     csv_text = streamlit_app.manual_ecn_csv(_valid_values())
     assert csv_text.splitlines()[0].startswith("change_notice_number,name_of_change")
     assert '"Replace the old capacitor,\nthen update the drawing."' in csv_text
