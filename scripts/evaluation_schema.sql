@@ -61,7 +61,23 @@ CREATE TABLE IF NOT EXISTS precheck_attempts (
     result_payload JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS evaluation_files (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    precheck_attempt_id BIGINT NOT NULL REFERENCES precheck_attempts(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('ecn', 'bom', 'other')),
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    captured_at TIMESTAMPTZ NOT NULL,
+    content BYTEA NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_files_attempt_idx
+    ON evaluation_files (precheck_attempt_id);
+
 CREATE TABLE IF NOT EXISTS evaluation_events (
+
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     session_id BIGINT NOT NULL REFERENCES evaluation_sessions(id),
     precheck_attempt_id BIGINT REFERENCES precheck_attempts(id),

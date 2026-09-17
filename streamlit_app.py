@@ -37,10 +37,13 @@ from scripts.evaluation_store import (  # noqa: E402
     create_evaluation_batch,
     create_logical_ecn,
     create_precheck_case,
-    create_session,
+        create_session,
     fail_precheck,
+
     initialise_schema,
     start_precheck,
+    store_evaluation_files,
+
     update_precheck_case_status,
 )
 
@@ -398,14 +401,28 @@ def _execute_persisted_batch_case(
         raise
 
     gate = result["packet"]["gate"]
+
     payload = {
+        "packet": result["packet"],
+        "case_id": case.case_id,
         "blocker_count": len(gate.get("blockers", [])),
         "part_issue_count": len(gate.get("part_issues", [])),
         "warning_count": len(gate.get("warnings", [])),
     }
+
     with connect_evaluation_db(db_config) as connection:
+        files = []
+
+        for role, source in (("ecn", case.logical_ecn.metadata.get("source_file")), ("bom", case.bom.metadata.get("source_file") if case.bom else None)):
+            if source and Path(str(source)).exists():
+                source_path = Path(str(source))
+                files.append({"role": role, "filename": source_path.name, "bytes": source_path.read_bytes()})
+        if files:
+            store_evaluation_files(connection, attempt_id, files)
         complete_precheck(connection, attempt_id, session_id, result["decision"], payload)
         update_precheck_case_status(connection, case_id, result["decision"])
+
+
     return result
 
 
@@ -603,14 +620,18 @@ def _start_evaluation_precheck(tester_email: str, tester_name: str):
 def _complete_evaluation_precheck(
     evaluation: tuple[int, int] | None,
     system_decision: str,
-    result_payload: dict[str, int],
+    result_payload: dict[str, object],
+    files: list[dict[str, object]] | None = None,
 ):
     """Persist completion data and return duration, or None if persistence fails."""
     if evaluation is None:
         return None
-    session_id, attempt_id = evaluation
+        session_id, attempt_id = evaluation
     try:
         with connect_evaluation_db(_evaluation_db_config()) as connection:
+
+            if files:
+                store_evaluation_files(connection, attempt_id, files)
             return complete_precheck(
                 connection, attempt_id, session_id, system_decision, result_payload
             )
@@ -813,13 +834,25 @@ def main() -> None:
                 st.session_state.pop("email_status", None)
 
             gate = packet["gate"]
+
+
             result_payload = {
+
+                "packet": packet,
                 "blocker_count": len(gate.get("blockers", [])),
                 "part_issue_count": len(gate.get("part_issues", [])),
                 "warning_count": len(gate.get("warnings", [])),
             }
+
+            captured_files = []
+
+
+            for role, path in zip(("ecn", "bom"), temporary_paths):
+                source_path = Path(path)
+                if source_path.exists():
+                    captured_files.append({"role": role, "filename": source_path.name, "bytes": source_path.read_bytes()})
             duration = _complete_evaluation_precheck(
-                evaluation, gate["decision"], result_payload
+                evaluation, gate["decision"], result_payload, captured_files
             )
             if evaluation is not None and duration is None:
                 st.warning(
@@ -846,6 +879,7 @@ def main() -> None:
         return
 
     gate = packet["gate"]
+
 
     decision = gate["decision"]
 

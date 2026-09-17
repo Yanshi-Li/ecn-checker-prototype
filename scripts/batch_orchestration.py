@@ -224,6 +224,7 @@ def run_batch(
     batch: NormalizedBatch,
     executor: Callable[[BatchCase], Mapping[str, object]],
     progress_callback: Callable[[BatchProgress], None] | None = None,
+    result_sink: Callable[[BatchCase], None] | None = None,
 ) -> BatchResult:
     """Validate mappings, execute independent cases, and continue after errors."""
     cases = _make_cases(batch)
@@ -233,6 +234,13 @@ def run_batch(
     for index, case in enumerate(cases, start=1):
         current = _execute_case(case, executor)
         attempts.append(current)
+        if result_sink is not None:
+            # Persistence is an observer: a sink failure must not turn a
+            # completed validation into a validation failure.
+            try:
+                result_sink(current)
+            except Exception:
+                pass
         counts[current.status] += 1
         if progress_callback:
             progress_callback(BatchProgress(total, index, total - index, current.case_id, dict(counts)))

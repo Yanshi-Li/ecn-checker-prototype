@@ -140,9 +140,26 @@ case, and outcome counts without coupling the module to Streamlit.
 
 The module does not read files, persist data, send email, or duplicate rule
 logic. Its `BatchResult.rerun()` operation appends a new attempt for an existing
-case, leaving earlier attempts available for evaluation metrics.
+case, leaving earlier attempts available for evaluation metrics. Persistence is
+an optional observer of completed cases, so a database outage never changes a
+validation decision.
+
+## Evaluation persistence and offline bundles
+
+`evaluation_store.py` stores the complete result packet in `precheck_attempts.result_payload`
+and stores original uploaded bytes, filename, MIME type, byte size, capture time,
+and SHA-256 in `evaluation_files`. Counts are indexes; they do not replace the
+findings or extracted data shown to the tester. The Streamlit batch path uses
+this store when `ECN_DB_PASSWORD` is configured and otherwise continues in memory.
+
+`evaluation_bundle.py` provides a versioned ZIP export for offline runs. A bundle
+contains a manifest, one complete JSON result per case, and the original files.
+Import verifies every file's hash and size before calling the destination store;
+re-importing the same verified bundle is idempotent. The CLI writes one with
+`py scripts/run_batch.py ... --export-bundle out/evaluation.zip`.
 
 ## Key Files
+
 
 
 | File                          | Role                          |
@@ -157,7 +174,10 @@ case, leaving earlier attempts available for evaluation metrics.
 | `scripts/stages/email_notification.py` | Stage 6: gate-driven SendGrid email |
 | `scripts/batch_intake.py` | Raw-file batch preparation and filename matching |
 | `scripts/batch_orchestration.py` | Independent normalized batch case execution |
-| `scripts/run_batch.py` | Batch command-line runner |
+| `scripts/run_batch.py` | Batch command-line runner and persistence/export entry point |
+| `scripts/evaluation_store.py` | PostgreSQL configuration, schema setup, and snapshot persistence |
+| `scripts/evaluation_bundle.py` | Integrity-checked offline evaluation bundle export/import |
+
 | `streamlit_app.py` | Single-case and batch mapping Streamlit workflows |
 
 

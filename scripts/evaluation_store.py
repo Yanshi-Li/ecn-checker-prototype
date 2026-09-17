@@ -1,5 +1,6 @@
 """Persistence primitives for identified ECN evaluation sessions."""
 
+
 from __future__ import annotations
 
 import os
@@ -8,8 +9,71 @@ from typing import Mapping
 
 import psycopg
 from psycopg.types.json import Jsonb
+from hashlib import sha256
+from datetime import datetime, timezone
 
 _SCHEMA_PATH = Path(__file__).with_name("evaluation_schema.sql")
+
+
+def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[str, object], files=()) -> int:
+    """Persist a complete PASS/FAIL snapshot and its original file evidence."""
+    decision = str(snapshot.get("decision") or "").strip().upper()
+    if decision not in {"PASS", "FAIL"}:
+        raise ValueError("snapshot decision must be PASS or FAIL")
+    payload = {key: value for key, value in snapshot.items() if key != "files"}
+    with connection.transaction():
+        cursor = connection.execute(
+            """INSERT INTO precheck_attempts
+               (session_id, system_decision, started_at, completed_at, result_payload)
+               VALUES (%s, %s, COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP), %s)
+               RETURNING id""",
+            (session_id, decision, snapshot.get("started_at"), snapshot.get("completed_at"), Jsonb(payload)),
+        )
+        attempt_id = int(cursor.fetchone()[0])
+        connection.execute(
+            """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+               VALUES (%s, %s, 'precheck_completed', %s)""",
+            (session_id, attempt_id, Jsonb({"system_decision": decision, "case_id": snapshot.get("case_id")})),
+        )
+        for file in files:
+            raw = file.get("bytes", b"")
+            if isinstance(raw, str):
+                raw = raw.encode()
+            role = str(file.get("role", "other"))
+            if role not in {"ecn", "bom", "other"}:
+                role = "other"
+            connection.execute(
+                """INSERT INTO evaluation_files
+                   (precheck_attempt_id, role, filename, mime_type, size_bytes, sha256, captured_at, content)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (attempt_id, role, str(file.get("filename", "uploaded")),
+                 str(file.get("mime_type", "application/octet-stream")), len(raw),
+                 sha256(raw).hexdigest(), file.get("captured_at") or datetime.now(timezone.utc), raw),
+            )
+    return attempt_id
+
+
+save_evaluation_snapshot = persist_evaluation_snapshot
+
+
+def store_evaluation_files(connection, attempt_id: int, files=()) -> None:
+    """Attach original uploaded bytes to an existing pre-check attempt."""
+    with connection.transaction():
+        for file in files:
+            raw = file.get("bytes", b"")
+            if isinstance(raw, str):
+                raw = raw.encode()
+            role = str(file.get("role", "other"))
+            if role not in {"ecn", "bom", "other"}:
+                role = "other"
+            connection.execute(
+                """INSERT INTO evaluation_files
+                   (precheck_attempt_id, role, filename, mime_type, size_bytes, sha256, captured_at, content)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (attempt_id, role, str(file.get("filename", "uploaded")),
+                 str(file.get("mime_type", "application/octet-stream")), len(raw),
+                 sha256(raw).hexdigest(), file.get("captured_at") or datetime.now(timezone.utc), raw),
+            )
 
 
 def connect_evaluation_db(environ: Mapping[str, str] | None = None):
