@@ -158,6 +158,15 @@ Import verifies every file's hash and size before calling the destination store;
 re-importing the same verified bundle is idempotent. The CLI writes one with
 `py scripts/run_batch.py ... --export-bundle out/evaluation.zip`.
 
+`scripts/evaluation_queries.py` is the query seam for the Streamlit Reviewer
+Dashboard. It lists persisted attempts, calculates PASS/FAIL and tester-system
+agreement metrics, returns the complete result payload and rule findings for one
+attempt, downloads original ECN/BOM evidence, and records a separate tester
+judgement. Agreement excludes unjudged attempts; saving a judgement never
+changes `precheck_attempts.system_decision`. The dashboard is optional and
+shows a generic availability message when PostgreSQL is not configured.
+
+
 ## Key Files
 
 
@@ -177,8 +186,10 @@ re-importing the same verified bundle is idempotent. The CLI writes one with
 | `scripts/run_batch.py` | Batch command-line runner and persistence/export entry point |
 | `scripts/evaluation_store.py` | PostgreSQL configuration, schema setup, and snapshot persistence |
 | `scripts/evaluation_bundle.py` | Integrity-checked offline evaluation bundle export/import |
+| `scripts/evaluation_queries.py` | Reviewer dashboard query, judgement, and evidence seam |
 
-| `streamlit_app.py` | Single-case and batch mapping Streamlit workflows |
+| `streamlit_app.py` | Tester intake, batch mapping, and reviewer dashboard workflows |
+
 
 
 | `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
