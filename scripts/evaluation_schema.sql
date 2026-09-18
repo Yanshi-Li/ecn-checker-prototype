@@ -10,17 +10,74 @@ CREATE TABLE IF NOT EXISTS evaluation_sessions (
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS evaluation_batches (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    session_id BIGINT NOT NULL REFERENCES evaluation_sessions(id),
+    status TEXT NOT NULL DEFAULT 'ACTIVE'
+        CHECK (status IN ('ACTIVE', 'COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED', 'CANCELLED')),
+    started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMPTZ,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE IF NOT EXISTS logical_ecns (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    batch_id BIGINT NOT NULL REFERENCES evaluation_batches(id) ON DELETE CASCADE,
+    logical_ecn_key TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (batch_id, logical_ecn_key)
+);
+
+CREATE TABLE IF NOT EXISTS bom_inputs (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    batch_id BIGINT NOT NULL REFERENCES evaluation_batches(id) ON DELETE CASCADE,
+    bom_key TEXT NOT NULL,
+    bom_state TEXT NOT NULL
+        CHECK (bom_state IN ('ABSENT', 'EMPTY', 'PRESENT')),
+    assigned_logical_ecn_id BIGINT REFERENCES logical_ecns(id),
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (batch_id, bom_key)
+);
+
+CREATE TABLE IF NOT EXISTS precheck_cases (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    batch_id BIGINT NOT NULL REFERENCES evaluation_batches(id) ON DELETE CASCADE,
+    logical_ecn_id BIGINT NOT NULL REFERENCES logical_ecns(id),
+    bom_input_id BIGINT REFERENCES bom_inputs(id),
+    status TEXT NOT NULL DEFAULT 'NOT_RUN'
+        CHECK (status IN ('PASS', 'FAIL', 'ERROR', 'NOT_RUN')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS precheck_attempts (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     session_id BIGINT NOT NULL REFERENCES evaluation_sessions(id),
-    system_decision TEXT
+            case_id BIGINT REFERENCES precheck_cases(id),
+
+        system_decision TEXT
         CHECK (system_decision IN ('PASS', 'FAIL')),
     started_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ,
     result_payload JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
+CREATE TABLE IF NOT EXISTS evaluation_files (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    precheck_attempt_id BIGINT NOT NULL REFERENCES precheck_attempts(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('ecn', 'bom', 'other')),
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    captured_at TIMESTAMPTZ NOT NULL,
+    content BYTEA NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS evaluation_files_attempt_idx
+    ON evaluation_files (precheck_attempt_id);
+
 CREATE TABLE IF NOT EXISTS evaluation_events (
+
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     session_id BIGINT NOT NULL REFERENCES evaluation_sessions(id),
     precheck_attempt_id BIGINT REFERENCES precheck_attempts(id),
@@ -48,6 +105,9 @@ CREATE TABLE IF NOT EXISTS notification_attempts (
     completed_at TIMESTAMPTZ,
     error_message TEXT
 );
+
+ALTER TABLE precheck_attempts
+    ADD COLUMN IF NOT EXISTS case_id BIGINT REFERENCES precheck_cases(id);
 
 CREATE INDEX IF NOT EXISTS evaluation_events_session_idx
     ON evaluation_events (session_id, occurred_at);

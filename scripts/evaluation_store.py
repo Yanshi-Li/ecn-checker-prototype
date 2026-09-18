@@ -1,5 +1,6 @@
 """Persistence primitives for identified ECN evaluation sessions."""
 
+
 from __future__ import annotations
 
 import os
@@ -8,8 +9,71 @@ from typing import Mapping
 
 import psycopg
 from psycopg.types.json import Jsonb
+from hashlib import sha256
+from datetime import datetime, timezone
 
 _SCHEMA_PATH = Path(__file__).with_name("evaluation_schema.sql")
+
+
+def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[str, object], files=()) -> int:
+    """Persist a complete PASS/FAIL snapshot and its original file evidence."""
+    decision = str(snapshot.get("decision") or "").strip().upper()
+    if decision not in {"PASS", "FAIL"}:
+        raise ValueError("snapshot decision must be PASS or FAIL")
+    payload = {key: value for key, value in snapshot.items() if key != "files"}
+    with connection.transaction():
+        cursor = connection.execute(
+            """INSERT INTO precheck_attempts
+               (session_id, system_decision, started_at, completed_at, result_payload)
+               VALUES (%s, %s, COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP), %s)
+               RETURNING id""",
+            (session_id, decision, snapshot.get("started_at"), snapshot.get("completed_at"), Jsonb(payload)),
+        )
+        attempt_id = int(cursor.fetchone()[0])
+        connection.execute(
+            """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+               VALUES (%s, %s, 'precheck_completed', %s)""",
+            (session_id, attempt_id, Jsonb({"system_decision": decision, "case_id": snapshot.get("case_id")})),
+        )
+        for file in files:
+            raw = file.get("bytes", b"")
+            if isinstance(raw, str):
+                raw = raw.encode()
+            role = str(file.get("role", "other"))
+            if role not in {"ecn", "bom", "other"}:
+                role = "other"
+            connection.execute(
+                """INSERT INTO evaluation_files
+                   (precheck_attempt_id, role, filename, mime_type, size_bytes, sha256, captured_at, content)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (attempt_id, role, str(file.get("filename", "uploaded")),
+                 str(file.get("mime_type", "application/octet-stream")), len(raw),
+                 sha256(raw).hexdigest(), file.get("captured_at") or datetime.now(timezone.utc), raw),
+            )
+    return attempt_id
+
+
+save_evaluation_snapshot = persist_evaluation_snapshot
+
+
+def store_evaluation_files(connection, attempt_id: int, files=()) -> None:
+    """Attach original uploaded bytes to an existing pre-check attempt."""
+    with connection.transaction():
+        for file in files:
+            raw = file.get("bytes", b"")
+            if isinstance(raw, str):
+                raw = raw.encode()
+            role = str(file.get("role", "other"))
+            if role not in {"ecn", "bom", "other"}:
+                role = "other"
+            connection.execute(
+                """INSERT INTO evaluation_files
+                   (precheck_attempt_id, role, filename, mime_type, size_bytes, sha256, captured_at, content)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (attempt_id, role, str(file.get("filename", "uploaded")),
+                 str(file.get("mime_type", "application/octet-stream")), len(raw),
+                 sha256(raw).hexdigest(), file.get("captured_at") or datetime.now(timezone.utc), raw),
+            )
 
 
 def connect_evaluation_db(environ: Mapping[str, str] | None = None):
@@ -61,19 +125,191 @@ def create_session(
     return int(row[0])
 
 
-def start_precheck(connection, session_id: int) -> int:
-    """Create a pre-check attempt and its start event."""
+def create_evaluation_batch(
+    connection,
+    session_id: int,
+    metadata: Mapping[str, object] | None = None,
+) -> int:
+    """Create a batch belonging to an identified evaluation session."""
     with connection.transaction():
         cursor = connection.execute(
             """
-            INSERT INTO precheck_attempts (session_id, started_at)
-            VALUES (%s, CURRENT_TIMESTAMP)
+            INSERT INTO evaluation_batches (session_id, metadata)
+            VALUES (%s, %s)
             RETURNING id
             """,
-            (session_id,),
+            (session_id, Jsonb(dict(metadata or {}))),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def create_logical_ecn(
+    connection,
+    batch_id: int,
+    logical_ecn_key: str,
+    metadata: Mapping[str, object] | None = None,
+) -> int:
+    """Add one normalized logical ECN to a batch."""
+    key = logical_ecn_key.strip()
+    if not key:
+        raise ValueError("logical_ecn_key must not be empty")
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            INSERT INTO logical_ecns (batch_id, logical_ecn_key, metadata)
+            VALUES (%s, %s, %s)
+            RETURNING id
+            """,
+            (batch_id, key, Jsonb(dict(metadata or {}))),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def create_bom_input(
+    connection,
+    batch_id: int,
+    bom_key: str,
+    bom_state: str,
+    metadata: Mapping[str, object] | None = None,
+) -> int:
+    """Add an unassigned BOM input to a batch."""
+    key = bom_key.strip()
+    state = bom_state.strip().upper()
+    if not key:
+        raise ValueError("bom_key must not be empty")
+    if state not in {"ABSENT", "EMPTY", "PRESENT"}:
+        raise ValueError("bom_state must be ABSENT, EMPTY, or PRESENT")
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            INSERT INTO bom_inputs (batch_id, bom_key, bom_state, metadata)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (batch_id, key, state, Jsonb(dict(metadata or {}))),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def assign_bom_input(connection, bom_input_id: int, logical_ecn_id: int) -> None:
+    """Assign a BOM input to exactly one logical ECN."""
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            UPDATE bom_inputs
+            SET assigned_logical_ecn_id = %s
+            WHERE id = %s AND assigned_logical_ecn_id IS NULL
+            RETURNING id
+            """,
+            (logical_ecn_id, bom_input_id),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("BOM input is missing or already assigned")
+
+
+def create_precheck_case(
+    connection,
+    batch_id: int,
+    logical_ecn_id: int,
+    bom_input_id: int | None = None,
+) -> int:
+    """Create one independent ECN-only or ECN/BOM comparison case."""
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            INSERT INTO precheck_cases (batch_id, logical_ecn_id, bom_input_id)
+            VALUES (%s, %s, %s)
+            RETURNING id
+            """,
+            (batch_id, logical_ecn_id, bom_input_id),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def update_precheck_case_status(connection, case_id: int, status: str) -> None:
+    """Store the latest status for one independent batch case."""
+    normalized = status.strip().upper()
+    if normalized not in {"PASS", "FAIL", "ERROR", "NOT_RUN"}:
+        raise ValueError("status must be PASS, FAIL, ERROR, or NOT_RUN")
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            UPDATE precheck_cases
+            SET status = %s
+            WHERE id = %s
+            RETURNING id
+            """,
+            (normalized, case_id),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("pre-check case was not found")
+
+
+def complete_evaluation_batch(connection, batch_id: int, status: str) -> None:
+    """Mark a persisted batch as completed with its aggregate status."""
+    normalized = status.strip().upper()
+    if normalized not in {"COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED", "CANCELLED"}:
+        raise ValueError("invalid evaluation batch status")
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            UPDATE evaluation_batches
+            SET status = %s, completed_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+            RETURNING id
+            """,
+            (normalized, batch_id),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("evaluation batch was not found")
+
+
+def fail_precheck(
+    connection, attempt_id: int, session_id: int, error_message: str
+) -> None:
+    """Record an execution error without inventing a PASS/FAIL decision."""
+    message = str(error_message).strip() or "Unknown pre-check error"
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            UPDATE precheck_attempts
+            SET completed_at = CURRENT_TIMESTAMP,
+                result_payload = %s
+            WHERE id = %s AND session_id = %s
+            RETURNING id
+            """,
+            (Jsonb({"error": message}), attempt_id, session_id),
+        )
+        if cursor.fetchone() is None:
+            raise ValueError("pre-check attempt was not found for this session")
+        connection.execute(
+            """
+            INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+            VALUES (%s, %s, 'precheck_failed', %s)
+            """,
+            (session_id, attempt_id, Jsonb({"error": message})),
+        )
+
+
+def start_precheck(connection, session_id: int, case_id: int | None = None) -> int:
+    """Create a pre-check attempt and its start event."""
+
+    with connection.transaction():
+        cursor = connection.execute(
+            """
+            INSERT INTO precheck_attempts (session_id, case_id, started_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            RETURNING id
+            """,
+            (session_id, case_id),
         )
         attempt_id = int(cursor.fetchone()[0])
         connection.execute(
+
             """
             INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type)
             VALUES (%s, %s, 'precheck_started')

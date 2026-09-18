@@ -82,13 +82,13 @@ def test_normalise_enriches_canonical_flag_with_catalogue_metadata():
     flag = result["flags"][0]
     assert result["response_status"] == "COMPLETE"
     assert flag["rule_id"] == "S02"
-    assert flag["severity"] == "BLOCKER"
-    assert flag["gate_effect"] == "FAIL"
+    assert flag["severity"] == "ADVISORY"
+    assert flag["gate_effect"] == "NONE"
     assert flag["evidence"] == "HE-1021"
 
 
-
 def test_normalise_keeps_a_supported_or_clear_assessment_complete():
+
 
     result = advisory_impl._normalise_ai_result(
         {

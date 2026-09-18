@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import importlib.util
 import io
+import json
 import hmac
 import os
 import sys
@@ -25,13 +26,29 @@ BOM_FILE_TYPES = ["csv", "xlsx", "xls", "pdf"]
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+from scripts.batch_intake import BatchPreparation, build_batch_from_paths  # noqa: E402
+from scripts.batch_orchestration import BatchCase, BatchResult, run_batch  # noqa: E402
+from scripts import evaluation_queries  # noqa: E402
+
 from scripts.evaluation_store import (  # noqa: E402
+    assign_bom_input,
+    complete_evaluation_batch,
     complete_precheck,
     connect_evaluation_db,
-    create_session,
+    create_bom_input,
+    create_evaluation_batch,
+    create_logical_ecn,
+    create_precheck_case,
+        create_session,
+    fail_precheck,
+
     initialise_schema,
     start_precheck,
+    store_evaluation_files,
+
+    update_precheck_case_status,
 )
+
 
 
 def _load(name: str):
@@ -53,7 +70,6 @@ ai_advisory_mod = _load("ai_advisory")
 context_engine_mod = _load("context_engine")
 merge_step_mod = _load("merge_step")
 validation_notification_mod = _load("validation_notification")
-
 email_notification_mod = _load("email_notification")
 
 run_intake = intake_mod.run_intake
@@ -64,6 +80,7 @@ log_approved_change = context_engine_mod.log_approved_change
 run_merge_step = merge_step_mod.run_merge_step
 send_fail_email = email_notification_mod.send_fail_email
 send_pass_email = email_notification_mod.send_pass_email
+send_validation_email = validation_notification_mod.send_validation_email
 
 
 def _get_config_value(key: str, default: str = "") -> str:
@@ -139,9 +156,6 @@ def _require_access() -> bool:
         st.error("Incorrect password.")
     return False
 
-send_validation_email = validation_notification_mod.send_validation_email
-
-
 
 ECN_MANUAL_FIELDS = [
     "change_notice_number",
@@ -182,7 +196,10 @@ def _csv_text(rows: list[dict], fieldnames: list[str]) -> str:
 
 def manual_ecn_csv(values: dict[str, object]) -> str:
     """Serialize canonical manual ECN intake fields for the existing loader."""
-    row = {field: "" if values.get(field) is None else str(values.get(field)) for field in ECN_MANUAL_FIELDS}
+    row = {
+        field: "" if values.get(field) is None else str(values.get(field))
+        for field in ECN_MANUAL_FIELDS
+    }
     return _csv_text([row], ECN_MANUAL_FIELDS)
 
 
@@ -190,21 +207,29 @@ def manual_bom_csv(rows: list[dict[str, object]]) -> str:
     """Serialize canonical manual BOM rows for the existing loader."""
     normalized = []
     for index, row in enumerate(rows, start=1):
-        normalized.append({
-            "line_number": row.get("line_number") or index,
-            "part_number": row.get("part_number", ""),
-            "description": row.get("description", ""),
-            "quantity": row.get("quantity", "1"),
-            "unit": row.get("unit", "EA"),
-            "action": row.get("action", ""),
-            "parent_part_no": row.get("parent_part_no", ""),
-        })
+        normalized.append(
+            {
+                "line_number": row.get("line_number") or index,
+                "part_number": row.get("part_number", ""),
+                "description": row.get("description", ""),
+                "quantity": row.get("quantity", "1"),
+                "unit": row.get("unit", "EA"),
+                "action": row.get("action", ""),
+                "parent_part_no": row.get("parent_part_no", ""),
+            }
+        )
     return _csv_text(normalized, BOM_MANUAL_FIELDS)
 
 
-def validate_manual_input(values: dict[str, object], bom_rows: list[dict[str, object]]) -> list[str]:
+def validate_manual_input(
+    values: dict[str, object], bom_rows: list[dict[str, object]]
+) -> list[str]:
     """Return user-facing errors before invoking the authoritative pipeline."""
-    errors = [f"{field.replace('_', ' ').title()} is required." for field in intake_mod.REQUIRED_ECN_FIELDS if not str(values.get(field, "")).strip()]
+    errors = [
+        f"{field.replace('_', ' ').title()} is required."
+        for field in intake_mod.REQUIRED_ECN_FIELDS
+        if not str(values.get(field, "")).strip()
+    ]
     if not bom_rows:
         errors.append("At least one BOM row is required.")
     for index, row in enumerate(bom_rows, start=1):
@@ -220,17 +245,226 @@ def validate_manual_input(values: dict[str, object], bom_rows: list[dict[str, ob
 
 
 def _write_text(text: str, suffix: str = ".csv") -> str:
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", suffix=suffix, delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", newline="", suffix=suffix, delete=False
+    ) as temp_file:
         temp_file.write(text)
         return temp_file.name
 
 
 def _write_upload(uploaded_file) -> str:
-    """Persist a Streamlit upload so the existing intake stage can read it."""
-    suffix = Path(uploaded_file.name).suffix.lower()
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+    """Persist an upload while retaining its identifying filename in the path.
+
+    Batch intake matches ECN and BOM files by exact seven-digit identifiers in
+    their filenames. A random temporary filename would discard that identifier,
+    so use the uploaded stem as the temporary-file prefix.
+    """
+    original_name = Path(uploaded_file.name)
+    suffix = original_name.suffix.lower()
+    prefix = f"{original_name.stem}_"
+    with tempfile.NamedTemporaryFile(prefix=prefix, suffix=suffix, delete=False) as temp_file:
         temp_file.write(uploaded_file.getvalue())
         return temp_file.name
+
+
+
+
+
+def batch_preview_rows(preparation: BatchPreparation) -> list[dict[str, str]]:
+    """Return a display-oriented preview of safe ECN/BOM mappings."""
+    ecns = {ecn.key: ecn for ecn in preparation.batch.logical_ecns}
+    bom_by_ecn: dict[str, list] = {}
+    for bom in preparation.batch.bom_inputs:
+        target = preparation.batch.mappings.get(bom.key) if preparation.batch.mappings else None
+        if target:
+            bom_by_ecn.setdefault(target, []).append(bom)
+
+    rows: list[dict[str, str]] = []
+    for ecn_key in sorted(ecns):
+        boms = bom_by_ecn.get(ecn_key, [])
+        if not boms:
+            rows.append(
+                {
+                    "ECN": ecn_key,
+                    "ECN file": str(ecns[ecn_key].metadata.get("source_file", "")),
+                    "BOM": "—",
+                    "BOM state": "ABSENT",
+                    "Status": "Ready (ECN only)",
+                }
+            )
+            continue
+        for bom in boms:
+            rows.append(
+                {
+                    "ECN": ecn_key,
+                    "ECN file": str(ecns[ecn_key].metadata.get("source_file", "")),
+                    "BOM": bom.key,
+                    "BOM state": bom.state,
+                    "Status": "Ready",
+                }
+            )
+    return rows
+
+
+def batch_error_rows(preparation: BatchPreparation) -> list[dict[str, str]]:
+    """Return intake errors in a shape suitable for a Streamlit table."""
+    return [
+        {"Role": error.role.upper(), "File": str(error.path), "Problem": error.message}
+        for error in preparation.errors
+    ]
+
+
+def _execute_batch_case(case: BatchCase) -> dict[str, object]:
+    """Run one normalized batch case through the authoritative pipeline."""
+    ecn_path = str(case.logical_ecn.metadata["source_file"])
+    bom_path = str(case.bom.metadata["source_file"]) if case.bom else None
+    packet = _run_pipeline(ecn_path, bom_path)
+    return {"decision": packet["gate"]["decision"], "packet": packet}
+
+
+def _start_batch_evaluation(
+    tester_email: str,
+    tester_name: str,
+    batch,
+) -> dict[str, object] | None:
+    """Create the PostgreSQL records needed to persist every batch case."""
+    db_config = _evaluation_db_config()
+    if not db_config.get("ECN_DB_PASSWORD"):
+        return None
+
+    try:
+        with connect_evaluation_db(db_config) as connection:
+            initialise_schema(connection)
+            session_email = tester_email.strip()
+            session_id = st.session_state.get("evaluation_session_id")
+            if (
+                session_id is None
+                or st.session_state.get("evaluation_session_tester_email") != session_email
+            ):
+                session_id = create_session(connection, session_email, tester_name.strip())
+                st.session_state["evaluation_session_id"] = session_id
+                st.session_state["evaluation_session_tester_email"] = session_email
+
+            batch_id = create_evaluation_batch(
+                connection,
+                session_id,
+                {"case_count": len(batch.logical_ecns), "source": "streamlit"},
+            )
+            ecn_ids = {
+                ecn.key: create_logical_ecn(connection, batch_id, ecn.key, ecn.metadata)
+                for ecn in batch.logical_ecns
+            }
+            bom_ids = {}
+            for bom in batch.bom_inputs:
+                bom_id = create_bom_input(
+                    connection, batch_id, bom.key, bom.state, bom.metadata
+                )
+                bom_ids[bom.key] = bom_id
+                target = (batch.mappings or {}).get(bom.key, bom.suggested_ecn_key)
+                if target:
+                    assign_bom_input(connection, bom_id, ecn_ids[target])
+
+            case_ids = {}
+            for ecn in batch.logical_ecns:
+                assigned = [
+                    bom
+                    for bom in batch.bom_inputs
+                    if (batch.mappings or {}).get(bom.key, bom.suggested_ecn_key)
+                    == ecn.key
+                ]
+                for bom in assigned or [None]:
+                    case_id = create_precheck_case(
+                        connection,
+                        batch_id,
+                        ecn_ids[ecn.key],
+                        bom_ids.get(bom.key) if bom else None,
+                    )
+                    case_ids[f"{ecn.key}:{bom.key if bom else 'ECN_ONLY'}"] = case_id
+            return {"session_id": session_id, "batch_id": batch_id, "case_ids": case_ids}
+    except Exception:
+        return None
+
+
+def _execute_persisted_batch_case(
+    case: BatchCase, persistence: dict[str, object]
+) -> dict[str, object]:
+    """Run a case and persist its attempt without hiding validation errors."""
+    db_config = _evaluation_db_config()
+    case_id = persistence["case_ids"][case.case_id]
+    session_id = persistence["session_id"]
+    with connect_evaluation_db(db_config) as connection:
+        attempt_id = start_precheck(connection, session_id, case_id)
+    try:
+        result = _execute_batch_case(case)
+    except Exception as exc:
+        with connect_evaluation_db(db_config) as connection:
+            fail_precheck(connection, attempt_id, session_id, str(exc))
+            update_precheck_case_status(connection, case_id, "ERROR")
+        raise
+
+    gate = result["packet"]["gate"]
+
+    payload = {
+        "packet": result["packet"],
+        "case_id": case.case_id,
+        "blocker_count": len(gate.get("blockers", [])),
+        "part_issue_count": len(gate.get("part_issues", [])),
+        "warning_count": len(gate.get("warnings", [])),
+    }
+
+    with connect_evaluation_db(db_config) as connection:
+        files = []
+
+        for role, source in (("ecn", case.logical_ecn.metadata.get("source_file")), ("bom", case.bom.metadata.get("source_file") if case.bom else None)):
+            if source and Path(str(source)).exists():
+                source_path = Path(str(source))
+                files.append({"role": role, "filename": source_path.name, "bytes": source_path.read_bytes()})
+        if files:
+            store_evaluation_files(connection, attempt_id, files)
+        complete_precheck(connection, attempt_id, session_id, result["decision"], payload)
+        update_precheck_case_status(connection, case_id, result["decision"])
+
+
+    return result
+
+
+def _complete_batch_evaluation(
+    persistence: dict[str, object] | None, status: str
+) -> None:
+    """Mark the batch complete, allowing the UI result to remain available."""
+    if persistence is None:
+        return
+    try:
+        with connect_evaluation_db(_evaluation_db_config()) as connection:
+            complete_evaluation_batch(connection, persistence["batch_id"], status)
+    except Exception:
+        st.warning("Batch results are available, but the final status could not be saved.")
+
+
+def _render_batch_result(result: BatchResult) -> None:
+
+    """Render independent batch outcomes and their validation findings."""
+    counts = result.metrics.latest_counts
+    st.subheader("Batch results")
+    st.write(
+        f"Completed: {counts.get('PASS', 0)} PASS, "
+        f"{counts.get('FAIL', 0)} FAIL, "
+        f"{counts.get('ERROR', 0)} ERROR"
+    )
+    for case in result.cases:
+        bom_label = case.bom.key if case.bom else "ECN only"
+        with st.expander(f"{case.logical_ecn.key} — {bom_label} — {case.status}"):
+            st.caption(f"Case: {case.case_id}")
+            if case.status == "ERROR":
+                st.error(case.error)
+                continue
+            packet = case.result.get("packet", {}) if case.result else {}
+            gate = packet.get("gate", {})
+            _render_findings("Blockers", gate.get("blockers", []))
+            _render_findings("Part Issues", gate.get("part_issues", []))
+            _render_findings("Conflict Alerts", gate.get("conflict_alerts", []))
+            _render_findings("Warnings", gate.get("warnings", []))
+            _render_ai_notes(gate.get("ai_notes", {}))
 
 
 def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
@@ -244,16 +478,32 @@ def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
     return packet
 
 
+def _display_value(value: object) -> str:
+    """Convert structured finding values into Arrow-compatible text."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
 def _finding_rows(findings: list[dict]) -> list[dict]:
-    """Convert gate findings to the concise table shape used by the UI."""
+    """Convert gate findings to an Arrow-compatible table shape."""
     return [
         {
-            "Finding": finding.get("rule_id") or finding.get("flag_type") or finding.get("type", "—"),
-            "Severity": finding.get("severity", "ADVISORY"),
-            "Message": finding.get("message") or finding.get("detail", ""),
+            "Finding": _display_value(
+                finding.get("rule_id")
+                or finding.get("flag_type")
+                or finding.get("type", "—")
+            ),
+            "Severity": _display_value(finding.get("severity", "ADVISORY")),
+            "Message": _display_value(finding.get("message") or finding.get("detail", "")),
+            "Location": _display_value(finding.get("location")),
+            "Evidence": _display_value(finding.get("evidence")),
         }
         for finding in findings
     ]
+
 
 
 def _render_findings(title: str, findings: list[dict]) -> None:
@@ -284,24 +534,51 @@ def _render_manual_form() -> tuple[dict[str, object], list[dict[str, object]]] |
         "change_actions": "Change Actions",
     }
     for field, label in required.items():
-        values[field] = st.text_area(label, key=f"manual_{field}") if field in {"reason_for_change", "description_of_change", "products_affected", "change_actions"} else st.text_input(label, key=f"manual_{field}")
+        values[field] = (
+            st.text_area(label, key=f"manual_{field}")
+            if field
+            in {
+                "reason_for_change",
+                "description_of_change",
+                "products_affected",
+                "change_actions",
+            }
+            else st.text_input(label, key=f"manual_{field}")
+        )
     date_value = st.date_input("Date", value=None, key="manual_date")
-    values["date"] = date_value.isoformat() if isinstance(date_value, (dt.date, dt.datetime)) else ""
+    values["date"] = (
+        date_value.isoformat() if isinstance(date_value, (dt.date, dt.datetime)) else ""
+    )
 
     with st.expander("Optional canonical fields"):
         optional = {
-            "project": "Project", "product_group": "Product Group", "change_category": "Change Category",
-            "associated_a3": "Associated A3", "a3_number": "A3 Number", "checker": "Checker",
-            "reviewer": "Reviewer", "chief_engineer": "Chief Engineer", "bom_coordinator": "BOM Coordinator",
+            "project": "Project",
+            "product_group": "Product Group",
+            "change_category": "Change Category",
+            "associated_a3": "Associated A3",
+            "a3_number": "A3 Number",
+            "checker": "Checker",
+            "reviewer": "Reviewer",
+            "chief_engineer": "Chief Engineer",
+            "bom_coordinator": "BOM Coordinator",
         }
         for field, label in optional.items():
             values[field] = st.text_input(label, key=f"manual_{field}")
 
     st.subheader("BOM lines")
-    default_rows = pd.DataFrame([{
-        "line_number": 1, "part_number": "", "description": "", "quantity": "1",
-        "unit": "EA", "action": "", "parent_part_no": "",
-    }])
+    default_rows = pd.DataFrame(
+        [
+            {
+                "line_number": 1,
+                "part_number": "",
+                "description": "",
+                "quantity": "1",
+                "unit": "EA",
+                "action": "",
+                "parent_part_no": "",
+            }
+        ]
+    )
     edited = st.data_editor(
         default_rows,
         num_rows="dynamic",
@@ -359,14 +636,18 @@ def _start_evaluation_precheck(tester_email: str, tester_name: str):
 def _complete_evaluation_precheck(
     evaluation: tuple[int, int] | None,
     system_decision: str,
-    result_payload: dict[str, int],
+    result_payload: dict[str, object],
+    files: list[dict[str, object]] | None = None,
 ):
     """Persist completion data and return duration, or None if persistence fails."""
     if evaluation is None:
         return None
-    session_id, attempt_id = evaluation
+        session_id, attempt_id = evaluation
     try:
         with connect_evaluation_db(_evaluation_db_config()) as connection:
+
+            if files:
+                store_evaluation_files(connection, attempt_id, files)
             return complete_precheck(
                 connection, attempt_id, session_id, system_decision, result_payload
             )
@@ -374,41 +655,228 @@ def _complete_evaluation_precheck(
         return None
 
 
+def _render_reviewer_dashboard() -> None:
+    """Render reviewer metrics and attempt detail from PostgreSQL."""
+    st.header("Reviewer dashboard")
+    st.caption("Prototype reviewer view; production authentication is not included.")
+    config = _evaluation_db_config()
+    if not config.get("ECN_DB_PASSWORD"):
+        st.info("Reviewer data is unavailable: configure ECN_DB_PASSWORD.")
+        return
+    try:
+        with connect_evaluation_db(config) as connection:
+            decision = st.selectbox("System decision", evaluation_queries.DECISIONS)
+            tester = st.text_input("Tester name or email")
+            agreement = st.selectbox("Agreement", evaluation_queries.AGREEMENT_STATES)
+            filters = {"system_decision": decision, "tester": tester, "agreement": agreement}
+            summary = evaluation_queries.get_evaluation_summary(connection, filters)
+            columns = st.columns(6)
+            metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
+            for column, (label, value) in zip(columns, metrics):
+                column.metric(label, value)
+            attempts = evaluation_queries.list_attempts(connection, filters)
+            if not attempts:
+                st.info("No persisted attempts match these filters.")
+                return
+            st.dataframe([{"Attempt": row["attempt_id"], "Case": row.get("case_identifier") or "—", "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Started": row.get("started_at"), "Completed": row.get("completed_at"), "Duration (s)": row.get("duration_seconds"), "Judgement": row.get("tester_judgement") or "—", "Agreement": "Yes" if row.get("agreement") else "No" if row.get("tester_judgement") else "—"} for row in attempts], hide_index=True, width="stretch")
+            selected = st.selectbox("Open attempt", [row["attempt_id"] for row in attempts])
+            detail = evaluation_queries.get_attempt_detail(connection, int(selected))
+            if not detail:
+                return
+            st.subheader(f"Attempt {detail['attempt_id']} — {detail['system_decision']}")
+            st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds"), "Tester judgement": detail.get("tester_judgement") or "Not recorded"})
+            st.json(detail.get("payload", {}))
+            st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
+            for file in detail.get("files", []):
+                original = evaluation_queries.get_original_file(connection, int(selected), file["role"])
+                if original:
+                    st.download_button(f"Download {file['role'].upper()} — {file['filename']}", original["content"], file_name=original["filename"], mime=original["mime_type"], key=f"download_{selected}_{file['role']}")
+            st.subheader("Record reviewer judgement")
+            reviewer = st.text_input("Reviewer identity", key=f"reviewer_{selected}")
+            judgement = st.selectbox("Judgement", ("PASS", "FAIL"), key=f"judgement_{selected}")
+            explanation = st.text_area("Explanation", key=f"explanation_{selected}")
+            if st.button("Save judgement", key=f"save_judgement_{selected}"):
+                evaluation_queries.save_tester_judgement(connection, int(selected), judgement, explanation, reviewer)
+                st.success("Judgement saved separately from the system decision.")
+    except Exception:
+        st.warning("Reviewer data is temporarily unavailable. Tester intake can still be used.")
+
+
 def main() -> None:
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
     # Password access control is temporarily disabled for local testing.
     st.title("ECN Checker")
+    workflow = st.radio("Workflow", ["Tester intake", "Reviewer dashboard"], horizontal=True, key="workflow_mode")
+    if workflow == "Reviewer dashboard":
+        _render_reviewer_dashboard()
+        return
 
     st.subheader("Tester identification")
     tester_email = st.text_input("Tester email", key="evaluation_tester_email")
     tester_name = st.text_input("Tester name (optional)", key="evaluation_tester_name")
     st.caption("Your email identifies this evaluation session; it is stored with the results.")
 
-    mode = st.radio("Input method", ["Upload files", "Manual intake"], horizontal=True, key="input_mode")
+    mode = st.radio(
+        "Input method",
+        ["Upload files", "Batch pre-check", "Manual intake"],
+        horizontal=True,
+        key="input_mode",
+    )
     temporary_paths: list[str] = []
     can_run = bool(tester_email.strip())
+    batch_preparation: BatchPreparation | None = None
+    manual_input = None
+    ecn_file = None
+    bom_file = None
 
-    if mode == "Upload files":
+    if mode in {"Upload files", "Batch pre-check"}:
+        batch_mode = mode == "Batch pre-check"
         upload_column, bom_column = st.columns(2)
         with upload_column:
-            ecn_file = st.file_uploader(
-                "Step 1 — Upload ECN file",
+            ecn_upload = st.file_uploader(
+                "Step 1 — Upload ECN file(s)",
                 type=ECN_FILE_TYPES,
+                accept_multiple_files=batch_mode,
                 help="CSV, Excel, PDF, HTML, or EML files are supported by the intake stage.",
             )
         with bom_column:
-            bom_file = st.file_uploader(
-                "Step 2 — Upload BOM file",
+            bom_upload = st.file_uploader(
+                "Step 2 — Upload BOM file(s)",
                 type=BOM_FILE_TYPES,
+                accept_multiple_files=batch_mode,
                 help="CSV, Excel, or PDF files are supported by the intake stage.",
             )
-        can_run = can_run and bool(ecn_file and bom_file)
+
+                
+        
+        
+
+        if batch_mode:
+
+
+            ecn_files = ecn_upload or []
+
+            bom_files = bom_upload or []
+            can_prepare = can_run and bool(ecn_files)
+            if st.button("Prepare Batch Mapping", disabled=not can_prepare):
+                batch_paths: list[str] = []
+                try:
+                    batch_paths = [
+                        *[_write_upload(upload) for upload in ecn_files],
+                        *[_write_upload(upload) for upload in bom_files],
+                    ]
+                    ecn_count = len(ecn_files)
+                    batch_preparation = build_batch_from_paths(
+                        batch_paths[:ecn_count],
+                        batch_paths[ecn_count:],
+                    )
+                    st.session_state["batch_preparation"] = batch_preparation
+                except Exception as exc:
+                    st.error(f"The batch could not be prepared: {exc}")
+                    st.session_state.pop("batch_preparation", None)
+                finally:
+                    for path in batch_paths:
+                        Path(path).unlink(missing_ok=True)
+
+            batch_preparation = st.session_state.get("batch_preparation")
+            if batch_preparation is not None:
+                st.subheader("Batch mapping preview")
+                if batch_preparation.errors:
+                    st.error("Resolve the intake errors before running this batch.")
+                    st.dataframe(
+                        batch_error_rows(batch_preparation),
+                        hide_index=True,
+                        width="stretch",
+                    )
+                else:
+                    st.dataframe(
+                        batch_preview_rows(batch_preparation),
+                        hide_index=True,
+                        width="stretch",
+                    )
+                    st.info(
+                        "Review the mapping above, then click Run Checks to execute "
+                        "each ECN/BOM case independently."
+                    )
+                can_run = can_run and not batch_preparation.errors
+            else:
+                can_run = False
+
+        else:
+            ecn_file = ecn_upload
+
+
+
+
+
+
+            bom_file = bom_upload
+            can_run = can_run and bool(ecn_file and bom_file)
+
     else:
+
         manual_input = _render_manual_form()
         can_run = can_run and manual_input is not None
 
+
     if st.button("Run Checks", type="primary", disabled=not can_run):
+
+
         try:
+
+            if mode == "Batch pre-check":
+
+                # Rebuild the preparation here because the preview's temporary
+                # files were deleted after the previous Streamlit rerun.
+                temporary_paths = [
+                    *[_write_upload(upload) for upload in ecn_files],
+                    *[_write_upload(upload) for upload in bom_files],
+                ]
+                ecn_count = len(ecn_files)
+                execution_preparation = build_batch_from_paths(
+                    temporary_paths[:ecn_count],
+                    temporary_paths[ecn_count:],
+                )
+                if execution_preparation.errors:
+                    for error in batch_error_rows(execution_preparation):
+                        st.error(f"{error['Role']}: {error['File']}: {error['Problem']}")
+                    return
+
+                progress_bar = st.progress(0, text="Starting batch pre-check...")
+
+                def report_batch_progress(progress) -> None:
+                    progress_bar.progress(
+                        progress.completed / progress.total,
+                        text=(
+                            f"Checking {progress.completed}/{progress.total}: "
+                            f"{progress.current_case_id}"
+                        ),
+                    )
+
+                persistence = _start_batch_evaluation(tester_email, tester_name, execution_preparation.batch)
+
+                if persistence is None and _evaluation_db_config().get("ECN_DB_PASSWORD"):
+                    st.warning("Evaluation batch could not be started; validation will continue.")
+                executor = lambda case: (
+                    _execute_persisted_batch_case(case, persistence)
+                    if persistence is not None
+                    else _execute_batch_case(case)
+                )
+
+                with st.spinner("Running batch ECN validation checks..."):
+                    batch_result = run_batch(
+                        execution_preparation.batch,
+                        executor,
+                        progress_callback=report_batch_progress,
+                    )
+                _complete_batch_evaluation(persistence, batch_result.status)
+                progress_bar.progress(1.0, text="Batch pre-check complete")
+
+                st.session_state["batch_result"] = batch_result
+                st.session_state.pop("packet", None)
+                st.session_state.pop("email_status", None)
+                return
+
             if mode == "Upload files":
                 temporary_paths = [_write_upload(ecn_file), _write_upload(bom_file)]
             else:
@@ -418,7 +886,10 @@ def main() -> None:
                     for error in errors:
                         st.error(error)
                     return
-                temporary_paths = [_write_text(manual_ecn_csv(values)), _write_text(manual_bom_csv(bom_rows))]
+                temporary_paths = [
+                    _write_text(manual_ecn_csv(values)),
+                    _write_text(manual_bom_csv(bom_rows)),
+                ]
 
             evaluation = _start_evaluation_precheck(tester_email, tester_name)
             if evaluation is None and _evaluation_db_config().get("ECN_DB_PASSWORD"):
@@ -430,14 +901,30 @@ def main() -> None:
                 st.session_state.pop("email_status", None)
 
             gate = packet["gate"]
+
+
             result_payload = {
+
+                "packet": packet,
                 "blocker_count": len(gate.get("blockers", [])),
                 "part_issue_count": len(gate.get("part_issues", [])),
                 "warning_count": len(gate.get("warnings", [])),
             }
-            duration = _complete_evaluation_precheck(evaluation, gate["decision"], result_payload)
+
+            captured_files = []
+
+
+            for role, path in zip(("ecn", "bom"), temporary_paths):
+                source_path = Path(path)
+                if source_path.exists():
+                    captured_files.append({"role": role, "filename": source_path.name, "bytes": source_path.read_bytes()})
+            duration = _complete_evaluation_precheck(
+                evaluation, gate["decision"], result_payload, captured_files
+            )
             if evaluation is not None and duration is None:
-                st.warning("Evaluation data could not be completed; validation results are still available.")
+                st.warning(
+                    "Evaluation data could not be completed; validation results are still available."
+                )
             if duration is not None:
                 st.session_state["checking_duration_seconds"] = duration
 
@@ -447,12 +934,22 @@ def main() -> None:
             for path in temporary_paths:
                 Path(path).unlink(missing_ok=True)
 
+    if mode == "Batch pre-check":
+        batch_result = st.session_state.get("batch_result")
+        if batch_result is not None:
+            _render_batch_result(batch_result)
+        return
+
+
     packet = st.session_state.get("packet")
     if not packet:
         return
 
-        gate = packet["gate"]
+    gate = packet["gate"]
+
+
     decision = gate["decision"]
+
     if decision == "PASS":
         st.success("PASS — No gate-closing findings were identified.")
     else:
@@ -515,11 +1012,17 @@ def main() -> None:
                 )
 
             recipients = ", ".join(result["recipients"])
-            status = "sent" if result["sent"] else "dry run" if result["dry_run"] else "not sent"
+            status = (
+                "sent"
+                if result["sent"]
+                else "dry run"
+                if result["dry_run"]
+                else "not sent"
+            )
             message = (
                 f"Notification {status}. Recipients: {recipients}. "
                 f"Subject: {result['subject']}. Dry run: {result['dry_run']}."
-                        )
+            )
             if result["sent"]:
                 st.success(message)
             else:
@@ -528,3 +1031,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    

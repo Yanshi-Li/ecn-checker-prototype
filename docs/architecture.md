@@ -99,7 +99,77 @@ as `NOT_EVALUATED` and evaluates only the semantic-heuristic rules S02–S04.
 AI findings remain advisory and do not close the gate.
 
 
+## Batch intake and filename matching
+
+`scripts/batch_intake.py` is the raw-file adapter for batch testing. It accepts
+files or directories, recursively discovers supported ECN/BOM files, and
+extracts exactly one seven-digit identifier from each filename. A BOM is matched
+to an ECN only when those filename identifiers are equal. Missing identifiers,
+ambiguous filenames, unsupported formats, duplicate ECN identifiers, and BOMs
+with no matching ECN are reported as intake errors before execution.
+
+A matched BOM with no normalized rows is represented as `EMPTY`; a matched BOM
+with rows is `PRESENT`. Original paths and filename identifiers remain in
+metadata. The adapter delegates parsing to the existing staged `load_file()`
+implementation and does not duplicate file-format logic.
+
+## Streamlit batch workflow
+
+The Streamlit interface offers a separate **Batch pre-check** input mode while
+preserving the existing single-case upload and manual-intake modes. Testers
+identify themselves with an email before preparing a batch. Multiple ECN and BOM
+files can be uploaded, parsed through the shared batch intake adapter, and
+previewed as filename-identifier mappings before execution.
+
+Batch preparation is deliberately a safety checkpoint: unsupported files,
+missing or ambiguous seven-digit identifiers, duplicate ECNs, and unmatched BOMs
+are displayed as intake errors and prevent validation from starting. The current
+Streamlit slice provides mapping preview only; batch execution and grouped result
+rendering remain separate follow-up work. No batch email is sent automatically.
+
+## Batch orchestration
+
+`scripts/batch_orchestration.py` is the pure execution seam for normalized batch
+
+inputs. It validates ECN/BOM mappings before any case runs, creates one
+independent case for each ECN/BOM assignment (or one ECN-only case), preserves
+`ABSENT`, `EMPTY`, and `PRESENT` BOM states, and invokes the existing single-case
+validator supplied by the caller. An executor failure becomes an `ERROR` case;
+other cases continue. Progress callbacks expose completed, remaining, current
+case, and outcome counts without coupling the module to Streamlit.
+
+The module does not read files, persist data, send email, or duplicate rule
+logic. Its `BatchResult.rerun()` operation appends a new attempt for an existing
+case, leaving earlier attempts available for evaluation metrics. Persistence is
+an optional observer of completed cases, so a database outage never changes a
+validation decision.
+
+## Evaluation persistence and offline bundles
+
+`evaluation_store.py` stores the complete result packet in `precheck_attempts.result_payload`
+and stores original uploaded bytes, filename, MIME type, byte size, capture time,
+and SHA-256 in `evaluation_files`. Counts are indexes; they do not replace the
+findings or extracted data shown to the tester. The Streamlit batch path uses
+this store when `ECN_DB_PASSWORD` is configured and otherwise continues in memory.
+
+`evaluation_bundle.py` provides a versioned ZIP export for offline runs. A bundle
+contains a manifest, one complete JSON result per case, and the original files.
+Import verifies every file's hash and size before calling the destination store;
+re-importing the same verified bundle is idempotent. The CLI writes one with
+`py scripts/run_batch.py ... --export-bundle out/evaluation.zip`.
+
+`scripts/evaluation_queries.py` is the query seam for the Streamlit Reviewer
+Dashboard. It lists persisted attempts, calculates PASS/FAIL and tester-system
+agreement metrics, returns the complete result payload and rule findings for one
+attempt, downloads original ECN/BOM evidence, and records a separate tester
+judgement. Agreement excludes unjudged attempts; saving a judgement never
+changes `precheck_attempts.system_decision`. The dashboard is optional and
+shows a generic availability message when PostgreSQL is not configured.
+
+
 ## Key Files
+
+
 
 | File                          | Role                          |
 |-------------------------------|-------------------------------|
@@ -111,6 +181,16 @@ AI findings remain advisory and do not close the gate.
 | `scripts/stages/context_engine.py` | Stage 4: Parts/reference-data checks |
 | `scripts/stages/dashboard.py` | Stage 5: HTML dashboard |
 | `scripts/stages/email_notification.py` | Stage 6: gate-driven SendGrid email |
+| `scripts/batch_intake.py` | Raw-file batch preparation and filename matching |
+| `scripts/batch_orchestration.py` | Independent normalized batch case execution |
+| `scripts/run_batch.py` | Batch command-line runner and persistence/export entry point |
+| `scripts/evaluation_store.py` | PostgreSQL configuration, schema setup, and snapshot persistence |
+| `scripts/evaluation_bundle.py` | Integrity-checked offline evaluation bundle export/import |
+| `scripts/evaluation_queries.py` | Reviewer dashboard query, judgement, and evidence seam |
+
+| `streamlit_app.py` | Tester intake, batch mapping, and reviewer dashboard workflows |
+
+
 
 | `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
 | `data/ecn_intake.csv`         | Sample ECN input              |
