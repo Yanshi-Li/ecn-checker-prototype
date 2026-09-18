@@ -425,9 +425,12 @@ def _normalize_mbom_row(row: dict) -> dict | None:
     }
     part_number = _lookup_value(
         normalized,
-        "existing child part number",
+                "existing child part number",
         "new child part number",
+        "existing child part",
+        "new child part",
         "component part number",
+
         "part number",
     )
     if not part_number:
@@ -473,8 +476,8 @@ def _combine_mbom_headers(parent_row: list[str], child_row: list[str]) -> list[s
     headers = []
     current_group = ""
     for parent, child in zip(parent_row, child_row):
-        parent_label = str(parent).strip()
-        child_label = str(child).strip()
+        parent_label = "" if parent is None else str(parent).strip()
+        child_label = "" if child is None else str(child).strip()
         if parent_label:
             current_group = parent_label
         headers.append(
@@ -547,52 +550,64 @@ def load_excel(filepath: str, role: str = "bom") -> list[dict] | dict:
             logger.info("Excel ECN loaded: %s (%d fields extracted)", filepath, len(header))
             return header
 
-    header_index = None
-    header = []
+    table_specs = []
+
     for idx, row in enumerate(grid):
-        normalized = [_normalize_excel_key(str(cell)) for cell in row]
+
+
+        normalized = [_normalize_excel_key(cell) for cell in row]
         is_part_master_header = any(
             "part number" in cell or "select action" in cell
             for cell in normalized
         )
         is_structure_header = (
-            "parent part" in normalized
-            and (
-                "existing child part" in normalized
-                or "new child part" in normalized
-            )
+            any("parent part" in cell for cell in normalized)
+            and any("child part" in cell for cell in normalized)
         )
-        if is_structure_header and idx + 1 < len(grid):
-            header_index = idx + 1
-            header = _combine_mbom_headers(row, grid[idx + 1])
-            break
-        if is_part_master_header and header_index is None:
-            header_index = idx
-            header = [str(cell).strip() for cell in row]
 
-    if header_index is not None:
+
+        if is_structure_header:
+
+            has_subheader = idx + 1 < len(grid) and any(
+
+
+                _normalize_excel_key(cell) in {"number", "description"}
+                for cell in grid[idx + 1]
+            )
+            if has_subheader:
+                table_specs.append((idx, idx + 2, _combine_mbom_headers(row, grid[idx + 1])))
+            else:
+                table_specs.append((idx, idx + 1, [str(cell).strip() for cell in row]))
+        elif is_part_master_header:
+
+            table_specs.append((idx, idx + 1, [str(cell).strip() for cell in row]))
+
+    if table_specs:
         rows = []
-        for row in grid[header_index + 1:]:
-            if not any(str(cell).strip() for cell in row):
-                continue
-            item = {}
-            for j, name in enumerate(header):
-                if j < len(row):
-                    item[name] = str(row[j]).strip()
-            rows.append(item)
+        for spec_index, (section_start, data_start, header) in enumerate(table_specs):
+            next_section_start = (
+                table_specs[spec_index + 1][0]
+                if spec_index + 1 < len(table_specs)
+                else len(grid)
+            )
+            for row in grid[data_start:next_section_start]:
+                if not any(str(cell).strip() for cell in row):
+                    continue
+                item = {
+                    name: str(row[column_index]).strip()
+                    for column_index, name in enumerate(header)
+                    if column_index < len(row) and name
+                }
+                rows.append(item)
+        rows = _coerce_mbom_rows(rows)
     else:
         df.columns = [str(c).strip().lower() for c in df.columns]
         rows = df.to_dict(orient="records")
 
-    if rows and any(
-        "part number" in _normalize_excel_key(str(k))
-        or "select action" in _normalize_excel_key(str(k))
-        for row in rows for k in row.keys()
-    ):
-        rows = _coerce_mbom_rows(rows)
-
+    if rows:
         logger.info("Excel loaded: %s (%d rows)", filepath, len(rows))
     return rows
+
 
 
 def _is_mbom_header(row: list[str | None]) -> bool:
@@ -601,6 +616,14 @@ def _is_mbom_header(row: list[str | None]) -> bool:
     return any("part number" in header for header in headers) and any(
         "action" in header for header in headers
     )
+
+
+def _is_structure_pdf_header(row: list[str | None]) -> bool:
+    """Return whether a PDF row starts a parent/child structure table."""
+    headers = [_normalize_excel_key(cell) for cell in row]
+    return "parent part" in " ".join(headers) and any(
+        "child part" in header for header in headers
+    ) and any("action" in header for header in headers)
 
 
 def load_pdf_bom(filepath: str) -> list[dict]:
@@ -613,9 +636,21 @@ def load_pdf_bom(filepath: str) -> list[dict]:
     with pdfplumber.open(filepath) as pdf:
         for page in pdf.pages:
             for table in page.extract_tables():
-                for row in table:
+                row_index = 0
+                structure_table = False
+                structure_defaults = {}
+                while row_index < len(table):
+                    row = table[row_index]
+                    if _is_structure_pdf_header(row) and row_index + 1 < len(table):
+                        header = _combine_mbom_headers(row, table[row_index + 1])
+                        structure_table = True
+                        structure_defaults = {}
+                        row_index += 2
+                        continue
                     if _is_mbom_header(row):
                         header = row
+                        structure_table = False
+                        row_index += 1
                         continue
                     row_keys = [_normalize_excel_key(cell) for cell in row]
                     if (
@@ -623,22 +658,45 @@ def load_pdf_bom(filepath: str) -> list[dict]:
                         and any("action" in key for key in row_keys)
                     ):
                         header = None
+                        structure_table = False
+                        row_index += 1
                         continue
                     if header is None or not any(cell for cell in row):
+                        row_index += 1
                         continue
-
                     raw_row = {
                         str(column): value
                         for column, value in zip(header, row)
                         if column is not None
                     }
                     parsed = _normalize_mbom_row(raw_row)
+                    row_index += 1
                     if parsed:
                         parsed["line_number"] = str(len(parsed_rows) + 1)
+                        if structure_table:
+                            normalized = {
+                                _normalize_excel_key(key): ("" if value is None else str(value).strip())
+                                for key, value in raw_row.items()
+                            }
+                            for field in (
+                                "parent_part_no",
+                                "parent_part_description",
+                                "action",
+                                "source",
+                            ):
+                                if not parsed.get(field) and structure_defaults.get(field):
+                                    parsed[field] = structure_defaults[field]
+                                if parsed.get(field):
+                                    structure_defaults[field] = parsed[field]
+                            parsed["line_reference"] = _lookup_value(
+                                normalized, "line ref", "line reference"
+                            )
+                            parsed["change_section"] = "BOM_STRUCTURE"
                         parsed_rows.append(parsed)
 
     logger.info("PDF BOM loaded: %s (%d rows)", filepath, len(parsed_rows))
     return parsed_rows
+
 
 
 

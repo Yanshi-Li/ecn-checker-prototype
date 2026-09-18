@@ -15,6 +15,10 @@ from intake import (
 DATA_DIR = Path(__file__).parent.parent / "data"
 HTML_ECN_PATH = DATA_DIR / "ECN 4078575 DD PH12 Motor Controller - PCB 519123 rev B1 Modules Update.html"
 PDF_BOM_PATH = DATA_DIR / "4078575-MBOM_xlsx.pdf"
+STRUCTURE_PDF_BOM_PATH = DATA_DIR / "4079086-MBOM_xlsx.pdf"
+
+
+
 
 
 
@@ -89,7 +93,42 @@ def test_load_excel_mbom_structure_parent_part_headers(tmp_path):
     }]
 
 
+
+
+def test_load_excel_extracts_actions_from_both_same_sheet_change_sections(tmp_path):
+    path = tmp_path / "MBOM_Both_Change_Sections.xlsx"
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(["PART MASTER CHANGES (Part Details)"])
+    worksheet.append([
+        "Select BOM Database", "Select Action", "Part Number",
+        "Part Description (max. 30 characters)", "Select Unit of Measure",
+    ])
+    worksheet.append(["MBOM", "ADD", "1001234", "New part", "EA"])
+    worksheet.append([])
+    worksheet.append(["BILLS OF MATERIAL STRUCTURE CHANGES"])
+    worksheet.append([
+        "Select BOM Database", "", "Parent Part", "", "Task Number",
+        "Select Action", "Existing Child Part", "", "New Child Part", "", "", "Qty",
+    ])
+    worksheet.append([
+        "", "", "123456", "Parent assembly", "TASK-1", "REPLACE", "", "",
+        "654321", "Replacement child", "", "2",
+    ])
+    workbook.save(path)
+
+    rows = load_excel(str(path))
+
+    assert [(row["part_number"], row["action"]) for row in rows] == [
+        ("1001234", "ADD"),
+        ("654321", "REPLACE"),
+    ]
+
+
 def test_load_xls_converts_before_excel_loading(tmp_path, monkeypatch):
+
     source = tmp_path / "legacy.xls"
     converted = tmp_path / "converted.xlsx"
     source.write_bytes(b"legacy workbook")
@@ -325,9 +364,80 @@ def test_load_sample_pdf_bom():
     }
 
 
+def test_load_pdf_bom_includes_part_master_and_structure_changes():
+    rows = load_file(str(STRUCTURE_PDF_BOM_PATH), role="bom")
+
+    structure_rows = [
+        row for row in rows if row.get("change_section") == "BOM_STRUCTURE"
+    ]
+
+                
+
+    assert structure_rows == [
+
+        {
+            "part_number": "276078",
+
+
+            "description": "MS M5X0.8 6MM TX SS",
+            "parent_part_no": "275695",
+            "parent_part_description": "FORECASTING FASTENERS KIT",
+            "quantity": "3",
+            "unit": "EA",
+            "action": "ADD",
+            "source": "Thailand",
+            "line_number": "10",
+            "line_reference": "90",
+            "change_section": "BOM_STRUCTURE",
+        },
+        {
+            "part_number": "276079",
+            "description": "MS M5X0.8 25MM TX SS",
+            "parent_part_no": "275695",
+            "parent_part_description": "FORECASTING FASTENERS KIT",
+            "quantity": "2",
+            "unit": "EA",
+            "action": "ADD",
+            "source": "Thailand",
+            "line_number": "11",
+            "line_reference": "100",
+            "change_section": "BOM_STRUCTURE",
+        },
+        {
+            "part_number": "276024",
+            "description": "MS M5X0.8 12MM LOW PROF TX SS",
+            "parent_part_no": "275695",
+            "parent_part_description": "FORECASTING FASTENERS KIT",
+            "quantity": "4",
+            "unit": "EA",
+            "action": "ADD",
+            "source": "Thailand",
+            "line_number": "12",
+            "line_reference": "110",
+            "change_section": "BOM_STRUCTURE",
+        },
+        {
+            "part_number": "276025",
+            "description": "NUT KEPS M5 SS",
+            "parent_part_no": "275695",
+            "parent_part_description": "FORECASTING FASTENERS KIT",
+            "quantity": "5",
+            "unit": "EA",
+            "action": "ADD",
+            "source": "Thailand",
+            "line_number": "13",
+            "line_reference": "120",
+            "change_section": "BOM_STRUCTURE",
+        },
+    ]
+
+
 def test_pdf_loading_is_role_aware():
     assert isinstance(load_file(str(PDF_BOM_PATH), role="ecn"), dict)
     assert isinstance(load_file(str(PDF_BOM_PATH), role="bom"), list)
+
+
+
 
 
 def test_load_file_rejects_unknown_role():
