@@ -11,16 +11,74 @@ import psycopg
 from psycopg.types.json import Jsonb
 from hashlib import sha256
 from datetime import datetime, timezone
+import re
+
+
+NOTIFICATION_STATUSES = frozenset({"requested", "sent", "failed"})
+NOTIFICATION_KINDS = frozenset({"validation_report", "gate_notification", "other"})
+
+
+def _safe_error_message(error: object) -> str | None:
+    if error is None:
+        return None
+    message = str(error).strip()
+    if not message:
+        return None
+    message = re.sub(r"(?i)(password|api[_ -]?key|token|secret)\s*[=:]\s*[^\s,;]+", r"\1=<REDACTED>", message)
+    return message[:1000]
+
+
+def _normalise_notification(kind: object, recipient: object, status: object) -> tuple[str, str, str]:
+    notification_kind = str(kind or "").strip() or "other"
+    if notification_kind not in NOTIFICATION_KINDS:
+        notification_kind = "other"
+    notification_recipient = str(recipient or "").strip()
+    if not notification_recipient:
+        raise ValueError("notification recipient must not be empty")
+    notification_status = str(status or "").strip().lower()
+    if notification_status not in NOTIFICATION_STATUSES:
+        raise ValueError("notification status must be requested, sent, or failed")
+    return notification_kind, notification_recipient, notification_status
+
+
+def _insert_notification(connection, attempt_id: int, notification: Mapping[str, object]) -> None:
+    kind, recipient, status = _normalise_notification(
+        notification.get("kind") or notification.get("notification_kind"),
+        notification.get("recipient"),
+        notification.get("status"),
+    )
+    completed_at = notification.get("completed_at")
+    if completed_at is None and status in {"sent", "failed"}:
+        completed_at = datetime.now(timezone.utc)
+    connection.execute(
+        """INSERT INTO notification_attempts
+           (precheck_attempt_id, notification_kind, recipient, status, requested_at, completed_at, error_message)
+           VALUES (%s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP), %s, %s)""",
+        (attempt_id, kind, recipient, status, notification.get("requested_at"), completed_at,
+         _safe_error_message(notification.get("error") or notification.get("error_message"))),
+    )
+    connection.execute(
+        """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+           SELECT session_id, id, %s, %s
+           FROM precheck_attempts WHERE id = %s""",
+        (f"notification_{status}", Jsonb({"kind": kind, "recipient": recipient}), attempt_id),
+    )
+
 
 _SCHEMA_PATH = Path(__file__).with_name("evaluation_schema.sql")
 
 
 def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[str, object], files=()) -> int:
-    """Persist a complete PASS/FAIL snapshot and its original file evidence."""
-    decision = str(snapshot.get("decision") or "").strip().upper()
-    if decision not in {"PASS", "FAIL"}:
-        raise ValueError("snapshot decision must be PASS or FAIL")
+    """Persist a complete result, including ERROR cases, files, and notifications."""
+    decision = str(snapshot.get("decision") or "").strip().upper() or None
+    status = str(snapshot.get("status") or decision or "ERROR").strip().upper()
+    if decision not in {None, "PASS", "FAIL"}:
+        raise ValueError("snapshot decision must be PASS, FAIL, or empty for an error")
+    if status not in {"PASS", "FAIL", "ERROR", "NOT_RUN"}:
+        raise ValueError("snapshot status must be PASS, FAIL, ERROR, or NOT_RUN")
     payload = {key: value for key, value in snapshot.items() if key != "files"}
+    event_type = "precheck_completed" if decision else "precheck_failed"
+    event_metadata = {"system_decision": decision, "case_id": snapshot.get("case_id"), "status": status}
     with connection.transaction():
         cursor = connection.execute(
             """INSERT INTO precheck_attempts
@@ -32,37 +90,29 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
         attempt_id = int(cursor.fetchone()[0])
         connection.execute(
             """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
-               VALUES (%s, %s, 'precheck_completed', %s)""",
-            (session_id, attempt_id, Jsonb({"system_decision": decision, "case_id": snapshot.get("case_id")})),
+               VALUES (%s, %s, %s, %s)""",
+            (session_id, attempt_id, event_type, Jsonb(event_metadata)),
         )
-        for file in files:
-            raw = file.get("bytes", b"")
-            if isinstance(raw, str):
-                raw = raw.encode()
-            role = str(file.get("role", "other"))
-            if role not in {"ecn", "bom", "other"}:
-                role = "other"
-            connection.execute(
-                """INSERT INTO evaluation_files
-                   (precheck_attempt_id, role, filename, mime_type, size_bytes, sha256, captured_at, content)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                (attempt_id, role, str(file.get("filename", "uploaded")),
-                 str(file.get("mime_type", "application/octet-stream")), len(raw),
-                 sha256(raw).hexdigest(), file.get("captured_at") or datetime.now(timezone.utc), raw),
-            )
+        store_evaluation_files(connection, attempt_id, files, _in_transaction=True)
+        for notification in snapshot.get("notifications", ()) or ():
+            _insert_notification(connection, attempt_id, notification)
     return attempt_id
+
 
 
 save_evaluation_snapshot = persist_evaluation_snapshot
 
 
-def store_evaluation_files(connection, attempt_id: int, files=()) -> None:
+def store_evaluation_files(connection, attempt_id: int, files=(), _in_transaction: bool = False) -> None:
     """Attach original uploaded bytes to an existing pre-check attempt."""
-    with connection.transaction():
+    def insert_files() -> None:
         for file in files:
             raw = file.get("bytes", b"")
             if isinstance(raw, str):
                 raw = raw.encode()
+            if not isinstance(raw, (bytes, bytearray)):
+                raise TypeError("file bytes must be bytes")
+            raw = bytes(raw)
             role = str(file.get("role", "other"))
             if role not in {"ecn", "bom", "other"}:
                 role = "other"
@@ -74,6 +124,27 @@ def store_evaluation_files(connection, attempt_id: int, files=()) -> None:
                  str(file.get("mime_type", "application/octet-stream")), len(raw),
                  sha256(raw).hexdigest(), file.get("captured_at") or datetime.now(timezone.utc), raw),
             )
+
+    if _in_transaction:
+        insert_files()
+    else:
+        with connection.transaction():
+            insert_files()
+
+
+
+def record_notification_attempt(
+    connection,
+    attempt_id: int,
+    notification_kind: str,
+    recipient: str,
+    status: str,
+    error: object = None,
+) -> None:
+    """Record notification lifecycle state without storing credentials."""
+    notification = {"kind": notification_kind, "recipient": recipient, "status": status, "error": error}
+    with connection.transaction():
+        _insert_notification(connection, attempt_id, notification)
 
 
 def connect_evaluation_db(environ: Mapping[str, str] | None = None):

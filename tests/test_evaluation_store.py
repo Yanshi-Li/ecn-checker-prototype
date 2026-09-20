@@ -133,6 +133,66 @@ def test_fail_precheck_records_error_event_without_system_decision():
     assert any("'precheck_failed'" in statement for statement in statements)
 
 
+def test_persist_snapshot_keeps_complete_payload_file_metadata_and_notification_history():
+    connection = _FakeConnection(rows=[(71,)])
+    snapshot = {
+        "case_id": "ECN-001:BOM-001",
+        "decision": "PASS",
+        "status": "PASS",
+        "packet": {"gate": {"decision": "PASS", "warnings": []}},
+        "notifications": [
+            {
+                "kind": "validation_report",
+                "recipient": "tester@example.com",
+                "status": "sent",
+                "completed_at": "2026-01-01T00:00:01+00:00",
+            }
+        ],
+    }
+
+    attempt_id = evaluation_store.persist_evaluation_snapshot(
+        connection,
+        7,
+        snapshot,
+        [{"role": "ecn", "filename": "source.csv", "mime_type": "text/csv", "bytes": b"ecn"}],
+    )
+
+    assert attempt_id == 71
+    insert_statements = [statement for statement, _ in connection.executed]
+    assert any("result_payload" in statement for statement in insert_statements)
+    assert any("evaluation_files" in statement for statement in insert_statements)
+    assert any("notification_attempts" in statement for statement in insert_statements)
+    file_params = next(params for statement, params in connection.executed if "evaluation_files" in statement)
+    assert file_params[3] == "text/csv"
+    assert file_params[4] == 3
+    assert file_params[5] == "3400f03969f03ef8e300cf916f071841a1c5e1e91d524664b279c38fc0e29b65"
+
+
+def test_persist_snapshot_records_error_without_inventing_system_decision():
+    connection = _FakeConnection(rows=[(72,)])
+
+    evaluation_store.persist_evaluation_snapshot(
+        connection,
+        7,
+        {"case_id": "ECN-001:ECN_ONLY", "status": "ERROR", "error": "parser failed"},
+    )
+
+    attempt_params = next(params for statement, params in connection.executed if "INSERT INTO precheck_attempts" in statement)
+    assert attempt_params[1] is None
+    event_params = next(params for statement, params in connection.executed if "evaluation_events" in statement)
+    assert event_params[2] == "precheck_failed"
+
+
+def test_record_notification_rejects_unsafe_status_and_recipient():
+    connection = _FakeConnection()
+    with pytest.raises(ValueError, match="notification status"):
+        evaluation_store.record_notification_attempt(connection, 1, "report", "tester@example.com", "unknown")
+
+
+
+
+
+
 def test_status_helpers_reject_unknown_values():
     with pytest.raises(ValueError, match="status"):
         evaluation_store.update_precheck_case_status(object(), 1, "UNKNOWN")
@@ -141,3 +201,4 @@ def test_status_helpers_reject_unknown_values():
 
 
 # End of evaluation store tests.
+

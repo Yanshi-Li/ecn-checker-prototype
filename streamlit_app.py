@@ -35,19 +35,20 @@ from scripts.evaluation_store import (  # noqa: E402
     complete_evaluation_batch,
     complete_precheck,
     connect_evaluation_db,
-    create_bom_input,
+        create_bom_input,
     create_evaluation_batch,
+
     create_logical_ecn,
     create_precheck_case,
-        create_session,
+    create_session,
     fail_precheck,
-
+    record_notification_attempt,
     initialise_schema,
     start_precheck,
     store_evaluation_files,
-
     update_precheck_case_status,
 )
+
 
 
 
@@ -642,20 +643,49 @@ def _complete_evaluation_precheck(
     """Persist completion data and return duration, or None if persistence fails."""
     if evaluation is None:
         return None
-        session_id, attempt_id = evaluation
+    session_id, attempt_id = evaluation
     try:
         with connect_evaluation_db(_evaluation_db_config()) as connection:
-
             if files:
                 store_evaluation_files(connection, attempt_id, files)
-            return complete_precheck(
+            duration = complete_precheck(
                 connection, attempt_id, session_id, system_decision, result_payload
             )
+        st.session_state["evaluation_attempt_id"] = attempt_id
+        return duration
     except Exception:
         return None
 
 
+def _record_notification_result(result: dict[str, object], kind: str) -> None:
+
+    """Persist notification outcome without affecting the validation result."""
+    attempt_id = st.session_state.get("evaluation_attempt_id")
+    config = _evaluation_db_config()
+    if not attempt_id or not config.get("ECN_DB_PASSWORD"):
+        return
+    recipients = result.get("recipients") or []
+    recipient = ", ".join(str(value) for value in recipients if value)
+    if not recipient:
+        return
+    status = "sent" if result.get("sent") else "requested" if result.get("dry_run") else "failed"
+    try:
+        with connect_evaluation_db(config) as connection:
+            record_notification_attempt(
+                connection,
+                int(attempt_id),
+                kind,
+                recipient,
+                status,
+                result.get("error"),
+            )
+    except Exception:
+        # Notification audit failure must never hide the validation outcome.
+        pass
+
+
 def _render_reviewer_dashboard() -> None:
+
     """Render reviewer metrics and attempt detail from PostgreSQL."""
     st.header("Reviewer dashboard")
     st.caption("Prototype reviewer view; production authentication is not included.")
@@ -913,11 +943,25 @@ def main() -> None:
 
             captured_files = []
 
+            original_names = (
 
-            for role, path in zip(("ecn", "bom"), temporary_paths):
+                [ecn_file.name, bom_file.name]
+                if mode == "Upload files"
+                else ["manual_ecn.csv", "manual_bom.csv"]
+            )
+            for role, path, original_name in zip(
+                ("ecn", "bom"), temporary_paths, original_names
+            ):
                 source_path = Path(path)
                 if source_path.exists():
-                    captured_files.append({"role": role, "filename": source_path.name, "bytes": source_path.read_bytes()})
+                    captured_files.append(
+                        {
+                            "role": role,
+                            "filename": original_name,
+                            "bytes": source_path.read_bytes(),
+                        }
+                    )
+
             duration = _complete_evaluation_precheck(
                 evaluation, gate["decision"], result_payload, captured_files
             )
@@ -965,6 +1009,7 @@ def main() -> None:
     _render_ai_notes(gate.get("ai_notes", {}))
 
     st.divider()
+
     st.subheader("Email validation report")
     validation_recipient = st.text_input(
         "Validation report recipient",
@@ -986,6 +1031,7 @@ def main() -> None:
                     secrets=_streamlit_secrets(),
                 )
             st.session_state["email_status"] = result
+            _record_notification_result(result, "validation_report")
             if result["sent"]:
                 st.success(result["message"])
             elif result["status"] == "not_configured":
@@ -1005,20 +1051,10 @@ def main() -> None:
             if decision == "FAIL":
                 result = send_fail_email(packet, engineer_email.strip())
             else:
-                result = send_pass_email(
-                    packet,
-                    engineer_email.strip(),
-                    ce_email.strip(),
-                )
-
+                result = send_pass_email(packet, engineer_email.strip(), ce_email.strip())
+            _record_notification_result(result, "gate_notification")
             recipients = ", ".join(result["recipients"])
-            status = (
-                "sent"
-                if result["sent"]
-                else "dry run"
-                if result["dry_run"]
-                else "not sent"
-            )
+            status = "sent" if result["sent"] else "dry run" if result["dry_run"] else "not sent"
             message = (
                 f"Notification {status}. Recipients: {recipients}. "
                 f"Subject: {result['subject']}. Dry run: {result['dry_run']}."
@@ -1031,4 +1067,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
     
