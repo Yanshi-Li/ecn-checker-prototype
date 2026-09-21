@@ -142,6 +142,23 @@ def test_rule_judgement_report_summarizes_disagreement_counts():
     assert "GROUP BY rr.rule_id" in connection.statements[0][0]
 
 
+def test_cross_attempt_review_report_calculates_agreement_and_rule_disagreement():
+    columns = [
+        "reviewed_attempt_count", "reviewer_submission_count", "overall_agreement_count",
+        "overall_disagreement_count", "disputed_attempt_count", "rule_judgement_count",
+        "rule_group_count", "rule_disagreement_count",
+    ]
+    row = (3, 4, 3, 1, 1, 6, 4, 2)
+    report = queries.get_cross_attempt_review_report(Connection([Cursor(columns, [row])]))
+    assert report == {
+        "reviewed_attempt_count": 3, "reviewer_submission_count": 4,
+        "overall_agreement_count": 3, "overall_disagreement_count": 1,
+        "overall_agreement_percentage": 75.0, "disputed_attempt_count": 1,
+        "rule_judgement_count": 6, "rule_group_count": 4,
+        "rule_disagreement_count": 2, "rule_disagreement_percentage": 50.0,
+    }
+
+
 def test_invalid_judgement_and_missing_configuration_are_safe():
     try:
         queries.save_tester_judgement(Connection([]), 1, "MAYBE")

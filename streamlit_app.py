@@ -797,6 +797,17 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
                 columns = st.columns(6)
                 metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
                 st.write(dict(metrics))
+                cross_attempt = evaluation_queries.get_cross_attempt_review_report(connection)
+                st.subheader("Cross-attempt reviewer report")
+                st.write({
+                    "Reviewed attempts": cross_attempt["reviewed_attempt_count"],
+                    "Reviewer submissions": cross_attempt["reviewer_submission_count"],
+                    "Overall agreement": f"{cross_attempt['overall_agreement_count']} ({cross_attempt['overall_agreement_percentage']}%)",
+                    "Overall disagreement": cross_attempt["overall_disagreement_count"],
+                    "Disputed attempts": cross_attempt["disputed_attempt_count"],
+                    "Rule judgements": cross_attempt["rule_judgement_count"],
+                    "Rule disagreements": f"{cross_attempt['rule_disagreement_count']} ({cross_attempt['rule_disagreement_percentage']}%)",
+                })
                 attempts = evaluation_queries.list_attempts(connection, filters)
             else:  # reviewer queue
                 attempts = queue
@@ -900,6 +911,17 @@ def _legacy_render_reviewer_dashboard() -> None:
             columns = st.columns(6)
             metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
             st.write(dict(metrics))
+            cross_attempt = evaluation_queries.get_cross_attempt_review_report(connection)
+            st.subheader("Cross-attempt reviewer report")
+            st.write({
+                "Reviewed attempts": cross_attempt["reviewed_attempt_count"],
+                "Reviewer submissions": cross_attempt["reviewer_submission_count"],
+                "Overall agreement": f"{cross_attempt['overall_agreement_count']} ({cross_attempt['overall_agreement_percentage']}%)",
+                "Overall disagreement": cross_attempt["overall_disagreement_count"],
+                "Disputed attempts": cross_attempt["disputed_attempt_count"],
+                "Rule judgements": cross_attempt["rule_judgement_count"],
+                "Rule disagreements": f"{cross_attempt['rule_disagreement_count']} ({cross_attempt['rule_disagreement_percentage']}%)",
+            })
             attempts = evaluation_queries.list_attempts(connection, filters)
             if not attempts:
                 st.info("No persisted attempts match these filters.")

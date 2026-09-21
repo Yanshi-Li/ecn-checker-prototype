@@ -349,6 +349,53 @@ def get_rule_judgement_report(connection, attempt_id: int) -> list[dict[str, obj
     return _rows(cursor)
 
 
+def get_cross_attempt_review_report(connection) -> dict[str, object]:
+    """Return aggregate reviewer agreement metrics across all completed attempts."""
+    cursor = connection.execute(
+        """WITH review_rows AS (
+                 SELECT rs.precheck_attempt_id, rs.overall_judgement, a.system_decision
+                 FROM reviewer_submissions rs
+                 JOIN precheck_attempts a ON a.id = rs.precheck_attempt_id
+                 WHERE a.system_decision IS NOT NULL
+             ), rule_groups AS (
+                 SELECT rs.precheck_attempt_id, rr.rule_id,
+                        COUNT(*) AS judgement_count,
+                        COUNT(DISTINCT rr.judgement) AS distinct_judgement_count
+                 FROM reviewer_rule_judgements rr
+                 JOIN reviewer_submissions rs ON rs.id = rr.submission_id
+                 JOIN precheck_attempts a ON a.id = rs.precheck_attempt_id
+                 WHERE a.system_decision IS NOT NULL
+                 GROUP BY rs.precheck_attempt_id, rr.rule_id
+             )
+             SELECT
+                 COUNT(DISTINCT review_rows.precheck_attempt_id) AS reviewed_attempt_count,
+                 COUNT(*) AS reviewer_submission_count,
+                 COUNT(*) FILTER (WHERE overall_judgement = system_decision) AS overall_agreement_count,
+                 COUNT(*) FILTER (WHERE overall_judgement <> system_decision) AS overall_disagreement_count,
+                 (SELECT COUNT(*) FROM evaluation_review_status WHERE status = 'DISPUTED') AS disputed_attempt_count,
+                 (SELECT COUNT(*) FROM reviewer_rule_judgements) AS rule_judgement_count,
+                 (SELECT COUNT(*) FROM rule_groups) AS rule_group_count,
+                 (SELECT COUNT(*) FROM rule_groups WHERE distinct_judgement_count > 1) AS rule_disagreement_count
+             FROM review_rows"""
+    )
+    row = _row(cursor) or {}
+    percentage = lambda count, denominator: round((count / denominator) * 100, 1) if denominator else 0.0
+    submissions = int(row.get("reviewer_submission_count") or 0)
+    rule_groups = int(row.get("rule_group_count") or 0)
+    return {
+        "reviewed_attempt_count": int(row.get("reviewed_attempt_count") or 0),
+        "reviewer_submission_count": submissions,
+        "overall_agreement_count": int(row.get("overall_agreement_count") or 0),
+        "overall_disagreement_count": int(row.get("overall_disagreement_count") or 0),
+        "overall_agreement_percentage": percentage(int(row.get("overall_agreement_count") or 0), submissions),
+        "disputed_attempt_count": int(row.get("disputed_attempt_count") or 0),
+        "rule_judgement_count": int(row.get("rule_judgement_count") or 0),
+        "rule_group_count": rule_groups,
+        "rule_disagreement_count": int(row.get("rule_disagreement_count") or 0),
+        "rule_disagreement_percentage": percentage(int(row.get("rule_disagreement_count") or 0), rule_groups),
+    }
+
+
 def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, object]]:
     """Return only attempts the authenticated reviewer is allowed to inspect."""
     role = normalise_role(user["role"])
