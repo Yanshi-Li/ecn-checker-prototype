@@ -16,6 +16,7 @@ from scripts.evaluation_auth import can_administer, can_review, hash_password, n
 
 DECISIONS = ("ALL", "PASS", "FAIL")
 AGREEMENT_STATES = ("ALL", "AGREED", "DISAGREED", "UNJUDGED")
+REVIEW_STATUSES = ("ACTIVE", "READY_FOR_REVIEW", "IN_REVIEW", "REVIEWED", "DISPUTED")
 
 
 def _rows(cursor) -> list[dict[str, object]]:
@@ -231,6 +232,7 @@ def assign_reviewer(connection, attempt_id: int, reviewer_id: int, administrator
                FROM precheck_attempts WHERE id = %s""",
             (Jsonb({"reviewer_id": reviewer_id, "assigned_by": administrator_id}), attempt_id),
         )
+    refresh_review_status(connection, attempt_id)
 
 
 def list_assignable_attempts(connection) -> list[dict[str, object]]:
@@ -242,6 +244,107 @@ def list_assignable_attempts(connection) -> list[dict[str, object]]:
            JOIN evaluation_sessions s ON s.id = a.session_id
            WHERE a.system_decision IS NOT NULL
            ORDER BY a.completed_at DESC NULLS LAST, a.id DESC"""
+    )
+    return _rows(cursor)
+
+
+def get_review_status(connection, attempt_id: int) -> dict[str, object]:
+    """Return the persisted review lifecycle status and reviewer counts."""
+    cursor = connection.execute(
+        """SELECT COALESCE(rs.status, 'ACTIVE') AS status,
+                  (SELECT COUNT(*) FROM review_assignments
+                   WHERE precheck_attempt_id = %s AND status <> 'REVOKED') AS assigned_count,
+                  (SELECT COUNT(*) FROM reviewer_submissions
+                   WHERE precheck_attempt_id = %s) AS submitted_count,
+                  (SELECT COUNT(DISTINCT overall_judgement) FROM reviewer_submissions
+                   WHERE precheck_attempt_id = %s) AS judgement_count
+           FROM (SELECT 1) seed
+           LEFT JOIN evaluation_review_status rs ON rs.precheck_attempt_id = %s""",
+        (attempt_id, attempt_id, attempt_id, attempt_id),
+    )
+    row = _row(cursor)
+    return row or {
+        "status": "ACTIVE", "assigned_count": 0,
+        "submitted_count": 0, "judgement_count": 0,
+    }
+
+
+def refresh_review_status(connection, attempt_id: int) -> str:
+    """Recompute lifecycle status from assignments and independent submissions.
+
+    A dispute is sticky until an administrator explicitly resolves it. This
+    function never overwrites a resolved status, preserving the resolution
+    decision while allowing new submissions to be audited separately.
+    """
+    counts = get_review_status(connection, attempt_id)
+    current = str(counts["status"])
+    if current == "DISPUTED":
+        return current
+    assigned = int(counts["assigned_count"] or 0)
+    submitted = int(counts["submitted_count"] or 0)
+    judgements = int(counts["judgement_count"] or 0)
+    if judgements > 1:
+        status = "DISPUTED"
+    elif submitted == 0:
+        status = "READY_FOR_REVIEW" if assigned else "ACTIVE"
+    elif assigned and submitted < assigned:
+        status = "IN_REVIEW"
+    else:
+        status = "REVIEWED"
+    with connection.transaction():
+        connection.execute(
+            """INSERT INTO evaluation_review_status (precheck_attempt_id, status)
+               VALUES (%s, %s)
+               ON CONFLICT (precheck_attempt_id) DO UPDATE SET
+                 status = EXCLUDED.status, updated_at = CURRENT_TIMESTAMP""",
+            (attempt_id, status),
+        )
+    return status
+
+
+def resolve_review_dispute(
+    connection, attempt_id: int, administrator: Mapping[str, object], comment: str
+) -> None:
+    """Resolve a disputed attempt without changing reviewer submissions."""
+    if not can_administer(normalise_role(administrator["role"])):
+        raise PermissionError("administrator access required")
+    explanation = comment.strip()
+    if not explanation:
+        raise ValueError("resolution comment must not be empty")
+    with connection.transaction():
+        connection.execute(
+            """UPDATE evaluation_review_status
+               SET status = 'REVIEWED', resolution_comment = %s,
+                   resolved_by = %s, resolved_at = CURRENT_TIMESTAMP,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE precheck_attempt_id = %s AND status = 'DISPUTED'""",
+            (explanation, administrator["id"], attempt_id),
+        )
+        connection.execute(
+            """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+               SELECT session_id, id, 'review_dispute_resolved', %s
+               FROM precheck_attempts WHERE id = %s""",
+            (Jsonb({"administrator_id": administrator["id"], "comment": explanation}), attempt_id),
+        )
+
+
+def get_rule_judgement_report(connection, attempt_id: int) -> list[dict[str, object]]:
+    """Summarize independent reviewer judgements for each finding on an attempt."""
+    cursor = connection.execute(
+        """SELECT rr.rule_id,
+                  COUNT(*) AS judgement_count,
+                  COUNT(DISTINCT rr.judgement) AS distinct_judgement_count,
+                  COUNT(*) FILTER (WHERE rr.judgement = 'CORRECT') AS correct_count,
+                  COUNT(*) FILTER (WHERE rr.judgement = 'INCORRECT') AS incorrect_count,
+                  COUNT(*) FILTER (WHERE rr.judgement = 'UNCLEAR') AS unclear_count,
+                  COUNT(*) FILTER (WHERE rr.judgement = 'NOT_APPLICABLE') AS not_applicable_count,
+                  (COUNT(DISTINCT rr.judgement) > 1) AS disagreement
+           FROM reviewer_rule_judgements rr
+           JOIN reviewer_submissions rs ON rs.id = rr.submission_id
+           WHERE rs.precheck_attempt_id = %s
+           GROUP BY rr.rule_id
+           ORDER BY rr.rule_id""",
+        (attempt_id,),
     )
     return _rows(cursor)
 
@@ -258,10 +361,12 @@ def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, 
     cursor = connection.execute(
         """SELECT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
                   ra.status AS assignment_status, ra.reviewer_id,
+                  COALESCE(rev.status, 'ACTIVE') AS review_status,
                   s.tester_email, s.tester_name
            FROM precheck_attempts a
            JOIN evaluation_sessions s ON s.id = a.session_id
            JOIN review_assignments ra ON ra.precheck_attempt_id = a.id
+           LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
            """ + clause + " ORDER BY a.started_at DESC, a.id DESC",
         params,
     )
@@ -316,11 +421,18 @@ def submit_reviewer_judgement(
             (attempt_id, reviewer["id"]),
         )
         connection.execute(
+            """INSERT INTO evaluation_review_status (precheck_attempt_id, status)
+               VALUES (%s, 'IN_REVIEW')
+               ON CONFLICT (precheck_attempt_id) DO NOTHING""",
+            (attempt_id,),
+        )
+        connection.execute(
             """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
                SELECT session_id, id, 'reviewer_judgement_submitted', %s
                FROM precheck_attempts WHERE id = %s""",
             (Jsonb({"reviewer_id": reviewer["id"], "overall": value}), attempt_id),
         )
+    refresh_review_status(connection, attempt_id)
 
 
 def get_original_file(connection, attempt_id: int, role: str) -> dict[str, object] | None:

@@ -136,6 +136,15 @@ CREATE TABLE IF NOT EXISTS reviewer_rule_judgements (
     UNIQUE (submission_id, rule_id)
 );
 
+CREATE TABLE IF NOT EXISTS evaluation_review_status (
+    precheck_attempt_id BIGINT PRIMARY KEY REFERENCES precheck_attempts(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'READY_FOR_REVIEW', 'IN_REVIEW', 'REVIEWED', 'DISPUTED')),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolution_comment TEXT,
+    resolved_by BIGINT REFERENCES app_users(id),
+    resolved_at TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS notification_attempts (
 
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -163,5 +172,17 @@ CREATE INDEX IF NOT EXISTS review_assignments_reviewer_idx
 
 CREATE INDEX IF NOT EXISTS reviewer_submissions_attempt_idx
     ON reviewer_submissions (precheck_attempt_id);
+
+CREATE INDEX IF NOT EXISTS evaluation_review_status_status_idx
+    ON evaluation_review_status (status);
+
+
+
+
+
+
+
+
+
 
 

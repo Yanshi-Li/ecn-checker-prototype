@@ -796,21 +796,51 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
                 summary = evaluation_queries.get_evaluation_summary(connection, filters)
                 columns = st.columns(6)
                 metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
-                for column, (label, value) in zip(columns, metrics):
-                    column.metric(label, value)
+                st.write(dict(metrics))
                 attempts = evaluation_queries.list_attempts(connection, filters)
-            else:
+            else:  # reviewer queue
                 attempts = queue
             if not attempts:
                 st.info("No assigned review attempts are available.")
                 return
-            st.dataframe([{"Attempt": row["attempt_id"], "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Assigned": row.get("assignment_status", "—")} for row in attempts], hide_index=True, width="stretch")
+            st.dataframe([{"Attempt": row["attempt_id"], "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Review status": row.get("review_status", "—"), "Assigned": row.get("assignment_status", "—")} for row in attempts], hide_index=True, width="stretch")
             selected = st.selectbox("Open assigned attempt", [row["attempt_id"] for row in attempts])
             detail = evaluation_queries.get_attempt_detail(connection, int(selected))
+
             if not detail:
                 return
+
+            review_status = evaluation_queries.get_review_status(connection, int(selected))  # status
+            rule_report = evaluation_queries.get_rule_judgement_report(connection, int(selected))
             st.subheader(f"Attempt {detail['attempt_id']} — {detail['system_decision']}")
-            st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds")})
+            if rule_report:
+                st.subheader("Rule-level reviewer report")
+                st.dataframe(
+                    [
+                        {
+                            "Rule": row["rule_id"],
+                            "Judgements": row["judgement_count"],
+                            "Correct": row["correct_count"],
+                            "Incorrect": row["incorrect_count"],
+                            "Unclear": row["unclear_count"],
+                            "Not applicable": row["not_applicable_count"],
+                            "Disagreement": "Yes" if row["disagreement"] else "No",
+                        }
+                        for row in rule_report
+                    ],
+                    hide_index=True,
+                    width="stretch",
+                )
+            st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds"), "Review status": review_status["status"], "Assigned reviewers": review_status["assigned_count"], "Submitted reviews": review_status["submitted_count"]})
+            if review_status["status"] == "DISPUTED":
+                st.error("Reviewer judgements conflict. Administrator resolution is required.")
+                if user["role"] == "ADMINISTRATOR":
+                    resolution = st.text_area("Dispute resolution explanation", key=f"resolution_{selected}")
+                    if st.button("Resolve dispute", key=f"resolve_dispute_{selected}"):
+                        evaluation_queries.resolve_review_dispute(connection, int(selected), user, resolution)
+                        st.success("Dispute resolved and recorded in audit history.")
+                        st.rerun()
+
             st.json(detail.get("payload", {}))
             st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
             for file in detail.get("files", []):
@@ -869,17 +899,17 @@ def _legacy_render_reviewer_dashboard() -> None:
             summary = evaluation_queries.get_evaluation_summary(connection, filters)
             columns = st.columns(6)
             metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
-            for column, (label, value) in zip(columns, metrics):
-                column.metric(label, value)
+            st.write(dict(metrics))
             attempts = evaluation_queries.list_attempts(connection, filters)
             if not attempts:
                 st.info("No persisted attempts match these filters.")
                 return
             st.dataframe([{"Attempt": row["attempt_id"], "Case": row.get("case_identifier") or "—", "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Started": row.get("started_at"), "Completed": row.get("completed_at"), "Duration (s)": row.get("duration_seconds"), "Judgement": row.get("tester_judgement") or "—", "Agreement": "Yes" if row.get("agreement") else "No" if row.get("tester_judgement") else "—"} for row in attempts], hide_index=True, width="stretch")
-            selected = st.selectbox("Open attempt", [row["attempt_id"] for row in attempts])
+                        selected = st.selectbox("Open attempt", [row["attempt_id"] for row in attempts])
             detail = evaluation_queries.get_attempt_detail(connection, int(selected))
             if not detail:
                 return
+
             st.subheader(f"Attempt {detail['attempt_id']} — {detail['system_decision']}")
             st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds"), "Tester judgement": detail.get("tester_judgement") or "Not recorded"})
             st.json(detail.get("payload", {}))

@@ -88,12 +88,58 @@ def test_judgement_and_file_retrieval_preserve_separate_system_decision():
 
 def test_admin_queries_list_users_and_assign_attempts():
     user_columns = ["id", "email", "display_name", "role", "active", "created_at"]
-    connection = Connection([Cursor(user_columns, [(4, "reviewer@example.com", "Reviewer", "REVIEWER", True, None)]), Cursor([], []), Cursor([], [])])
+    connection = Connection([Cursor(user_columns, [(4, "reviewer@example.com", "Reviewer", "REVIEWER", True, None)]), Cursor([], []), Cursor([], []), Cursor(["status", "assigned_count", "submitted_count", "judgement_count"], [("READY_FOR_REVIEW", 1, 0, 0)]), Cursor([], [])])
     users = queries.list_users(connection)
     assert users[0]["role"] == "REVIEWER"
     queries.assign_reviewer(connection, 9, 4, 1)
     assert "review_assignments" in connection.statements[1][0]
     assert "reviewer_assigned" in connection.statements[2][0]
+    assert connection.statements[4][1] == (9, "READY_FOR_REVIEW")
+
+
+def test_refresh_review_status_transitions_to_disputed_when_reviewers_disagree():
+    columns = ["status", "assigned_count", "submitted_count", "judgement_count"]
+    connection = Connection([
+        Cursor(columns, [("IN_REVIEW", 2, 2, 2)]),
+        Cursor([], []),
+    ])
+    assert queries.refresh_review_status(connection, 9) == "DISPUTED"
+    assert "evaluation_review_status" in connection.statements[1][0]
+    assert connection.statements[1][1] == (9, "DISPUTED")
+
+
+def test_refresh_review_status_marks_single_completed_review_as_reviewed():
+    columns = ["status", "assigned_count", "submitted_count", "judgement_count"]
+    connection = Connection([
+        Cursor(columns, [("IN_REVIEW", 1, 1, 1)]),
+        Cursor([], []),
+    ])
+    assert queries.refresh_review_status(connection, 12) == "REVIEWED"
+    assert connection.statements[1][1] == (12, "REVIEWED")
+
+
+def test_resolve_review_dispute_requires_admin_and_keeps_audit_event():
+    admin = {"id": 7, "role": "ADMINISTRATOR"}
+    connection = Connection([Cursor([], []), Cursor([], [])])
+    queries.resolve_review_dispute(connection, 9, admin, "Administrator selected FAIL after source review.")
+    assert "resolution_comment" in connection.statements[0][0]
+    assert "review_dispute_resolved" in connection.statements[1][0]
+
+
+def test_rule_judgement_report_summarizes_disagreement_counts():
+    columns = [
+        "rule_id", "judgement_count", "distinct_judgement_count", "correct_count",
+        "incorrect_count", "unclear_count", "not_applicable_count", "disagreement",
+    ]
+    connection = Connection([Cursor(columns, [("H01", 2, 2, 1, 1, 0, 0, True)])])
+    report = queries.get_rule_judgement_report(connection, 9)
+    assert report == [{
+        "rule_id": "H01", "judgement_count": 2, "distinct_judgement_count": 2,
+        "correct_count": 1, "incorrect_count": 1, "unclear_count": 0,
+        "not_applicable_count": 0, "disagreement": True,
+    }]
+    assert connection.statements[0][1] == (9,)
+    assert "GROUP BY rr.rule_id" in connection.statements[0][0]
 
 
 def test_invalid_judgement_and_missing_configuration_are_safe():

@@ -165,9 +165,15 @@ attempt, downloads original ECN/BOM evidence, and records separate tester and
 reviewer judgements. Reviewer access uses `app_users`, salted PBKDF2 password
 records, `review_assignments`, and independent `reviewer_submissions` rows.
 Reviewers can only see assigned attempts; administrators can inspect the full
-population. The dashboard is optional and shows a generic availability message
-when PostgreSQL is not configured. Configure `REVIEWER_ADMIN_EMAIL` and
+population. The `evaluation_review_status` table derives the lifecycle
+`ACTIVE`, `READY_FOR_REVIEW`, `IN_REVIEW`, `REVIEWED`, or `DISPUTED` from
+assignments and independent submissions. Conflicting overall judgements become
+`DISPUTED`; an administrator can record an explanation to resolve the dispute
+without changing the original submissions, and the action is audited. The
+dashboard is optional and shows a generic availability message when PostgreSQL
+is not configured. Configure `REVIEWER_ADMIN_EMAIL` and
 `REVIEWER_ADMIN_PASSWORD` to bootstrap the first administrator.
+
 
 
 
