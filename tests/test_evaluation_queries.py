@@ -12,6 +12,9 @@ class Cursor:
     def fetchall(self):
         return self._rows
 
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
 
 class Connection:
     def __init__(self, responses):
@@ -70,7 +73,11 @@ def test_detail_contains_payload_findings_and_files():
                   "a@example.com", "Tester", "ECN", None, None, None, None)
     columns = ["attempt_id", "session_id", "case_id", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
     files = Cursor(["id", "role", "filename", "mime_type", "size_bytes", "sha256", "captured_at"], [(1, "ecn", "input.csv", "text/csv", 3, "a" * 64, datetime.now(timezone.utc))])
-    detail = queries.get_attempt_detail(Connection([Cursor(columns, [detail_row]), files]), 9)
+    detail = queries.get_attempt_detail(
+        Connection([Cursor([], [(1,)]), Cursor(columns, [detail_row]), files]),
+        9,
+        {"id": 4, "role": "REVIEWER"},
+    )
     assert detail["payload"]["packet"]["gate"]["blockers"][0]["rule_id"] == "H01"
     assert detail["findings"][0]["evidence"] == "x"
     assert detail["files"][0]["filename"] == "input.csv"
@@ -82,8 +89,13 @@ def test_judgement_and_file_retrieval_preserve_separate_system_decision():
     assert "UPDATE precheck_attempts" not in connection.statements[0][0]
     assert "tester_judgement_recorded" in connection.statements[1][0]
 
-    file_connection = Connection([Cursor(["filename", "mime_type", "size_bytes", "sha256", "captured_at", "content"], [("ecn.csv", "text/csv", 3, "a" * 64, None, b"ecn")])])
-    assert queries.get_original_file(file_connection, 9, "ecn")["content"] == b"ecn"
+    file_connection = Connection([
+        Cursor([], [(1,)]),
+        Cursor(["filename", "mime_type", "size_bytes", "sha256", "captured_at", "content"], [("ecn.csv", "text/csv", 3, "a" * 64, None, b"ecn")]),
+    ])
+    assert queries.get_original_file(
+        file_connection, 9, "ecn", {"id": 4, "role": "REVIEWER"}
+    )["content"] == b"ecn"
 
 
 def test_admin_queries_list_users_and_assign_attempts():
@@ -157,6 +169,34 @@ def test_cross_attempt_review_report_calculates_agreement_and_rule_disagreement(
         "rule_judgement_count": 6, "rule_group_count": 4,
         "rule_disagreement_count": 2, "rule_disagreement_percentage": 50.0,
     }
+
+
+def test_query_layer_denies_unassigned_reviewer_details_and_files():
+    connection = Connection([Cursor([], [])])
+    reviewer = {"id": 4, "role": "REVIEWER"}
+    try:
+        queries.get_attempt_detail(connection, 9, reviewer)
+    except PermissionError as exc:
+        assert "assigned" in str(exc)
+    else:
+        raise AssertionError("unassigned reviewer accessed attempt details")
+
+    connection = Connection([Cursor([], [])])
+    try:
+        queries.get_original_file(connection, 9, "ecn", reviewer)
+    except PermissionError as exc:
+        assert "assigned" in str(exc)
+    else:
+        raise AssertionError("unassigned reviewer accessed original file")
+
+
+def test_administrator_can_access_details_without_assignment_lookup():
+    detail_row = (9, 4, 3, "PASS", None, None, None, {}, "a@example.com", "Tester", "ECN", None, None, None)
+    columns = ["attempt_id", "session_id", "case_id", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
+    connection = Connection([Cursor(columns, [detail_row]), Cursor([], [])])
+    detail = queries.get_attempt_detail(connection, 9, {"id": 1, "role": "ADMINISTRATOR"})
+    assert detail["attempt_id"] == 9
+    assert "review_assignments" not in connection.statements[0][0]
 
 
 def test_invalid_judgement_and_missing_configuration_are_safe():

@@ -816,7 +816,7 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
                 return
             st.dataframe([{"Attempt": row["attempt_id"], "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Review status": row.get("review_status", "—"), "Assigned": row.get("assignment_status", "—")} for row in attempts], hide_index=True, width="stretch")
             selected = st.selectbox("Open assigned attempt", [row["attempt_id"] for row in attempts])
-            detail = evaluation_queries.get_attempt_detail(connection, int(selected))
+            detail = evaluation_queries.get_attempt_detail(connection, int(selected), user)
 
             if not detail:
                 return
@@ -855,7 +855,7 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
             st.json(detail.get("payload", {}))
             st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
             for file in detail.get("files", []):
-                original = evaluation_queries.get_original_file(connection, int(selected), file["role"])
+                original = evaluation_queries.get_original_file(connection, int(selected), file["role"], user)
                 if original:
                     st.download_button(f"Download {file['role'].upper()} — {file['filename']}", original["content"], file_name=original["filename"], mime=original["mime_type"], key=f"download_{selected}_{file['role']}")
             st.subheader("Review findings")
@@ -928,7 +928,7 @@ def _legacy_render_reviewer_dashboard() -> None:
                 return
             st.dataframe([{"Attempt": row["attempt_id"], "Case": row.get("case_identifier") or "—", "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Started": row.get("started_at"), "Completed": row.get("completed_at"), "Duration (s)": row.get("duration_seconds"), "Judgement": row.get("tester_judgement") or "—", "Agreement": "Yes" if row.get("agreement") else "No" if row.get("tester_judgement") else "—"} for row in attempts], hide_index=True, width="stretch")
                         selected = st.selectbox("Open attempt", [row["attempt_id"] for row in attempts])
-            detail = evaluation_queries.get_attempt_detail(connection, int(selected))
+            detail = evaluation_queries.get_attempt_detail(connection, int(selected), user)
             if not detail:
                 return
 
@@ -937,7 +937,7 @@ def _legacy_render_reviewer_dashboard() -> None:
             st.json(detail.get("payload", {}))
             st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
             for file in detail.get("files", []):
-                original = evaluation_queries.get_original_file(connection, int(selected), file["role"])
+                original = evaluation_queries.get_original_file(connection, int(selected), file["role"], user)
                 if original:
                     st.download_button(f"Download {file['role'].upper()} — {file['filename']}", original["content"], file_name=original["filename"], mime=original["mime_type"], key=f"download_{selected}_{file['role']}")
             st.subheader("Record reviewer judgement")

@@ -109,8 +109,28 @@ def get_evaluation_summary(connection, filters: Mapping[str, object] | None = No
     }
 
 
-def get_attempt_detail(connection, attempt_id: int) -> dict[str, object] | None:
-    """Return one attempt, its full result payload, findings, and file metadata."""
+def _require_attempt_access(connection, attempt_id: int, user: Mapping[str, object]) -> None:
+    """Enforce reviewer assignment or administrator access at the query seam."""
+    role = normalise_role(user.get("role"))
+    if can_administer(role):
+        return
+    if not can_review(role):
+        raise PermissionError("reviewer access required")
+    allowed = connection.execute(
+        """SELECT 1 FROM review_assignments
+           WHERE precheck_attempt_id = %s AND reviewer_id = %s
+             AND status <> 'REVOKED'""",
+        (attempt_id, user.get("id")),
+    ).fetchone()
+    if allowed is None:
+        raise PermissionError("attempt is not assigned to this reviewer")
+
+
+def get_attempt_detail(
+    connection, attempt_id: int, user: Mapping[str, object]
+) -> dict[str, object] | None:
+    """Return an authorized attempt, payload, findings, and file metadata."""
+    _require_attempt_access(connection, attempt_id, user)
     cursor = connection.execute(
         """SELECT a.id AS attempt_id, a.session_id, a.case_id, a.system_decision,
                   a.started_at, a.completed_at,
@@ -482,10 +502,13 @@ def submit_reviewer_judgement(
     refresh_review_status(connection, attempt_id)
 
 
-def get_original_file(connection, attempt_id: int, role: str) -> dict[str, object] | None:
-    """Fetch one original file's bytes and safe metadata for a download button."""
+def get_original_file(
+    connection, attempt_id: int, role: str, user: Mapping[str, object]
+) -> dict[str, object] | None:
+    """Fetch one original file after enforcing attempt authorization."""
     if role not in {"ecn", "bom", "other"}:
         raise ValueError("role must be ecn, bom, or other")
+    _require_attempt_access(connection, attempt_id, user)
     cursor = connection.execute(
         """SELECT filename, mime_type, size_bytes, sha256, captured_at, content
            FROM evaluation_files WHERE precheck_attempt_id = %s AND role = %s
