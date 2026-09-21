@@ -756,8 +756,40 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
     try:
         with connect_evaluation_db(config) as connection:
             queue = evaluation_queries.list_review_queue(connection, user)
+
             if user["role"] == "ADMINISTRATOR":
+                with st.expander("Administrator tools", expanded=False):
+                    st.markdown("**Create reviewer account**")
+                    new_email = st.text_input("Reviewer email", key="new_reviewer_email")
+                    new_name = st.text_input("Reviewer display name", key="new_reviewer_name")
+                    new_password = st.text_input("Temporary reviewer password", type="password", key="new_reviewer_password")
+                    if st.button("Create reviewer", key="create_reviewer"):
+                        try:
+                            evaluation_queries.create_user(connection, new_email, new_name, new_password, "REVIEWER")
+                            st.success("Reviewer account created.")
+                        except Exception as exc:
+                            st.error(f"Reviewer account could not be created: {exc}")
+
+                    reviewers = evaluation_queries.list_users(connection, "REVIEWER")
+                    assignable = evaluation_queries.list_assignable_attempts(connection)
+                    if reviewers and assignable:
+                        st.markdown("**Assign completed attempt**")
+                        reviewer_options = {f"{row['display_name']} ({row['email']})": row for row in reviewers}
+                        attempt_options = {f"Attempt {row['attempt_id']} — {row['system_decision']} — {row['tester_email']}": row for row in assignable}
+                        selected_reviewer_label = st.selectbox("Reviewer", list(reviewer_options), key="assignment_reviewer")
+                        selected_attempt_label = st.selectbox("Attempt", list(attempt_options), key="assignment_attempt")
+                        if st.button("Assign attempt", key="assign_attempt"):
+                            selected_reviewer = reviewer_options[selected_reviewer_label]
+                            selected_attempt = attempt_options[selected_attempt_label]
+                            evaluation_queries.assign_reviewer(connection, int(selected_attempt["attempt_id"]), int(selected_reviewer["id"]), int(user["id"]))
+                            st.success("Attempt assigned.")
+                    elif not reviewers:
+                        st.info("Create a reviewer before assigning attempts.")
+                    else:
+                        st.info("No completed attempts are available for assignment.")
+
                 decision = st.selectbox("System decision", evaluation_queries.DECISIONS)
+
                 tester = st.text_input("Tester name or email")
                 agreement = st.selectbox("Agreement", evaluation_queries.AGREEMENT_STATES)
                 filters = {"system_decision": decision, "tester": tester, "agreement": agreement}
@@ -785,12 +817,30 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
                 original = evaluation_queries.get_original_file(connection, int(selected), file["role"])
                 if original:
                     st.download_button(f"Download {file['role'].upper()} — {file['filename']}", original["content"], file_name=original["filename"], mime=original["mime_type"], key=f"download_{selected}_{file['role']}")
+            st.subheader("Review findings")
+            rule_judgements: dict[str, tuple[str, str]] = {}
+            for index, finding in enumerate(detail.get("findings", [])):
+                rule_id = str(finding.get("rule_id") or finding.get("flag_type") or "").strip()
+                if not rule_id:
+                    continue
+                with st.expander(f"{rule_id} — {finding.get('message', 'Finding')}"):
+                    rule_value = st.selectbox(
+                        "Rule judgement",
+                        ("CORRECT", "INCORRECT", "UNCLEAR", "NOT_APPLICABLE"),
+                        key=f"rule_judgement_{selected}_{index}",
+                    )
+                    rule_comment = st.text_area("Rule comment", key=f"rule_comment_{selected}_{index}")
+                    rule_judgements[rule_id] = (rule_value, rule_comment)
+
             st.subheader("Submit reviewer judgement")
             judgement = st.selectbox("Overall judgement", ("PASS", "FAIL"), key=f"reviewer_judgement_{selected}")
             comment = st.text_area("Reviewer comment", key=f"reviewer_comment_{selected}")
             if st.button("Submit reviewer judgement", key=f"submit_reviewer_{selected}"):
-                evaluation_queries.submit_reviewer_judgement(connection, int(selected), user, judgement, comment)
+                evaluation_queries.submit_reviewer_judgement(
+                    connection, int(selected), user, judgement, comment, rule_judgements
+                )
                 st.success("Reviewer judgement submitted.")
+
     except Exception:
         st.warning("Reviewer data is temporarily unavailable. Tester intake can still be used.")
 

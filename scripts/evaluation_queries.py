@@ -202,6 +202,18 @@ def create_user(connection, email: str, display_name: str, password: str, role: 
         return int(cursor.fetchone()[0])
 
 
+def list_users(connection, role: str = "REVIEWER") -> list[dict[str, object]]:
+    """List active users for administrator account and assignment management."""
+    normalized = normalise_role(role)
+    cursor = connection.execute(
+        """SELECT id, email, display_name, role, active, created_at
+           FROM app_users WHERE role = %s AND active = TRUE
+           ORDER BY display_name, email""",
+        (normalized,),
+    )
+    return _rows(cursor)
+
+
 def assign_reviewer(connection, attempt_id: int, reviewer_id: int, administrator_id: int) -> None:
     """Assign an attempt to a reviewer and record the assignment event."""
     with connection.transaction():
@@ -219,6 +231,19 @@ def assign_reviewer(connection, attempt_id: int, reviewer_id: int, administrator
                FROM precheck_attempts WHERE id = %s""",
             (Jsonb({"reviewer_id": reviewer_id, "assigned_by": administrator_id}), attempt_id),
         )
+
+
+def list_assignable_attempts(connection) -> list[dict[str, object]]:
+    """List completed attempts that an administrator may assign."""
+    cursor = connection.execute(
+        """SELECT a.id AS attempt_id, a.system_decision, a.completed_at,
+                  s.tester_email, s.tester_name
+           FROM precheck_attempts a
+           JOIN evaluation_sessions s ON s.id = a.session_id
+           WHERE a.system_decision IS NOT NULL
+           ORDER BY a.completed_at DESC NULLS LAST, a.id DESC"""
+    )
+    return _rows(cursor)
 
 
 def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, object]]:

@@ -86,6 +86,16 @@ def test_judgement_and_file_retrieval_preserve_separate_system_decision():
     assert queries.get_original_file(file_connection, 9, "ecn")["content"] == b"ecn"
 
 
+def test_admin_queries_list_users_and_assign_attempts():
+    user_columns = ["id", "email", "display_name", "role", "active", "created_at"]
+    connection = Connection([Cursor(user_columns, [(4, "reviewer@example.com", "Reviewer", "REVIEWER", True, None)]), Cursor([], []), Cursor([], [])])
+    users = queries.list_users(connection)
+    assert users[0]["role"] == "REVIEWER"
+    queries.assign_reviewer(connection, 9, 4, 1)
+    assert "review_assignments" in connection.statements[1][0]
+    assert "reviewer_assigned" in connection.statements[2][0]
+
+
 def test_invalid_judgement_and_missing_configuration_are_safe():
     try:
         queries.save_tester_judgement(Connection([]), 1, "MAYBE")
