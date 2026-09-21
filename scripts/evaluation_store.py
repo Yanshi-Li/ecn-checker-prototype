@@ -76,16 +76,28 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
         raise ValueError("snapshot decision must be PASS, FAIL, or empty for an error")
     if status not in {"PASS", "FAIL", "ERROR", "NOT_RUN"}:
         raise ValueError("snapshot status must be PASS, FAIL, ERROR, or NOT_RUN")
+
     payload = {key: value for key, value in snapshot.items() if key != "files"}
     event_type = "precheck_completed" if decision else "precheck_failed"
-    event_metadata = {"system_decision": decision, "case_id": snapshot.get("case_id"), "status": status}
+    event_metadata = {
+        "system_decision": decision,
+        "case_id": snapshot.get("case_id"),
+        "status": status,
+    }
     with connection.transaction():
         cursor = connection.execute(
             """INSERT INTO precheck_attempts
-               (session_id, system_decision, started_at, completed_at, result_payload)
-               VALUES (%s, %s, COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP), %s)
+               (session_id, case_id, system_decision, started_at, completed_at, result_payload)
+               VALUES (%s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP), %s)
                RETURNING id""",
-            (session_id, decision, snapshot.get("started_at"), snapshot.get("completed_at"), Jsonb(payload)),
+            (
+                session_id,
+                snapshot.get("precheck_case_id"),
+                decision,
+                snapshot.get("started_at"),
+                snapshot.get("completed_at"),
+                Jsonb(payload),
+            ),
         )
         attempt_id = int(cursor.fetchone()[0])
         connection.execute(
@@ -97,6 +109,7 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
         for notification in snapshot.get("notifications", ()) or ():
             _insert_notification(connection, attempt_id, notification)
     return attempt_id
+
 
 
 
@@ -343,8 +356,10 @@ def fail_precheck(
     connection, attempt_id: int, session_id: int, error_message: str
 ) -> None:
     """Record an execution error without inventing a PASS/FAIL decision."""
-    message = str(error_message).strip() or "Unknown pre-check error"
+    message = _safe_error_message(error_message) or "Unknown pre-check error"
+
     with connection.transaction():
+
         cursor = connection.execute(
             """
             UPDATE precheck_attempts

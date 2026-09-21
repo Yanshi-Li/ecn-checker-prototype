@@ -35,19 +35,21 @@ from scripts.evaluation_store import (  # noqa: E402
     complete_evaluation_batch,
     complete_precheck,
     connect_evaluation_db,
-        create_bom_input,
+    create_bom_input,
     create_evaluation_batch,
-
     create_logical_ecn,
     create_precheck_case,
     create_session,
     fail_precheck,
-    record_notification_attempt,
     initialise_schema,
+    record_notification_attempt,
     start_precheck,
     store_evaluation_files,
     update_precheck_case_status,
 )
+
+
+
 
 
 
@@ -386,6 +388,28 @@ def _start_batch_evaluation(
         return None
 
 
+def _batch_case_files(case: BatchCase) -> list[dict[str, object]]:
+    """Read the source files for one batch case for audit persistence."""
+    files: list[dict[str, object]] = []
+    sources = (
+        ("ecn", case.logical_ecn.metadata.get("source_file")),
+        ("bom", case.bom.metadata.get("source_file") if case.bom else None),
+    )
+    for role, source in sources:
+        if not source:
+            continue
+        source_path = Path(str(source))
+        if source_path.exists():
+            files.append(
+                {
+                    "role": role,
+                    "filename": source_path.name,
+                    "bytes": source_path.read_bytes(),
+                }
+            )
+    return files
+
+
 def _execute_persisted_batch_case(
     case: BatchCase, persistence: dict[str, object]
 ) -> dict[str, object]:
@@ -393,18 +417,22 @@ def _execute_persisted_batch_case(
     db_config = _evaluation_db_config()
     case_id = persistence["case_ids"][case.case_id]
     session_id = persistence["session_id"]
+
     with connect_evaluation_db(db_config) as connection:
         attempt_id = start_precheck(connection, session_id, case_id)
+
     try:
         result = _execute_batch_case(case)
     except Exception as exc:
         with connect_evaluation_db(db_config) as connection:
+            files = _batch_case_files(case)
+            if files:
+                store_evaluation_files(connection, attempt_id, files)
             fail_precheck(connection, attempt_id, session_id, str(exc))
             update_precheck_case_status(connection, case_id, "ERROR")
         raise
 
     gate = result["packet"]["gate"]
-
     payload = {
         "packet": result["packet"],
         "case_id": case.case_id,
@@ -414,23 +442,18 @@ def _execute_persisted_batch_case(
     }
 
     with connect_evaluation_db(db_config) as connection:
-        files = []
-
-        for role, source in (("ecn", case.logical_ecn.metadata.get("source_file")), ("bom", case.bom.metadata.get("source_file") if case.bom else None)):
-            if source and Path(str(source)).exists():
-                source_path = Path(str(source))
-                files.append({"role": role, "filename": source_path.name, "bytes": source_path.read_bytes()})
+        files = _batch_case_files(case)
         if files:
             store_evaluation_files(connection, attempt_id, files)
         complete_precheck(connection, attempt_id, session_id, result["decision"], payload)
         update_precheck_case_status(connection, case_id, result["decision"])
-
 
     return result
 
 
 def _complete_batch_evaluation(
     persistence: dict[str, object] | None, status: str
+
 ) -> None:
     """Mark the batch complete, allowing the UI result to remain available."""
     if persistence is None:

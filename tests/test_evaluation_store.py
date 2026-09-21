@@ -137,6 +137,7 @@ def test_persist_snapshot_keeps_complete_payload_file_metadata_and_notification_
     connection = _FakeConnection(rows=[(71,)])
     snapshot = {
         "case_id": "ECN-001:BOM-001",
+        "precheck_case_id": 19,
         "decision": "PASS",
         "status": "PASS",
         "packet": {"gate": {"decision": "PASS", "warnings": []}},
@@ -158,6 +159,11 @@ def test_persist_snapshot_keeps_complete_payload_file_metadata_and_notification_
     )
 
     assert attempt_id == 71
+    attempt_params = next(
+        params for statement, params in connection.executed
+        if "INSERT INTO precheck_attempts" in statement
+    )
+    assert attempt_params[1:3] == (19, "PASS")
     insert_statements = [statement for statement, _ in connection.executed]
     assert any("result_payload" in statement for statement in insert_statements)
     assert any("evaluation_files" in statement for statement in insert_statements)
