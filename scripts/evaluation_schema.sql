@@ -52,10 +52,10 @@ CREATE TABLE IF NOT EXISTS precheck_cases (
 CREATE TABLE IF NOT EXISTS precheck_attempts (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     session_id BIGINT NOT NULL REFERENCES evaluation_sessions(id),
-            case_id BIGINT REFERENCES precheck_cases(id),
-
-        system_decision TEXT
+    case_id BIGINT REFERENCES precheck_cases(id),
+    system_decision TEXT
         CHECK (system_decision IN ('PASS', 'FAIL')),
+
     started_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ,
     result_payload JSONB NOT NULL DEFAULT '{}'::jsonb
@@ -94,7 +94,50 @@ CREATE TABLE IF NOT EXISTS tester_judgements (
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS app_users (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('TESTER', 'REVIEWER', 'ADMINISTRATOR')),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS review_assignments (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    precheck_attempt_id BIGINT NOT NULL REFERENCES precheck_attempts(id) ON DELETE CASCADE,
+    reviewer_id BIGINT NOT NULL REFERENCES app_users(id),
+    assigned_by BIGINT NOT NULL REFERENCES app_users(id),
+    status TEXT NOT NULL DEFAULT 'ASSIGNED'
+        CHECK (status IN ('ASSIGNED', 'IN_REVIEW', 'SUBMITTED', 'REVOKED')),
+    assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (precheck_attempt_id, reviewer_id)
+);
+
+CREATE TABLE IF NOT EXISTS reviewer_submissions (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    precheck_attempt_id BIGINT NOT NULL REFERENCES precheck_attempts(id) ON DELETE CASCADE,
+    reviewer_id BIGINT NOT NULL REFERENCES app_users(id),
+    overall_judgement TEXT NOT NULL CHECK (overall_judgement IN ('PASS', 'FAIL')),
+    comment TEXT,
+    status TEXT NOT NULL DEFAULT 'SUBMITTED'
+        CHECK (status IN ('SUBMITTED', 'RESOLVED')),
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (precheck_attempt_id, reviewer_id)
+);
+
+CREATE TABLE IF NOT EXISTS reviewer_rule_judgements (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    submission_id BIGINT NOT NULL REFERENCES reviewer_submissions(id) ON DELETE CASCADE,
+    rule_id TEXT NOT NULL,
+    judgement TEXT NOT NULL CHECK (judgement IN ('CORRECT', 'INCORRECT', 'UNCLEAR', 'NOT_APPLICABLE')),
+    comment TEXT,
+    UNIQUE (submission_id, rule_id)
+);
+
 CREATE TABLE IF NOT EXISTS notification_attempts (
+
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     precheck_attempt_id BIGINT NOT NULL REFERENCES precheck_attempts(id),
     notification_kind TEXT NOT NULL,
@@ -114,3 +157,11 @@ CREATE INDEX IF NOT EXISTS evaluation_events_session_idx
 
 CREATE INDEX IF NOT EXISTS precheck_attempts_session_idx
     ON precheck_attempts (session_id, started_at);
+
+CREATE INDEX IF NOT EXISTS review_assignments_reviewer_idx
+    ON review_assignments (reviewer_id, status);
+
+CREATE INDEX IF NOT EXISTS reviewer_submissions_attempt_idx
+    ON reviewer_submissions (precheck_attempt_id);
+
+

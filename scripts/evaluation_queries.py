@@ -11,6 +11,8 @@ from typing import Mapping
 
 from psycopg.types.json import Jsonb
 
+from scripts.evaluation_auth import can_administer, can_review, hash_password, normalise_role, verify_password
+
 
 DECISIONS = ("ALL", "PASS", "FAIL")
 AGREEMENT_STATES = ("ALL", "AGREED", "DISAGREED", "UNJUDGED")
@@ -160,6 +162,139 @@ def save_tester_judgement(
                SELECT session_id, id, 'tester_judgement_recorded', %s
                FROM precheck_attempts WHERE id = %s""",
             (Jsonb({"judgement": value, "reviewer_identity": reviewer_identity.strip()}), attempt_id),
+        )
+
+
+def authenticate_user(connection, email: str, password: str) -> dict[str, object] | None:
+    """Authenticate an active application user without exposing password data."""
+    cursor = connection.execute(
+        """SELECT id, email, display_name, password_hash, role
+           FROM app_users WHERE lower(email) = lower(%s) AND active = TRUE""",
+        (email.strip(),),
+    )
+    user = _row(cursor)
+    if not user or not verify_password(password, str(user["password_hash"])):
+        return None
+    user.pop("password_hash", None)
+    return user
+
+
+def ensure_configured_admin(connection, email: str, password: str) -> int | None:
+    """Create or refresh the local bootstrap administrator from private config."""
+    if not email.strip() or not password:
+        return None
+    cursor = connection.execute("SELECT id FROM app_users WHERE lower(email) = lower(%s)", (email.strip(),))
+    existing = cursor.fetchone()
+    if existing:
+        return int(existing[0])
+    return create_user(connection, email, email, password, "ADMINISTRATOR")
+
+
+def create_user(connection, email: str, display_name: str, password: str, role: str) -> int:
+    """Create a user; only an administrator should expose this operation."""
+    role = normalise_role(role)
+    with connection.transaction():
+        cursor = connection.execute(
+            """INSERT INTO app_users (email, display_name, password_hash, role)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (email.strip(), display_name.strip(), hash_password(password), role),
+        )
+        return int(cursor.fetchone()[0])
+
+
+def assign_reviewer(connection, attempt_id: int, reviewer_id: int, administrator_id: int) -> None:
+    """Assign an attempt to a reviewer and record the assignment event."""
+    with connection.transaction():
+        connection.execute(
+            """INSERT INTO review_assignments
+               (precheck_attempt_id, reviewer_id, assigned_by)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (precheck_attempt_id, reviewer_id)
+               DO UPDATE SET status = 'ASSIGNED', assigned_by = EXCLUDED.assigned_by""",
+            (attempt_id, reviewer_id, administrator_id),
+        )
+        connection.execute(
+            """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+               SELECT session_id, id, 'reviewer_assigned', %s
+               FROM precheck_attempts WHERE id = %s""",
+            (Jsonb({"reviewer_id": reviewer_id, "assigned_by": administrator_id}), attempt_id),
+        )
+
+
+def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, object]]:
+    """Return only attempts the authenticated reviewer is allowed to inspect."""
+    role = normalise_role(user["role"])
+    if not can_review(role):
+        raise PermissionError("reviewer access required")
+    if can_administer(role):
+        clause, params = "", []
+    else:
+        clause, params = "WHERE ra.reviewer_id = %s AND ra.status <> 'REVOKED'", [user["id"]]
+    cursor = connection.execute(
+        """SELECT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
+                  ra.status AS assignment_status, ra.reviewer_id,
+                  s.tester_email, s.tester_name
+           FROM precheck_attempts a
+           JOIN evaluation_sessions s ON s.id = a.session_id
+           JOIN review_assignments ra ON ra.precheck_attempt_id = a.id
+           """ + clause + " ORDER BY a.started_at DESC, a.id DESC",
+        params,
+    )
+    return _rows(cursor)
+
+
+def submit_reviewer_judgement(
+    connection, attempt_id: int, reviewer: Mapping[str, object], overall: str,
+    comment: str = "", rule_judgements: Mapping[str, tuple[str, str]] | None = None,
+) -> None:
+    """Store an independent reviewer submission after assignment authorization."""
+    value = overall.strip().upper()
+    if value not in {"PASS", "FAIL"}:
+        raise ValueError("overall judgement must be PASS or FAIL")
+    role = normalise_role(reviewer["role"])
+    if not can_review(role):
+        raise PermissionError("reviewer access required")
+    with connection.transaction():
+        allowed = connection.execute(
+            """SELECT 1 FROM review_assignments
+               WHERE precheck_attempt_id = %s AND reviewer_id = %s
+                 AND status <> 'REVOKED'""",
+            (attempt_id, reviewer["id"]),
+        ).fetchone()
+        if allowed is None and not can_administer(role):
+            raise PermissionError("attempt is not assigned to this reviewer")
+        cursor = connection.execute(
+            """INSERT INTO reviewer_submissions
+               (precheck_attempt_id, reviewer_id, overall_judgement, comment)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (precheck_attempt_id, reviewer_id) DO UPDATE SET
+                 overall_judgement = EXCLUDED.overall_judgement,
+                 comment = EXCLUDED.comment, submitted_at = CURRENT_TIMESTAMP
+               RETURNING id""",
+            (attempt_id, reviewer["id"], value, comment.strip() or None),
+        )
+        submission_id = int(cursor.fetchone()[0])
+        for rule_id, (judgement, rule_comment) in (rule_judgements or {}).items():
+            normalized = judgement.strip().upper()
+            if normalized not in {"CORRECT", "INCORRECT", "UNCLEAR", "NOT_APPLICABLE"}:
+                raise ValueError("invalid rule judgement")
+            connection.execute(
+                """INSERT INTO reviewer_rule_judgements
+                   (submission_id, rule_id, judgement, comment) VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (submission_id, rule_id) DO UPDATE SET
+                     judgement = EXCLUDED.judgement, comment = EXCLUDED.comment""",
+                (submission_id, rule_id, normalized, rule_comment.strip() or None),
+            )
+        connection.execute(
+            """UPDATE review_assignments SET status = 'SUBMITTED'
+               WHERE precheck_attempt_id = %s AND reviewer_id = %s""",
+            (attempt_id, reviewer["id"]),
+        )
+        connection.execute(
+            """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+               SELECT session_id, id, 'reviewer_judgement_submitted', %s
+               FROM precheck_attempts WHERE id = %s""",
+            (Jsonb({"reviewer_id": reviewer["id"], "overall": value}), attempt_id),
         )
 
 

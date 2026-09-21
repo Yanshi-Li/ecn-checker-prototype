@@ -707,11 +707,105 @@ def _record_notification_result(result: dict[str, object], kind: str) -> None:
         pass
 
 
-def _render_reviewer_dashboard() -> None:
+def _reviewer_user() -> dict[str, object] | None:
+    """Authenticate a reviewer or administrator for the protected area."""
+    config = _evaluation_db_config()
+    if not config.get("ECN_DB_PASSWORD"):
+        st.info("Reviewer data is unavailable: configure ECN_DB_PASSWORD.")
+        return None
+    try:
+        with connect_evaluation_db(config) as connection:
+            initialise_schema(connection)
+            admin_email = _get_config_value("REVIEWER_ADMIN_EMAIL")
+            admin_password = _get_config_value("REVIEWER_ADMIN_PASSWORD")
+            if admin_email and admin_password:
+                evaluation_queries.ensure_configured_admin(connection, admin_email, admin_password)
+    except Exception:
+        st.warning("Reviewer authentication is temporarily unavailable.")
+        return None
 
-    """Render reviewer metrics and attempt detail from PostgreSQL."""
+    user = st.session_state.get("reviewer_user")
+    if user:
+        st.caption(f"Signed in as {user['display_name']} ({user['role']})")
+        if st.button("Sign out", key="reviewer_sign_out"):
+            st.session_state.pop("reviewer_user", None)
+            st.rerun()
+        return user
+
+    st.subheader("Reviewer sign in")
+    email = st.text_input("Reviewer email", key="reviewer_login_email")
+    password = st.text_input("Reviewer password", type="password", key="reviewer_login_password")
+    if st.button("Sign in", key="reviewer_sign_in"):
+        try:
+            with connect_evaluation_db(config) as connection:
+                user = evaluation_queries.authenticate_user(connection, email, password)
+        except Exception:
+            user = None
+        if user:
+            st.session_state["reviewer_user"] = user
+            st.rerun()
+        st.error("Invalid reviewer credentials.")
+    return None
+
+
+def _render_reviewer_dashboard(user: dict[str, object]) -> None:
+    """Render the protected reviewer queue and administrator view."""
+    st.header("Reviewer dashboard")
+    st.caption("System decisions and reviewer judgements are stored separately.")
+    config = _evaluation_db_config()
+    try:
+        with connect_evaluation_db(config) as connection:
+            queue = evaluation_queries.list_review_queue(connection, user)
+            if user["role"] == "ADMINISTRATOR":
+                decision = st.selectbox("System decision", evaluation_queries.DECISIONS)
+                tester = st.text_input("Tester name or email")
+                agreement = st.selectbox("Agreement", evaluation_queries.AGREEMENT_STATES)
+                filters = {"system_decision": decision, "tester": tester, "agreement": agreement}
+                summary = evaluation_queries.get_evaluation_summary(connection, filters)
+                columns = st.columns(6)
+                metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
+                for column, (label, value) in zip(columns, metrics):
+                    column.metric(label, value)
+                attempts = evaluation_queries.list_attempts(connection, filters)
+            else:
+                attempts = queue
+            if not attempts:
+                st.info("No assigned review attempts are available.")
+                return
+            st.dataframe([{"Attempt": row["attempt_id"], "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Assigned": row.get("assignment_status", "—")} for row in attempts], hide_index=True, width="stretch")
+            selected = st.selectbox("Open assigned attempt", [row["attempt_id"] for row in attempts])
+            detail = evaluation_queries.get_attempt_detail(connection, int(selected))
+            if not detail:
+                return
+            st.subheader(f"Attempt {detail['attempt_id']} — {detail['system_decision']}")
+            st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds")})
+            st.json(detail.get("payload", {}))
+            st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
+            for file in detail.get("files", []):
+                original = evaluation_queries.get_original_file(connection, int(selected), file["role"])
+                if original:
+                    st.download_button(f"Download {file['role'].upper()} — {file['filename']}", original["content"], file_name=original["filename"], mime=original["mime_type"], key=f"download_{selected}_{file['role']}")
+            st.subheader("Submit reviewer judgement")
+            judgement = st.selectbox("Overall judgement", ("PASS", "FAIL"), key=f"reviewer_judgement_{selected}")
+            comment = st.text_area("Reviewer comment", key=f"reviewer_comment_{selected}")
+            if st.button("Submit reviewer judgement", key=f"submit_reviewer_{selected}"):
+                evaluation_queries.submit_reviewer_judgement(connection, int(selected), user, judgement, comment)
+                st.success("Reviewer judgement submitted.")
+    except Exception:
+        st.warning("Reviewer data is temporarily unavailable. Tester intake can still be used.")
+
+
+def _legacy_render_reviewer_dashboard() -> None:
+    """Retained for compatibility with callers of the old dashboard helper."""
+    st.header("Reviewer dashboard")
+    st.info("Sign in through the Reviewer dashboard workflow.")
+
+
+# The old implementation is intentionally not used; protected rendering is above.
+"""
     st.header("Reviewer dashboard")
     st.caption("Prototype reviewer view; production authentication is not included.")
+
     config = _evaluation_db_config()
     if not config.get("ECN_DB_PASSWORD"):
         st.info("Reviewer data is unavailable: configure ECN_DB_PASSWORD.")
@@ -751,18 +845,27 @@ def _render_reviewer_dashboard() -> None:
             if st.button("Save judgement", key=f"save_judgement_{selected}"):
                 evaluation_queries.save_tester_judgement(connection, int(selected), judgement, explanation, reviewer)
                 st.success("Judgement saved separately from the system decision.")
-    except Exception:
+        except Exception:
         st.warning("Reviewer data is temporarily unavailable. Tester intake can still be used.")
+
+"""
 
 
 def main() -> None:
+
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
-    # Password access control is temporarily disabled for local testing.
+        # Reviewer access is protected by database-backed role authentication.
     st.title("ECN Checker")
+
     workflow = st.radio("Workflow", ["Tester intake", "Reviewer dashboard"], horizontal=True, key="workflow_mode")
+
     if workflow == "Reviewer dashboard":
-        _render_reviewer_dashboard()
+
+        user = _reviewer_user()
+        if user:
+            _render_reviewer_dashboard(user)
         return
+
 
     st.subheader("Tester identification")
     tester_email = st.text_input("Tester email", key="evaluation_tester_email")
