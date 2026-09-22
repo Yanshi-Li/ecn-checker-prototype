@@ -110,9 +110,20 @@ def get_evaluation_summary(connection, filters: Mapping[str, object] | None = No
 
 
 def _require_attempt_access(connection, attempt_id: int, user: Mapping[str, object]) -> None:
-    """Enforce reviewer assignment or administrator access at the query seam."""
+    """Enforce ownership, reviewer assignment, or administrator access."""
     role = normalise_role(user.get("role"))
     if can_administer(role):
+        return
+    if role == "TESTER":
+        allowed = connection.execute(
+            """SELECT 1
+               FROM precheck_attempts a
+               JOIN evaluation_sessions s ON s.id = a.session_id
+               WHERE a.id = %s AND lower(s.tester_email) = lower(%s)""",
+            (attempt_id, str(user.get("email") or "").strip()),
+        ).fetchone()
+        if allowed is None:
+            raise PermissionError("attempt is not owned by this tester")
         return
     if not can_review(role):
         raise PermissionError("reviewer access required")

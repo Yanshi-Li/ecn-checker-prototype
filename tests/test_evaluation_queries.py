@@ -1,6 +1,8 @@
 """Behaviour tests for the reviewer query seam."""
 from datetime import datetime, timezone
 
+import pytest
+
 from scripts import evaluation_queries as queries
 
 
@@ -197,6 +199,28 @@ def test_administrator_can_access_details_without_assignment_lookup():
     detail = queries.get_attempt_detail(connection, 9, {"id": 1, "role": "ADMINISTRATOR"})
     assert detail["attempt_id"] == 9
     assert "review_assignments" not in connection.statements[0][0]
+
+
+def test_tester_can_access_only_owned_attempt_details_and_files():
+    detail_row = (9, 4, 3, "PASS", None, None, None, {}, "tester@example.com", "Tester", "ECN", None, None, None)
+    columns = ["attempt_id", "session_id", "case_id", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
+    connection = Connection([
+        Cursor([], [(1,)]),
+        Cursor(columns, [detail_row]),
+        Cursor([], []),
+    ])
+    detail = queries.get_attempt_detail(
+        connection, 9, {"id": 8, "email": "tester@example.com", "role": "TESTER"}
+    )
+    assert detail["attempt_id"] == 9
+    assert "tester_email" in connection.statements[0][0]
+    assert connection.statements[0][1] == (9, "tester@example.com")
+
+    denied = Connection([Cursor([], [])])
+    with pytest.raises(PermissionError, match="owned"):
+        queries.get_attempt_detail(
+            denied, 9, {"id": 8, "email": "other@example.com", "role": "TESTER"}
+        )
 
 
 def test_invalid_judgement_and_missing_configuration_are_safe():

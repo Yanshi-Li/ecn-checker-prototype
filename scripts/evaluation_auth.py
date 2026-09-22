@@ -53,6 +53,17 @@ def can_administer(role: object) -> bool:
     return normalise_role(role) == "ADMINISTRATOR"
 
 
-def can_access_attempt(role: object, *, assigned: bool = False) -> bool:
+def can_access_attempt(
+    role: object, *, assigned: bool = False, owned: bool = False
+) -> bool:
+    """Return whether role-level access can be granted for an attempt.
+
+    Ownership and reviewer assignment are checked against the database by the
+    query layer; this helper only expresses the role-specific requirement.
+    """
     value = normalise_role(role)
-    return value == "ADMINISTRATOR" or (value == "REVIEWER" and assigned)
+    return (
+        value == "ADMINISTRATOR"
+        or (value == "REVIEWER" and assigned)
+        or (value == "TESTER" and owned)
+    )

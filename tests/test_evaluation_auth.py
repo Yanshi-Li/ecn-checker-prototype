@@ -17,6 +17,8 @@ def test_roles_control_reviewer_and_assignment_access():
     assert can_administer("administrator")
     assert can_access_attempt("reviewer", assigned=True)
     assert not can_access_attempt("reviewer", assigned=False)
+    assert can_access_attempt("tester", owned=True)
+    assert not can_access_attempt("tester", owned=False)
     assert can_access_attempt("administrator", assigned=False)
     with pytest.raises(ValueError):
         can_review("unknown")
