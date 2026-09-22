@@ -161,10 +161,26 @@ re-importing the same verified bundle is idempotent. The CLI writes one with
 `scripts/evaluation_queries.py` is the query seam for the Streamlit Reviewer
 Dashboard. It lists persisted attempts, calculates PASS/FAIL and tester-system
 agreement metrics, returns the complete result payload and rule findings for one
-attempt, downloads original ECN/BOM evidence, and records a separate tester
-judgement. Agreement excludes unjudged attempts; saving a judgement never
-changes `precheck_attempts.system_decision`. The dashboard is optional and
-shows a generic availability message when PostgreSQL is not configured.
+attempt, downloads original ECN/BOM evidence, and records separate tester and
+reviewer judgements. Testers can submit one overall PASS/FAIL judgement plus
+per-rule CORRECT, INCORRECT, UNCLEAR, or NOT_APPLICABLE comments in
+`tester_rule_judgements`; these records never overwrite the system decision.
+Reviewer access uses `app_users`, salted PBKDF2 password
+
+records, `review_assignments`, and independent `reviewer_submissions` rows.
+Reviewers can only see assigned attempts; before submitting, a reviewer
+cannot see aggregate judgements from other reviewers, while administrators can
+inspect the full population. The `evaluation_review_status` table derives the lifecycle
+
+`ACTIVE`, `READY_FOR_REVIEW`, `IN_REVIEW`, `REVIEWED`, or `DISPUTED` from
+assignments and independent submissions. Conflicting overall judgements become
+`DISPUTED`; an administrator can record an explanation to resolve the dispute
+without changing the original submissions, and the action is audited. The administrator dashboard reports PASS/FAIL percentages, average checking duration, tester-system agreement, aggregate reviewer agreement, disagreement, disputed attempts, and rule-level disagreement across completed attempts. It also reports UNCLEAR and NOT_APPLICABLE per-rule judgement counts. The dashboard is optional and shows a generic availability message when PostgreSQL
+
+is not configured. Configure `REVIEWER_ADMIN_EMAIL` and
+`REVIEWER_ADMIN_PASSWORD` to bootstrap the first administrator.
+
+
 
 
 ## Key Files
@@ -207,6 +223,11 @@ shows a generic availability message when PostgreSQL is not configured.
 | `SENDGRID_API_KEY` | Enables SendGrid notification delivery (Stage 6)              |
 | `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address for Stage 6 notifications   |
 | `DRY_RUN` | Defaults to `true`; set explicitly false only to send email          |
+| `ECN_DB_HOST` / `ECN_DB_PORT` | Local PostgreSQL connection settings |
+| `ECN_DB_NAME` / `ECN_DB_USER` / `ECN_DB_PASSWORD` | Evaluation database credentials |
+| `REVIEWER_ADMIN_EMAIL` | Email for the bootstrap administrator |
+| `REVIEWER_ADMIN_PASSWORD` | Private bootstrap administrator password |
+
 
 
 ## AI advisory response contract

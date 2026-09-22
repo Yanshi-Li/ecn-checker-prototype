@@ -143,6 +143,16 @@ For local CLI use, the AI advisory reads a repository-root `.env` file; process 
 | `ECN_DB_NAME` | Evaluation database name. | Evaluation store | `ecn_prechecker_evaluation` |
 | `ECN_DB_USER` | Restricted evaluation database role. | Evaluation store | `ecn_app` |
 | `ECN_DB_PASSWORD` | Password for the evaluation database role. | Evaluation store | No default; keep it out of source control |
+| `REVIEWER_ADMIN_EMAIL` | Bootstrap administrator email for the protected reviewer area. | Streamlit reviewer authentication | No default |
+| `REVIEWER_ADMIN_PASSWORD` | Bootstrap administrator password; used only to create the first administrator. | Streamlit reviewer authentication | No default; keep it out of source control |
+
+The **Reviewer dashboard** is separate from tester intake. Configure the two
+`REVIEWER_ADMIN_*` values once, initialise the schema, then sign in with that
+administrator account. Reviewer accounts and assignments should be created
+through the administrator workflow or database administration; never commit
+passwords. Reviewer passwords are stored as salted PBKDF2 hashes, and a
+reviewer can only open assigned attempts.
+
 
 ## Running tests
 

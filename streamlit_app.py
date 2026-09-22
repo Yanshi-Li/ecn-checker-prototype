@@ -39,15 +39,18 @@ from scripts.evaluation_store import (  # noqa: E402
     create_evaluation_batch,
     create_logical_ecn,
     create_precheck_case,
-        create_session,
+    create_session,
     fail_precheck,
-
     initialise_schema,
+    record_notification_attempt,
     start_precheck,
     store_evaluation_files,
-
     update_precheck_case_status,
 )
+
+
+
+
 
 
 
@@ -385,6 +388,28 @@ def _start_batch_evaluation(
         return None
 
 
+def _batch_case_files(case: BatchCase) -> list[dict[str, object]]:
+    """Read the source files for one batch case for audit persistence."""
+    files: list[dict[str, object]] = []
+    sources = (
+        ("ecn", case.logical_ecn.metadata.get("source_file")),
+        ("bom", case.bom.metadata.get("source_file") if case.bom else None),
+    )
+    for role, source in sources:
+        if not source:
+            continue
+        source_path = Path(str(source))
+        if source_path.exists():
+            files.append(
+                {
+                    "role": role,
+                    "filename": source_path.name,
+                    "bytes": source_path.read_bytes(),
+                }
+            )
+    return files
+
+
 def _execute_persisted_batch_case(
     case: BatchCase, persistence: dict[str, object]
 ) -> dict[str, object]:
@@ -392,18 +417,22 @@ def _execute_persisted_batch_case(
     db_config = _evaluation_db_config()
     case_id = persistence["case_ids"][case.case_id]
     session_id = persistence["session_id"]
+
     with connect_evaluation_db(db_config) as connection:
         attempt_id = start_precheck(connection, session_id, case_id)
+
     try:
         result = _execute_batch_case(case)
     except Exception as exc:
         with connect_evaluation_db(db_config) as connection:
+            files = _batch_case_files(case)
+            if files:
+                store_evaluation_files(connection, attempt_id, files)
             fail_precheck(connection, attempt_id, session_id, str(exc))
             update_precheck_case_status(connection, case_id, "ERROR")
         raise
 
     gate = result["packet"]["gate"]
-
     payload = {
         "packet": result["packet"],
         "case_id": case.case_id,
@@ -413,23 +442,18 @@ def _execute_persisted_batch_case(
     }
 
     with connect_evaluation_db(db_config) as connection:
-        files = []
-
-        for role, source in (("ecn", case.logical_ecn.metadata.get("source_file")), ("bom", case.bom.metadata.get("source_file") if case.bom else None)):
-            if source and Path(str(source)).exists():
-                source_path = Path(str(source))
-                files.append({"role": role, "filename": source_path.name, "bytes": source_path.read_bytes()})
+        files = _batch_case_files(case)
         if files:
             store_evaluation_files(connection, attempt_id, files)
         complete_precheck(connection, attempt_id, session_id, result["decision"], payload)
         update_precheck_case_status(connection, case_id, result["decision"])
-
 
     return result
 
 
 def _complete_batch_evaluation(
     persistence: dict[str, object] | None, status: str
+
 ) -> None:
     """Mark the batch complete, allowing the UI result to remain available."""
     if persistence is None:
@@ -607,7 +631,62 @@ def _render_ai_notes(ai_notes: dict) -> None:
             st.info("No AI advisory flags found.")
 
 
+def _render_tester_judgement(packet: dict) -> None:
+    """Let the identified tester record an independent overall and rule review."""
+    attempt_id = st.session_state.get("evaluation_attempt_id")
+    tester_email = str(st.session_state.get("evaluation_tester_email", "")).strip()
+    if not attempt_id or not tester_email:
+        return
+
+    gate = packet.get("gate", {})
+    findings = [
+        finding
+        for category in ("blockers", "part_issues", "conflict_alerts", "warnings")
+        for finding in gate.get(category, []) or []
+        if isinstance(finding, dict)
+    ]
+    st.divider()
+    st.subheader("Record your judgement")
+    st.caption("Your judgement is stored separately from the system decision.")
+    rule_judgements: dict[str, tuple[str, str]] = {}
+    for index, finding in enumerate(findings):
+        rule_id = str(finding.get("rule_id") or finding.get("flag_type") or "").strip()
+        if not rule_id:
+            continue
+        with st.expander(f"{rule_id} — {finding.get('message', 'Finding')}"):
+            value = st.selectbox(
+                "Rule judgement",
+                ("CORRECT", "INCORRECT", "UNCLEAR", "NOT_APPLICABLE"),
+                key=f"tester_rule_judgement_{attempt_id}_{index}",
+            )
+            comment = st.text_area(
+                "Rule comment", key=f"tester_rule_comment_{attempt_id}_{index}"
+            )
+            rule_judgements[rule_id] = (value, comment)
+    overall = st.selectbox(
+        "Overall judgement", ("PASS", "FAIL"), key=f"tester_overall_judgement_{attempt_id}"
+    )
+    explanation = st.text_area(
+        "Overall explanation", key=f"tester_overall_explanation_{attempt_id}"
+    )
+    if st.button("Submit tester judgement", key=f"submit_tester_judgement_{attempt_id}"):
+        try:
+            with connect_evaluation_db(_evaluation_db_config()) as connection:
+                evaluation_queries.save_tester_judgement(
+                    connection,
+                    int(attempt_id),
+                    overall,
+                    explanation,
+                    tester_email,
+                    rule_judgements,
+                )
+            st.success("Tester judgement submitted.")
+        except Exception:
+            st.error("Tester judgement could not be saved.")
+
+
 def _start_evaluation_precheck(tester_email: str, tester_name: str):
+
     """Create or reuse the current session and start a pre-check attempt."""
     db_config = _evaluation_db_config()
     if not db_config.get("ECN_DB_PASSWORD"):
@@ -642,74 +721,276 @@ def _complete_evaluation_precheck(
     """Persist completion data and return duration, or None if persistence fails."""
     if evaluation is None:
         return None
-        session_id, attempt_id = evaluation
+    session_id, attempt_id = evaluation
     try:
         with connect_evaluation_db(_evaluation_db_config()) as connection:
-
             if files:
                 store_evaluation_files(connection, attempt_id, files)
-            return complete_precheck(
+            duration = complete_precheck(
                 connection, attempt_id, session_id, system_decision, result_payload
             )
+        st.session_state["evaluation_attempt_id"] = attempt_id
+        return duration
     except Exception:
         return None
 
 
-def _render_reviewer_dashboard() -> None:
-    """Render reviewer metrics and attempt detail from PostgreSQL."""
-    st.header("Reviewer dashboard")
-    st.caption("Prototype reviewer view; production authentication is not included.")
+def _record_notification_result(result: dict[str, object], kind: str) -> None:
+
+    """Persist notification outcome without affecting the validation result."""
+    attempt_id = st.session_state.get("evaluation_attempt_id")
+    config = _evaluation_db_config()
+    if not attempt_id or not config.get("ECN_DB_PASSWORD"):
+        return
+    recipients = result.get("recipients") or []
+    recipient = ", ".join(str(value) for value in recipients if value)
+    if not recipient:
+        return
+    status = "sent" if result.get("sent") else "requested" if result.get("dry_run") else "failed"
+    try:
+        with connect_evaluation_db(config) as connection:
+            record_notification_attempt(
+                connection,
+                int(attempt_id),
+                kind,
+                recipient,
+                status,
+                result.get("error"),
+            )
+    except Exception:
+        # Notification audit failure must never hide the validation outcome.
+        pass
+
+
+def _reviewer_user() -> dict[str, object] | None:
+    """Authenticate a reviewer or administrator for the protected area."""
     config = _evaluation_db_config()
     if not config.get("ECN_DB_PASSWORD"):
         st.info("Reviewer data is unavailable: configure ECN_DB_PASSWORD.")
-        return
+        return None
     try:
         with connect_evaluation_db(config) as connection:
-            decision = st.selectbox("System decision", evaluation_queries.DECISIONS)
-            tester = st.text_input("Tester name or email")
-            agreement = st.selectbox("Agreement", evaluation_queries.AGREEMENT_STATES)
-            filters = {"system_decision": decision, "tester": tester, "agreement": agreement}
-            summary = evaluation_queries.get_evaluation_summary(connection, filters)
-            columns = st.columns(6)
-            metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
-            for column, (label, value) in zip(columns, metrics):
-                column.metric(label, value)
-            attempts = evaluation_queries.list_attempts(connection, filters)
+            initialise_schema(connection)
+            admin_email = _get_config_value("REVIEWER_ADMIN_EMAIL")
+            admin_password = _get_config_value("REVIEWER_ADMIN_PASSWORD")
+            if admin_email and admin_password:
+                evaluation_queries.ensure_configured_admin(connection, admin_email, admin_password)
+    except Exception:
+        st.warning("Reviewer authentication is temporarily unavailable.")
+        return None
+
+    user = st.session_state.get("reviewer_user")
+    if user:
+        st.caption(f"Signed in as {user['display_name']} ({user['role']})")
+        if st.button("Sign out", key="reviewer_sign_out"):
+            st.session_state.pop("reviewer_user", None)
+            st.rerun()
+        return user
+
+    st.subheader("Reviewer sign in")
+    email = st.text_input("Reviewer email", key="reviewer_login_email")
+    password = st.text_input("Reviewer password", type="password", key="reviewer_login_password")
+    if st.button("Sign in", key="reviewer_sign_in"):
+        try:
+            with connect_evaluation_db(config) as connection:
+                user = evaluation_queries.authenticate_user(connection, email, password)
+        except Exception:
+            user = None
+        if user:
+            st.session_state["reviewer_user"] = user
+            st.rerun()
+        st.error("Invalid reviewer credentials.")
+    return None
+
+
+def _render_reviewer_dashboard(user: dict[str, object]) -> None:
+    """Render the protected reviewer queue and administrator view."""
+    st.header("Reviewer dashboard")
+    st.caption("System decisions and reviewer judgements are stored separately.")
+    config = _evaluation_db_config()
+    try:
+        with connect_evaluation_db(config) as connection:
+            queue = evaluation_queries.list_review_queue(connection, user)
+
+            if user["role"] == "ADMINISTRATOR":
+                with st.expander("Administrator tools", expanded=False):
+                    st.markdown("**Create reviewer account**")
+                    new_email = st.text_input("Reviewer email", key="new_reviewer_email")
+                    new_name = st.text_input("Reviewer display name", key="new_reviewer_name")
+                    new_password = st.text_input("Temporary reviewer password", type="password", key="new_reviewer_password")
+                    if st.button("Create reviewer", key="create_reviewer"):
+                        try:
+                            evaluation_queries.create_user(connection, new_email, new_name, new_password, "REVIEWER")
+                            st.success("Reviewer account created.")
+                        except Exception as exc:
+                            st.error(f"Reviewer account could not be created: {exc}")
+
+                    reviewers = evaluation_queries.list_users(connection, "REVIEWER")
+                    assignable = evaluation_queries.list_assignable_attempts(connection)
+                    if reviewers and assignable:
+                        st.markdown("**Assign completed attempt**")
+                        reviewer_options = {f"{row['display_name']} ({row['email']})": row for row in reviewers}
+                        attempt_options = {f"Attempt {row['attempt_id']} — {row['system_decision']} — {row['tester_email']}": row for row in assignable}
+                        selected_reviewer_label = st.selectbox("Reviewer", list(reviewer_options), key="assignment_reviewer")
+                        selected_attempt_label = st.selectbox("Attempt", list(attempt_options), key="assignment_attempt")
+                        if st.button("Assign attempt", key="assign_attempt"):
+                            selected_reviewer = reviewer_options[selected_reviewer_label]
+                            selected_attempt = attempt_options[selected_attempt_label]
+                            evaluation_queries.assign_reviewer(connection, int(selected_attempt["attempt_id"]), int(selected_reviewer["id"]), int(user["id"]))
+                            st.success("Attempt assigned.")
+                    elif not reviewers:
+                        st.info("Create a reviewer before assigning attempts.")
+                    else:
+                        st.info("No completed attempts are available for assignment.")
+
+                decision = st.selectbox("System decision", evaluation_queries.DECISIONS)
+
+                tester = st.text_input("Tester name or email")
+                agreement = st.selectbox("Agreement", evaluation_queries.AGREEMENT_STATES)
+                filters = {"system_decision": decision, "tester": tester, "agreement": agreement}
+                summary = evaluation_queries.get_evaluation_summary(connection, filters)
+                metrics = (
+
+                    ("Attempts", summary["total_attempts"]),
+                    ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"),
+                    ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"),
+                    ("Judged", summary["judged_count"]),
+                    ("Agreement", summary["agreement_count"]),
+                    ("Agreement %", f"{summary['agreement_percentage']}%"),
+                    ("Avg check (s)", summary["average_duration_seconds"]),
+                )
+                st.write(dict(metrics))
+
+                cross_attempt = evaluation_queries.get_cross_attempt_review_report(connection)
+                st.subheader("Cross-attempt reviewer report")
+                st.write({
+                    "Reviewed attempts": cross_attempt["reviewed_attempt_count"],
+                    "Reviewer submissions": cross_attempt["reviewer_submission_count"],
+                    "Overall agreement": f"{cross_attempt['overall_agreement_count']} ({cross_attempt['overall_agreement_percentage']}%)",
+                                        "Overall disagreement": cross_attempt["overall_disagreement_count"],
+                    "Disputed attempts": cross_attempt["disputed_attempt_count"],
+
+                    "Rule judgements": cross_attempt["rule_judgement_count"],
+                    "UNCLEAR rule judgements": cross_attempt["unclear_count"],
+                    "NOT_APPLICABLE rule judgements": cross_attempt["not_applicable_count"],
+                    "Rule disagreements": f"{cross_attempt['rule_disagreement_count']} ({cross_attempt['rule_disagreement_percentage']}%)",
+                })
+
+                attempts = evaluation_queries.list_attempts(connection, filters)
+            else:  # reviewer queue
+                attempts = queue
             if not attempts:
-                st.info("No persisted attempts match these filters.")
+                st.info("No assigned review attempts are available.")
                 return
-            st.dataframe([{"Attempt": row["attempt_id"], "Case": row.get("case_identifier") or "—", "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Started": row.get("started_at"), "Completed": row.get("completed_at"), "Duration (s)": row.get("duration_seconds"), "Judgement": row.get("tester_judgement") or "—", "Agreement": "Yes" if row.get("agreement") else "No" if row.get("tester_judgement") else "—"} for row in attempts], hide_index=True, width="stretch")
-            selected = st.selectbox("Open attempt", [row["attempt_id"] for row in attempts])
-            detail = evaluation_queries.get_attempt_detail(connection, int(selected))
+            st.dataframe([{"Attempt": row["attempt_id"], "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Review status": row.get("review_status", "—"), "Assigned": row.get("assignment_status", "—")} for row in attempts], hide_index=True, width="stretch")
+            selected = st.selectbox("Open assigned attempt", [row["attempt_id"] for row in attempts])
+            detail = evaluation_queries.get_attempt_detail(connection, int(selected), user)
+
             if not detail:
                 return
+
+
+            review_status = evaluation_queries.get_review_status(connection, int(selected))  # status
+
+
+            own_submission = (
+                None
+                if user["role"] == "ADMINISTRATOR"
+                else evaluation_queries.get_reviewer_submission(
+                    connection, int(selected), int(user["id"])
+                )
+            )
+            rule_report = (
+                evaluation_queries.get_rule_judgement_report(connection, int(selected))
+                if user["role"] == "ADMINISTRATOR" or own_submission
+                else []
+            )
             st.subheader(f"Attempt {detail['attempt_id']} — {detail['system_decision']}")
-            st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds"), "Tester judgement": detail.get("tester_judgement") or "Not recorded"})
+            if user["role"] != "ADMINISTRATOR" and not own_submission:
+                st.info("Submit your review to see the aggregate reviewer judgements.")
+            if rule_report:
+
+                st.subheader("Rule-level reviewer report")
+                st.dataframe(
+                    [
+                        {
+                            "Rule": row["rule_id"],
+                            "Judgements": row["judgement_count"],
+                            "Correct": row["correct_count"],
+                            "Incorrect": row["incorrect_count"],
+                            "Unclear": row["unclear_count"],
+                            "Not applicable": row["not_applicable_count"],
+                            "Disagreement": "Yes" if row["disagreement"] else "No",
+                        }
+                        for row in rule_report
+                    ],
+                    hide_index=True,
+                    width="stretch",
+                )
+            st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds"), "Review status": review_status["status"], "Assigned reviewers": review_status["assigned_count"], "Submitted reviews": review_status["submitted_count"]})
+            if review_status["status"] == "DISPUTED":
+                st.error("Reviewer judgements conflict. Administrator resolution is required.")
+                if user["role"] == "ADMINISTRATOR":
+                    resolution = st.text_area("Dispute resolution explanation", key=f"resolution_{selected}")
+                    if st.button("Resolve dispute", key=f"resolve_dispute_{selected}"):
+                        evaluation_queries.resolve_review_dispute(connection, int(selected), user, resolution)
+                        st.success("Dispute resolved and recorded in audit history.")
+                        st.rerun()
+
             st.json(detail.get("payload", {}))
             st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
             for file in detail.get("files", []):
-                original = evaluation_queries.get_original_file(connection, int(selected), file["role"])
+                original = evaluation_queries.get_original_file(connection, int(selected), file["role"], user)
                 if original:
                     st.download_button(f"Download {file['role'].upper()} — {file['filename']}", original["content"], file_name=original["filename"], mime=original["mime_type"], key=f"download_{selected}_{file['role']}")
-            st.subheader("Record reviewer judgement")
-            reviewer = st.text_input("Reviewer identity", key=f"reviewer_{selected}")
-            judgement = st.selectbox("Judgement", ("PASS", "FAIL"), key=f"judgement_{selected}")
-            explanation = st.text_area("Explanation", key=f"explanation_{selected}")
-            if st.button("Save judgement", key=f"save_judgement_{selected}"):
-                evaluation_queries.save_tester_judgement(connection, int(selected), judgement, explanation, reviewer)
-                st.success("Judgement saved separately from the system decision.")
+            st.subheader("Review findings")
+            rule_judgements: dict[str, tuple[str, str]] = {}
+            for index, finding in enumerate(detail.get("findings", [])):
+                rule_id = str(finding.get("rule_id") or finding.get("flag_type") or "").strip()
+                if not rule_id:
+                    continue
+                with st.expander(f"{rule_id} — {finding.get('message', 'Finding')}"):
+                    rule_value = st.selectbox(
+                        "Rule judgement",
+                        ("CORRECT", "INCORRECT", "UNCLEAR", "NOT_APPLICABLE"),
+                        key=f"rule_judgement_{selected}_{index}",
+                    )
+                    rule_comment = st.text_area("Rule comment", key=f"rule_comment_{selected}_{index}")
+                    rule_judgements[rule_id] = (rule_value, rule_comment)
+
+            st.subheader("Submit reviewer judgement")
+            judgement = st.selectbox("Overall judgement", ("PASS", "FAIL"), key=f"reviewer_judgement_{selected}")
+            comment = st.text_area("Reviewer comment", key=f"reviewer_comment_{selected}")
+            if st.button("Submit reviewer judgement", key=f"submit_reviewer_{selected}"):
+                evaluation_queries.submit_reviewer_judgement(
+                    connection, int(selected), user, judgement, comment, rule_judgements
+                )
+                st.success("Reviewer judgement submitted.")
+
     except Exception:
         st.warning("Reviewer data is temporarily unavailable. Tester intake can still be used.")
 
 
+def _legacy_render_reviewer_dashboard() -> None:
+    """Retained for compatibility with callers of the old dashboard helper."""
+    st.header("Reviewer dashboard")
+    st.info("Sign in through the Reviewer dashboard workflow.")
+
 def main() -> None:
+
     st.set_page_config(page_title="ECN Checker", page_icon="📋", layout="wide")
-    # Password access control is temporarily disabled for local testing.
+        # Reviewer access is protected by database-backed role authentication.
     st.title("ECN Checker")
+
     workflow = st.radio("Workflow", ["Tester intake", "Reviewer dashboard"], horizontal=True, key="workflow_mode")
+
     if workflow == "Reviewer dashboard":
-        _render_reviewer_dashboard()
+
+        user = _reviewer_user()
+        if user:
+            _render_reviewer_dashboard(user)
         return
+
 
     st.subheader("Tester identification")
     tester_email = st.text_input("Tester email", key="evaluation_tester_email")
@@ -913,11 +1194,25 @@ def main() -> None:
 
             captured_files = []
 
+            original_names = (
 
-            for role, path in zip(("ecn", "bom"), temporary_paths):
+                [ecn_file.name, bom_file.name]
+                if mode == "Upload files"
+                else ["manual_ecn.csv", "manual_bom.csv"]
+            )
+            for role, path, original_name in zip(
+                ("ecn", "bom"), temporary_paths, original_names
+            ):
                 source_path = Path(path)
                 if source_path.exists():
-                    captured_files.append({"role": role, "filename": source_path.name, "bytes": source_path.read_bytes()})
+                    captured_files.append(
+                        {
+                            "role": role,
+                            "filename": original_name,
+                            "bytes": source_path.read_bytes(),
+                        }
+                    )
+
             duration = _complete_evaluation_precheck(
                 evaluation, gate["decision"], result_payload, captured_files
             )
@@ -963,9 +1258,10 @@ def main() -> None:
     _render_findings("Conflict Alerts", gate.get("conflict_alerts", []))
     _render_findings("Warnings", gate.get("warnings", []))
     _render_ai_notes(gate.get("ai_notes", {}))
+    _render_tester_judgement(packet)
 
-    st.divider()
     st.subheader("Email validation report")
+
     validation_recipient = st.text_input(
         "Validation report recipient",
         key="validation_recipient_email",
@@ -986,6 +1282,7 @@ def main() -> None:
                     secrets=_streamlit_secrets(),
                 )
             st.session_state["email_status"] = result
+            _record_notification_result(result, "validation_report")
             if result["sent"]:
                 st.success(result["message"])
             elif result["status"] == "not_configured":
@@ -1005,20 +1302,10 @@ def main() -> None:
             if decision == "FAIL":
                 result = send_fail_email(packet, engineer_email.strip())
             else:
-                result = send_pass_email(
-                    packet,
-                    engineer_email.strip(),
-                    ce_email.strip(),
-                )
-
+                result = send_pass_email(packet, engineer_email.strip(), ce_email.strip())
+            _record_notification_result(result, "gate_notification")
             recipients = ", ".join(result["recipients"])
-            status = (
-                "sent"
-                if result["sent"]
-                else "dry run"
-                if result["dry_run"]
-                else "not sent"
-            )
+            status = "sent" if result["sent"] else "dry run" if result["dry_run"] else "not sent"
             message = (
                 f"Notification {status}. Recipients: {recipients}. "
                 f"Subject: {result['subject']}. Dry run: {result['dry_run']}."
@@ -1031,4 +1318,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
     
