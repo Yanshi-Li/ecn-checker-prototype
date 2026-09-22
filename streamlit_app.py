@@ -849,20 +849,33 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
                 agreement = st.selectbox("Agreement", evaluation_queries.AGREEMENT_STATES)
                 filters = {"system_decision": decision, "tester": tester, "agreement": agreement}
                 summary = evaluation_queries.get_evaluation_summary(connection, filters)
-                columns = st.columns(6)
-                metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
+                metrics = (
+
+                    ("Attempts", summary["total_attempts"]),
+                    ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"),
+                    ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"),
+                    ("Judged", summary["judged_count"]),
+                    ("Agreement", summary["agreement_count"]),
+                    ("Agreement %", f"{summary['agreement_percentage']}%"),
+                    ("Avg check (s)", summary["average_duration_seconds"]),
+                )
                 st.write(dict(metrics))
+
                 cross_attempt = evaluation_queries.get_cross_attempt_review_report(connection)
                 st.subheader("Cross-attempt reviewer report")
                 st.write({
                     "Reviewed attempts": cross_attempt["reviewed_attempt_count"],
                     "Reviewer submissions": cross_attempt["reviewer_submission_count"],
                     "Overall agreement": f"{cross_attempt['overall_agreement_count']} ({cross_attempt['overall_agreement_percentage']}%)",
-                    "Overall disagreement": cross_attempt["overall_disagreement_count"],
+                                        "Overall disagreement": cross_attempt["overall_disagreement_count"],
                     "Disputed attempts": cross_attempt["disputed_attempt_count"],
+
                     "Rule judgements": cross_attempt["rule_judgement_count"],
+                    "UNCLEAR rule judgements": cross_attempt["unclear_count"],
+                    "NOT_APPLICABLE rule judgements": cross_attempt["not_applicable_count"],
                     "Rule disagreements": f"{cross_attempt['rule_disagreement_count']} ({cross_attempt['rule_disagreement_percentage']}%)",
                 })
+
                 attempts = evaluation_queries.list_attempts(connection, filters)
             else:  # reviewer queue
                 attempts = queue
@@ -962,68 +975,6 @@ def _legacy_render_reviewer_dashboard() -> None:
     """Retained for compatibility with callers of the old dashboard helper."""
     st.header("Reviewer dashboard")
     st.info("Sign in through the Reviewer dashboard workflow.")
-
-
-# The old implementation is intentionally not used; protected rendering is above.
-"""
-    st.header("Reviewer dashboard")
-    st.caption("Prototype reviewer view; production authentication is not included.")
-
-    config = _evaluation_db_config()
-    if not config.get("ECN_DB_PASSWORD"):
-        st.info("Reviewer data is unavailable: configure ECN_DB_PASSWORD.")
-        return
-    try:
-        with connect_evaluation_db(config) as connection:
-            decision = st.selectbox("System decision", evaluation_queries.DECISIONS)
-            tester = st.text_input("Tester name or email")
-            agreement = st.selectbox("Agreement", evaluation_queries.AGREEMENT_STATES)
-            filters = {"system_decision": decision, "tester": tester, "agreement": agreement}
-            summary = evaluation_queries.get_evaluation_summary(connection, filters)
-            columns = st.columns(6)
-            metrics = (("Attempts", summary["total_attempts"]), ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"), ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"), ("Judged", summary["judged_count"]), ("Agreement", summary["agreement_count"]), ("Agreement %", f"{summary['agreement_percentage']}%"))
-            st.write(dict(metrics))
-            cross_attempt = evaluation_queries.get_cross_attempt_review_report(connection)
-            st.subheader("Cross-attempt reviewer report")
-            st.write({
-                "Reviewed attempts": cross_attempt["reviewed_attempt_count"],
-                "Reviewer submissions": cross_attempt["reviewer_submission_count"],
-                "Overall agreement": f"{cross_attempt['overall_agreement_count']} ({cross_attempt['overall_agreement_percentage']}%)",
-                "Overall disagreement": cross_attempt["overall_disagreement_count"],
-                "Disputed attempts": cross_attempt["disputed_attempt_count"],
-                "Rule judgements": cross_attempt["rule_judgement_count"],
-                "Rule disagreements": f"{cross_attempt['rule_disagreement_count']} ({cross_attempt['rule_disagreement_percentage']}%)",
-            })
-            attempts = evaluation_queries.list_attempts(connection, filters)
-            if not attempts:
-                st.info("No persisted attempts match these filters.")
-                return
-            st.dataframe([{"Attempt": row["attempt_id"], "Case": row.get("case_identifier") or "—", "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Started": row.get("started_at"), "Completed": row.get("completed_at"), "Duration (s)": row.get("duration_seconds"), "Judgement": row.get("tester_judgement") or "—", "Agreement": "Yes" if row.get("agreement") else "No" if row.get("tester_judgement") else "—"} for row in attempts], hide_index=True, width="stretch")
-                        selected = st.selectbox("Open attempt", [row["attempt_id"] for row in attempts])
-            detail = evaluation_queries.get_attempt_detail(connection, int(selected), user)
-            if not detail:
-                return
-
-            st.subheader(f"Attempt {detail['attempt_id']} — {detail['system_decision']}")
-            st.write({"Tester": detail.get("tester_name") or detail.get("tester_email"), "Started": detail.get("started_at"), "Completed": detail.get("completed_at"), "Checking duration (seconds)": detail.get("duration_seconds"), "Tester judgement": detail.get("tester_judgement") or "Not recorded"})
-            st.json(detail.get("payload", {}))
-            st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
-            for file in detail.get("files", []):
-                original = evaluation_queries.get_original_file(connection, int(selected), file["role"], user)
-                if original:
-                    st.download_button(f"Download {file['role'].upper()} — {file['filename']}", original["content"], file_name=original["filename"], mime=original["mime_type"], key=f"download_{selected}_{file['role']}")
-            st.subheader("Record reviewer judgement")
-            reviewer = st.text_input("Reviewer identity", key=f"reviewer_{selected}")
-            judgement = st.selectbox("Judgement", ("PASS", "FAIL"), key=f"judgement_{selected}")
-            explanation = st.text_area("Explanation", key=f"explanation_{selected}")
-            if st.button("Save judgement", key=f"save_judgement_{selected}"):
-                evaluation_queries.save_tester_judgement(connection, int(selected), judgement, explanation, reviewer)
-                st.success("Judgement saved separately from the system decision.")
-        except Exception:
-        st.warning("Reviewer data is temporarily unavailable. Tester intake can still be used.")
-
-"""
-
 
 def main() -> None:
 
