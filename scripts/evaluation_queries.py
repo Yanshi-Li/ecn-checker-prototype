@@ -175,12 +175,18 @@ def get_attempt_detail(
 
 
 def save_tester_judgement(
-    connection, attempt_id: int, judgement: str, explanation: str = "", reviewer_identity: str = ""
+    connection,
+    attempt_id: int,
+    judgement: str,
+    explanation: str = "",
+    reviewer_identity: str = "",
+    rule_judgements: Mapping[str, tuple[str, str]] | None = None,
 ) -> None:
-    """Record a separate judgement and audit event; never update system_decision."""
+    """Record independent tester judgements without changing system_decision."""
     value = judgement.strip().upper()
     if value not in {"PASS", "FAIL"}:
         raise ValueError("judgement must be PASS or FAIL")
+    normalized_rules = _normalise_rule_judgements(rule_judgements)
     with connection.transaction():
         connection.execute(
             """INSERT INTO tester_judgements (precheck_attempt_id, judgement, explanation)
@@ -189,12 +195,49 @@ def save_tester_judgement(
                  explanation = EXCLUDED.explanation, recorded_at = CURRENT_TIMESTAMP""",
             (attempt_id, value, explanation.strip() or None),
         )
+        for rule_id, (rule_value, rule_comment) in normalized_rules.items():
+            connection.execute(
+                """INSERT INTO tester_rule_judgements
+                   (precheck_attempt_id, rule_id, judgement, comment)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (precheck_attempt_id, rule_id) DO UPDATE SET
+                     judgement = EXCLUDED.judgement, comment = EXCLUDED.comment,
+                     recorded_at = CURRENT_TIMESTAMP""",
+                (attempt_id, rule_id, rule_value, rule_comment or None),
+            )
         connection.execute(
             """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
                SELECT session_id, id, 'tester_judgement_recorded', %s
                FROM precheck_attempts WHERE id = %s""",
-            (Jsonb({"judgement": value, "reviewer_identity": reviewer_identity.strip()}), attempt_id),
+            (Jsonb({
+                "judgement": value,
+                "reviewer_identity": reviewer_identity.strip(),
+                "rule_count": len(normalized_rules),
+            }), attempt_id),
         )
+
+
+_RULE_JUDGEMENT_VALUES = {"CORRECT", "INCORRECT", "UNCLEAR", "NOT_APPLICABLE"}
+
+
+def _normalise_rule_judgements(
+    rule_judgements: Mapping[str, tuple[str, str]] | None,
+) -> dict[str, tuple[str, str]]:
+    """Validate and normalize per-rule judgements before opening a transaction."""
+    normalized: dict[str, tuple[str, str]] = {}
+    for raw_rule_id, raw_value in (rule_judgements or {}).items():
+        rule_id = str(raw_rule_id).strip()
+        if not rule_id:
+            raise ValueError("rule_id must not be empty")
+        try:
+            raw_judgement, raw_comment = raw_value
+        except (TypeError, ValueError):
+            raise ValueError("rule judgement must contain a value and comment") from None
+        rule_judgement = str(raw_judgement).strip().upper()
+        if rule_judgement not in _RULE_JUDGEMENT_VALUES:
+            raise ValueError("invalid rule judgement")
+        normalized[rule_id] = (rule_judgement, str(raw_comment or "").strip())
+    return normalized
 
 
 def authenticate_user(connection, email: str, password: str) -> dict[str, object] | None:
@@ -359,6 +402,19 @@ def resolve_review_dispute(
         )
 
 
+def get_reviewer_submission(
+    connection, attempt_id: int, reviewer_id: int
+) -> dict[str, object] | None:
+    """Return only the current reviewer's own submission, if one exists."""
+    cursor = connection.execute(
+        """SELECT id, overall_judgement, comment, submitted_at
+           FROM reviewer_submissions
+           WHERE precheck_attempt_id = %s AND reviewer_id = %s""",
+        (attempt_id, reviewer_id),
+    )
+    return _row(cursor)
+
+
 def get_rule_judgement_report(connection, attempt_id: int) -> list[dict[str, object]]:
     """Summarize independent reviewer judgements for each finding on an attempt."""
     cursor = connection.execute(
@@ -462,6 +518,7 @@ def submit_reviewer_judgement(
     role = normalise_role(reviewer["role"])
     if not can_review(role):
         raise PermissionError("reviewer access required")
+    normalized_rules = _normalise_rule_judgements(rule_judgements)
     with connection.transaction():
         allowed = connection.execute(
             """SELECT 1 FROM review_assignments
@@ -482,10 +539,7 @@ def submit_reviewer_judgement(
             (attempt_id, reviewer["id"], value, comment.strip() or None),
         )
         submission_id = int(cursor.fetchone()[0])
-        for rule_id, (judgement, rule_comment) in (rule_judgements or {}).items():
-            normalized = judgement.strip().upper()
-            if normalized not in {"CORRECT", "INCORRECT", "UNCLEAR", "NOT_APPLICABLE"}:
-                raise ValueError("invalid rule judgement")
+        for rule_id, (normalized, rule_comment) in normalized_rules.items():
             connection.execute(
                 """INSERT INTO reviewer_rule_judgements
                    (submission_id, rule_id, judgement, comment) VALUES (%s, %s, %s, %s)

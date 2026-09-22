@@ -162,10 +162,16 @@ re-importing the same verified bundle is idempotent. The CLI writes one with
 Dashboard. It lists persisted attempts, calculates PASS/FAIL and tester-system
 agreement metrics, returns the complete result payload and rule findings for one
 attempt, downloads original ECN/BOM evidence, and records separate tester and
-reviewer judgements. Reviewer access uses `app_users`, salted PBKDF2 password
+reviewer judgements. Testers can submit one overall PASS/FAIL judgement plus
+per-rule CORRECT, INCORRECT, UNCLEAR, or NOT_APPLICABLE comments in
+`tester_rule_judgements`; these records never overwrite the system decision.
+Reviewer access uses `app_users`, salted PBKDF2 password
+
 records, `review_assignments`, and independent `reviewer_submissions` rows.
-Reviewers can only see assigned attempts; administrators can inspect the full
-population. The `evaluation_review_status` table derives the lifecycle
+Reviewers can only see assigned attempts; before submitting, a reviewer
+cannot see aggregate judgements from other reviewers, while administrators can
+inspect the full population. The `evaluation_review_status` table derives the lifecycle
+
 `ACTIVE`, `READY_FOR_REVIEW`, `IN_REVIEW`, `REVIEWED`, or `DISPUTED` from
 assignments and independent submissions. Conflicting overall judgements become
 `DISPUTED`; an administrator can record an explanation to resolve the dispute

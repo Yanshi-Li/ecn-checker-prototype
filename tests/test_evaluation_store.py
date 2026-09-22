@@ -80,6 +80,8 @@ def test_initialise_schema_executes_schema_in_one_transaction():
     assert "CREATE TABLE IF NOT EXISTS evaluation_sessions" in schema
     assert "CREATE TABLE IF NOT EXISTS precheck_attempts" in schema
     assert "CREATE TABLE IF NOT EXISTS tester_judgements" in schema
+    assert "CREATE TABLE IF NOT EXISTS tester_rule_judgements" in schema
+
     assert "CREATE TABLE IF NOT EXISTS notification_attempts" in schema
     assert "CREATE TABLE IF NOT EXISTS evaluation_batches" in schema
     assert "CREATE TABLE IF NOT EXISTS logical_ecns" in schema

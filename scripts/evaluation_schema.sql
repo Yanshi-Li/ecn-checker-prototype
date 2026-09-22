@@ -94,7 +94,18 @@ CREATE TABLE IF NOT EXISTS tester_judgements (
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS tester_rule_judgements (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    precheck_attempt_id BIGINT NOT NULL REFERENCES precheck_attempts(id) ON DELETE CASCADE,
+    rule_id TEXT NOT NULL,
+    judgement TEXT NOT NULL CHECK (judgement IN ('CORRECT', 'INCORRECT', 'UNCLEAR', 'NOT_APPLICABLE')),
+    comment TEXT,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (precheck_attempt_id, rule_id)
+);
+
 CREATE TABLE IF NOT EXISTS app_users (
+
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,

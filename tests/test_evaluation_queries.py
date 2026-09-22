@@ -85,6 +85,21 @@ def test_detail_contains_payload_findings_and_files():
     assert detail["files"][0]["filename"] == "input.csv"
 
 
+def test_tester_judgement_supports_independent_per_rule_comments():
+    connection = Connection([Cursor([], []), Cursor([], []), Cursor([], [])])
+    queries.save_tester_judgement(
+        connection,
+        9,
+        "pass",
+        "Overall explanation",
+        "tester@example.com",
+        {"H01": ("CORRECT", "The required field is present.")},
+    )
+    assert "tester_rule_judgements" in connection.statements[1][0]
+    assert connection.statements[1][1] == (9, "H01", "CORRECT", "The required field is present.")
+    assert "tester_judgement_recorded" in connection.statements[2][0]
+
+
 def test_judgement_and_file_retrieval_preserve_separate_system_decision():
     connection = Connection([Cursor([], []), Cursor([], [])])
     queries.save_tester_judgement(connection, 9, "pass", "Looks correct", "reviewer@example.com")
@@ -138,6 +153,15 @@ def test_resolve_review_dispute_requires_admin_and_keeps_audit_event():
     queries.resolve_review_dispute(connection, 9, admin, "Administrator selected FAIL after source review.")
     assert "resolution_comment" in connection.statements[0][0]
     assert "review_dispute_resolved" in connection.statements[1][0]
+
+
+def test_reviewer_submission_lookup_is_scoped_to_the_current_reviewer():
+    columns = ["id", "overall_judgement", "comment", "submitted_at"]
+    connection = Connection([Cursor(columns, [(12, "PASS", "Looks correct", None)])])
+    submission = queries.get_reviewer_submission(connection, 9, 4)
+    assert submission["overall_judgement"] == "PASS"
+    assert connection.statements[0][1] == (9, 4)
+    assert "reviewer_id = %s" in connection.statements[0][0]
 
 
 def test_rule_judgement_report_summarizes_disagreement_counts():

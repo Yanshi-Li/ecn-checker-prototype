@@ -631,7 +631,62 @@ def _render_ai_notes(ai_notes: dict) -> None:
             st.info("No AI advisory flags found.")
 
 
+def _render_tester_judgement(packet: dict) -> None:
+    """Let the identified tester record an independent overall and rule review."""
+    attempt_id = st.session_state.get("evaluation_attempt_id")
+    tester_email = str(st.session_state.get("evaluation_tester_email", "")).strip()
+    if not attempt_id or not tester_email:
+        return
+
+    gate = packet.get("gate", {})
+    findings = [
+        finding
+        for category in ("blockers", "part_issues", "conflict_alerts", "warnings")
+        for finding in gate.get(category, []) or []
+        if isinstance(finding, dict)
+    ]
+    st.divider()
+    st.subheader("Record your judgement")
+    st.caption("Your judgement is stored separately from the system decision.")
+    rule_judgements: dict[str, tuple[str, str]] = {}
+    for index, finding in enumerate(findings):
+        rule_id = str(finding.get("rule_id") or finding.get("flag_type") or "").strip()
+        if not rule_id:
+            continue
+        with st.expander(f"{rule_id} — {finding.get('message', 'Finding')}"):
+            value = st.selectbox(
+                "Rule judgement",
+                ("CORRECT", "INCORRECT", "UNCLEAR", "NOT_APPLICABLE"),
+                key=f"tester_rule_judgement_{attempt_id}_{index}",
+            )
+            comment = st.text_area(
+                "Rule comment", key=f"tester_rule_comment_{attempt_id}_{index}"
+            )
+            rule_judgements[rule_id] = (value, comment)
+    overall = st.selectbox(
+        "Overall judgement", ("PASS", "FAIL"), key=f"tester_overall_judgement_{attempt_id}"
+    )
+    explanation = st.text_area(
+        "Overall explanation", key=f"tester_overall_explanation_{attempt_id}"
+    )
+    if st.button("Submit tester judgement", key=f"submit_tester_judgement_{attempt_id}"):
+        try:
+            with connect_evaluation_db(_evaluation_db_config()) as connection:
+                evaluation_queries.save_tester_judgement(
+                    connection,
+                    int(attempt_id),
+                    overall,
+                    explanation,
+                    tester_email,
+                    rule_judgements,
+                )
+            st.success("Tester judgement submitted.")
+        except Exception:
+            st.error("Tester judgement could not be saved.")
+
+
 def _start_evaluation_precheck(tester_email: str, tester_name: str):
+
     """Create or reuse the current session and start a pre-check attempt."""
     db_config = _evaluation_db_config()
     if not db_config.get("ECN_DB_PASSWORD"):
@@ -821,10 +876,27 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
             if not detail:
                 return
 
+
             review_status = evaluation_queries.get_review_status(connection, int(selected))  # status
-            rule_report = evaluation_queries.get_rule_judgement_report(connection, int(selected))
+
+
+            own_submission = (
+                None
+                if user["role"] == "ADMINISTRATOR"
+                else evaluation_queries.get_reviewer_submission(
+                    connection, int(selected), int(user["id"])
+                )
+            )
+            rule_report = (
+                evaluation_queries.get_rule_judgement_report(connection, int(selected))
+                if user["role"] == "ADMINISTRATOR" or own_submission
+                else []
+            )
             st.subheader(f"Attempt {detail['attempt_id']} — {detail['system_decision']}")
+            if user["role"] != "ADMINISTRATOR" and not own_submission:
+                st.info("Submit your review to see the aggregate reviewer judgements.")
             if rule_report:
+
                 st.subheader("Rule-level reviewer report")
                 st.dataframe(
                     [
@@ -1235,10 +1307,10 @@ def main() -> None:
     _render_findings("Conflict Alerts", gate.get("conflict_alerts", []))
     _render_findings("Warnings", gate.get("warnings", []))
     _render_ai_notes(gate.get("ai_notes", {}))
-
-    st.divider()
+    _render_tester_judgement(packet)
 
     st.subheader("Email validation report")
+
     validation_recipient = st.text_input(
         "Validation report recipient",
         key="validation_recipient_email",
