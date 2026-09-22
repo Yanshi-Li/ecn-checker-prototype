@@ -1,8 +1,7 @@
 import pytest
-import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from intake import (
+
+from scripts.stages.intake import (
     REQUIRED_ECN_FIELDS,
     build_ecn_packet,
     load_excel,
@@ -135,7 +134,7 @@ def test_load_xls_converts_before_excel_loading(tmp_path, monkeypatch):
     converted.write_bytes(b"xlsx workbook")
     calls = []
 
-    import stages.intake as intake
+    import scripts.stages.intake as intake
 
     monkeypatch.setattr(
         intake,
@@ -159,7 +158,7 @@ def test_load_misnamed_legacy_xlsx_converts_before_openpyxl(tmp_path, monkeypatc
     converted.write_bytes(b"xlsx workbook")
     calls = []
 
-    import stages.intake as intake
+    import scripts.stages.intake as intake
 
     monkeypatch.setattr(
         intake,
@@ -323,7 +322,7 @@ def test_load_email_into_header_dict(tmp_path):
         b"Requested by: Jane Reviewer\n"
     )
 
-    data = __import__("intake").load_file(str(eml_path))
+    data = __import__("scripts.stages.intake", fromlist=["load_file"]).load_file(str(eml_path))
     assert data["change_notice_number"] == "ECN-2026-007"
     assert data["title"] == "Sample email intake"
     assert "obsolete capacitor" in data["description"].lower()
@@ -503,7 +502,7 @@ def test_load_html_email_body(tmp_path):
         b"--abc--\n"
     )
 
-    data = __import__("intake").load_file(str(eml_path))
+    data = __import__("scripts.stages.intake", fromlist=["load_file"]).load_file(str(eml_path))
     assert data["change_notice_number"] == "ECN-2026-008"
     assert data["title"] == "HTML Email Intake"
     assert data["change_type"] == "replace"

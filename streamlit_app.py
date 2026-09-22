@@ -2,7 +2,7 @@
 
 import csv
 import datetime as dt
-import importlib.util
+
 import io
 import json
 import hmac
@@ -21,10 +21,10 @@ STAGES = SCRIPTS / "stages"
 ECN_FILE_TYPES = ["csv", "xlsx", "xls", "pdf", "html", "htm", "eml"]
 BOM_FILE_TYPES = ["csv", "xlsx", "xls", "pdf"]
 
-# Stages dynamically loaded below import the shared rule_catalogue module from
-# scripts/. Make that directory importable in both Streamlit and test sessions.
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+# Make the repository package importable in direct Streamlit and test sessions.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 from scripts.batch_intake import BatchPreparation, build_batch_from_paths  # noqa: E402
 from scripts.batch_orchestration import BatchCase, BatchResult, run_batch  # noqa: E402
@@ -54,26 +54,16 @@ from scripts.evaluation_store import (  # noqa: E402
 
 
 
-def _load(name: str):
-    """Load a stage by file path to avoid package-name shadowing."""
-    path = STAGES / f"{name}.py"
-    module_name = f"ecn_checker_stage_{name}"
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Unable to load pipeline stage: {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+from scripts.stages import (
+    ai_advisory as ai_advisory_mod,
+    context_engine as context_engine_mod,
+    email_notification as email_notification_mod,
+    intake as intake_mod,
+    merge_step as merge_step_mod,
+    rule_engine as rule_engine_mod,
+    validation_notification as validation_notification_mod,
+)
 
-
-intake_mod = _load("intake")
-rule_engine_mod = _load("rule_engine")
-ai_advisory_mod = _load("ai_advisory")
-context_engine_mod = _load("context_engine")
-merge_step_mod = _load("merge_step")
-validation_notification_mod = _load("validation_notification")
-email_notification_mod = _load("email_notification")
 
 run_intake = intake_mod.run_intake
 run_rule_engine = rule_engine_mod.run_rule_engine

@@ -8,16 +8,15 @@ from pathlib import Path
 
 print("=== app.py starting ===", flush=True)
 
-# Must come before importing ecn_checker
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Resolve paths relative to repo root, not scripts/
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from flask import Flask, jsonify, render_template, request
 
-from ecn_checker import run_checks
-from intake import load_file
-
-# Resolve paths relative to repo root, not scripts/
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from scripts.ecn_checker import run_checks
+from scripts.stages.intake import load_file
 
 app = Flask(
     __name__,
