@@ -175,8 +175,8 @@ inspect the full population. The `evaluation_review_status` table derives the li
 `ACTIVE`, `READY_FOR_REVIEW`, `IN_REVIEW`, `REVIEWED`, or `DISPUTED` from
 assignments and independent submissions. Conflicting overall judgements become
 `DISPUTED`; an administrator can record an explanation to resolve the dispute
-without changing the original submissions, and the action is audited. The administrator dashboard also reports aggregate reviewer agreement,
-disagreement, disputed attempts, and rule-level disagreement across completed attempts. The dashboard is optional and shows a generic availability message when PostgreSQL
+without changing the original submissions, and the action is audited. The administrator dashboard reports PASS/FAIL percentages, average checking duration, tester-system agreement, aggregate reviewer agreement, disagreement, disputed attempts, and rule-level disagreement across completed attempts. It also reports UNCLEAR and NOT_APPLICABLE per-rule judgement counts. The dashboard is optional and shows a generic availability message when PostgreSQL
+
 is not configured. Configure `REVIEWER_ADMIN_EMAIL` and
 `REVIEWER_ADMIN_PASSWORD` to bootstrap the first administrator.
 

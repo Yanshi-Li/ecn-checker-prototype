@@ -53,9 +53,11 @@ def test_summary_counts_percentages_and_excludes_unjudged_agreement_denominator(
     summary = queries.get_evaluation_summary(Connection([Cursor(ATTEMPT_COLUMNS, rows)]))
     assert summary == {
         "total_attempts": 3, "pass_count": 1, "pass_percentage": 33.3,
-        "fail_count": 2, "fail_percentage": 66.7, "judged_count": 2,
+        "fail_count": 2, "fail_percentage": 66.7,         "judged_count": 2,
         "agreement_count": 1, "agreement_percentage": 50.0,
+        "average_duration_seconds": 2.0,
     }
+
 
 
 def test_list_attempts_builds_observable_pass_case_and_tester_filters():
@@ -184,16 +186,18 @@ def test_cross_attempt_review_report_calculates_agreement_and_rule_disagreement(
     columns = [
         "reviewed_attempt_count", "reviewer_submission_count", "overall_agreement_count",
         "overall_disagreement_count", "disputed_attempt_count", "rule_judgement_count",
-        "rule_group_count", "rule_disagreement_count",
+        "unclear_count", "not_applicable_count", "rule_group_count", "rule_disagreement_count",
     ]
-    row = (3, 4, 3, 1, 1, 6, 4, 2)
+    row = (3, 4, 3, 1, 1, 6, 2, 1, 4, 2)
     report = queries.get_cross_attempt_review_report(Connection([Cursor(columns, [row])]))
     assert report == {
         "reviewed_attempt_count": 3, "reviewer_submission_count": 4,
         "overall_agreement_count": 3, "overall_disagreement_count": 1,
-        "overall_agreement_percentage": 75.0, "disputed_attempt_count": 1,
-        "rule_judgement_count": 6, "rule_group_count": 4,
+        "overall_agreement_percentage": 75.0,         "disputed_attempt_count": 1,
+        "rule_judgement_count": 6, "unclear_count": 2, "not_applicable_count": 1,
+        "rule_group_count": 4,
         "rule_disagreement_count": 2, "rule_disagreement_percentage": 50.0,
+
     }
 
 

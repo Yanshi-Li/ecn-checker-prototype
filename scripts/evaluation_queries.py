@@ -97,6 +97,11 @@ def get_evaluation_summary(connection, filters: Mapping[str, object] | None = No
     judged = [row for row in attempts if row.get("tester_judgement")]
     agreements = sum(row.get("agreement") is True for row in judged)
     percentage = lambda count, denominator: round((count / denominator) * 100, 1) if denominator else 0.0
+    durations = [
+        float(row["duration_seconds"])
+        for row in attempts
+        if row.get("duration_seconds") is not None
+    ]
     return {
         "total_attempts": total,
         "pass_count": passes,
@@ -106,6 +111,7 @@ def get_evaluation_summary(connection, filters: Mapping[str, object] | None = No
         "judged_count": len(judged),
         "agreement_count": agreements,
         "agreement_percentage": percentage(agreements, len(judged)),
+        "average_duration_seconds": round(sum(durations) / len(durations), 1) if durations else 0.0,
     }
 
 
@@ -460,7 +466,18 @@ def get_cross_attempt_review_report(connection) -> dict[str, object]:
                  COUNT(*) FILTER (WHERE overall_judgement = system_decision) AS overall_agreement_count,
                  COUNT(*) FILTER (WHERE overall_judgement <> system_decision) AS overall_disagreement_count,
                  (SELECT COUNT(*) FROM evaluation_review_status WHERE status = 'DISPUTED') AS disputed_attempt_count,
-                 (SELECT COUNT(*) FROM reviewer_rule_judgements) AS rule_judgement_count,
+                 (SELECT COUNT(*) FROM reviewer_rule_judgements rr
+                    JOIN reviewer_submissions rs ON rs.id = rr.submission_id
+                    JOIN precheck_attempts a ON a.id = rs.precheck_attempt_id
+                    WHERE a.system_decision IS NOT NULL) AS rule_judgement_count,
+                 (SELECT COUNT(*) FROM reviewer_rule_judgements rr
+                    JOIN reviewer_submissions rs ON rs.id = rr.submission_id
+                    JOIN precheck_attempts a ON a.id = rs.precheck_attempt_id
+                    WHERE a.system_decision IS NOT NULL AND rr.judgement = 'UNCLEAR') AS unclear_count,
+                 (SELECT COUNT(*) FROM reviewer_rule_judgements rr
+                    JOIN reviewer_submissions rs ON rs.id = rr.submission_id
+                    JOIN precheck_attempts a ON a.id = rs.precheck_attempt_id
+                    WHERE a.system_decision IS NOT NULL AND rr.judgement = 'NOT_APPLICABLE') AS not_applicable_count,
                  (SELECT COUNT(*) FROM rule_groups) AS rule_group_count,
                  (SELECT COUNT(*) FROM rule_groups WHERE distinct_judgement_count > 1) AS rule_disagreement_count
              FROM review_rows"""
@@ -477,6 +494,8 @@ def get_cross_attempt_review_report(connection) -> dict[str, object]:
         "overall_agreement_percentage": percentage(int(row.get("overall_agreement_count") or 0), submissions),
         "disputed_attempt_count": int(row.get("disputed_attempt_count") or 0),
         "rule_judgement_count": int(row.get("rule_judgement_count") or 0),
+        "unclear_count": int(row.get("unclear_count") or 0),
+        "not_applicable_count": int(row.get("not_applicable_count") or 0),
         "rule_group_count": rule_groups,
         "rule_disagreement_count": int(row.get("rule_disagreement_count") or 0),
         "rule_disagreement_percentage": percentage(int(row.get("rule_disagreement_count") or 0), rule_groups),
