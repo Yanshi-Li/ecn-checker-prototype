@@ -1,6 +1,6 @@
 # ECN Checker React frontend
 
-This Vite + React + TypeScript application is the new tester-facing pre-check interface. It calls the existing Flask upload endpoint, so Python remains responsible for file intake and validation decisions.
+This Vite + React + TypeScript application is the tester-facing pre-check interface. It calls Flask's staged pre-check endpoint, so Python remains responsible for intake, validation, PostgreSQL evaluation persistence, and audited email reports.
 
 ## Run locally
 
@@ -28,4 +28,4 @@ npm run typecheck
 npm run build
 ```
 
-The React UI currently supports the tester's file-upload pre-check workflow and result review. Reviewer authentication, evaluation persistence, and email-sharing controls remain in the Streamlit application until their Flask API contracts are added.
+The React UI requires the tester's email so each pre-check can be saved for review. When `ECN_DB_PASSWORD` and the related `ECN_DB_*` settings are configured, Flask stores the complete packet and original uploaded files in PostgreSQL. The tester can then explicitly email their validation report; Flask records the delivery outcome. Reviewer authentication and review queues remain in Streamlit.

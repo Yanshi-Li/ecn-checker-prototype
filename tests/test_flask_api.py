@@ -1,4 +1,5 @@
-"""Contract tests for the Flask endpoints used by the React frontend."""
+
+"""Con  tract tests for the Flask endpoints used by the React frontend."""
 
 from io import BytesIO
 from pathlib import Path
@@ -39,7 +40,10 @@ def test_precheck_uses_the_staged_pipeline_for_a_generic_ecn_filename(monkeypatc
 
     response = client.post(
         "/api/precheck",
-        data={"ecn": (BytesIO(b"change_notice_number\nECN-4079118\n"), "ECN_4079118.csv")},
+        data={
+            "tester_email": "tester@example.com",
+            "ecn": (BytesIO(b"change_notice_number\nECN-4079118\n"), "ECN_4079118.csv"),
+        },
         content_type="multipart/form-data",
     )
 

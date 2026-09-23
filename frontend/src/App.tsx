@@ -18,6 +18,12 @@ type PrecheckResponse = {
     warnings: number;
   };
   findings: Finding[];
+  persistence: {
+    saved: boolean;
+    message?: string;
+    attempt_id?: number;
+    duration_seconds?: number;
+  };
 };
 
 const FIX_HINTS: Record<string, string> = {
@@ -35,11 +41,14 @@ function formatRule(rule: string): string {
 function App() {
   const [ecnFile, setEcnFile] = useState<File | null>(null);
   const [bomFile, setBomFile] = useState<File | null>(null);
+  const [testerEmail, setTesterEmail] = useState("");
+  const [testerName, setTesterName] = useState("");
   const [result, setResult] = useState<PrecheckResponse | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [apiReady, setApiReady] = useState<boolean | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
 
   useEffect(() => {
     void fetch("/api/health")
@@ -56,13 +65,20 @@ function App() {
       setRequestError("Choose an ECN file before running the pre-check.");
       return;
     }
+    if (!testerEmail.trim()) {
+      setRequestError("Enter your email so this evaluation can be saved for review.");
+      return;
+    }
 
     setSubmitting(true);
     setRequestError(null);
     setResult(null);
     setSelectedFinding(null);
+    setNotificationStatus(null);
 
     const formData = new FormData();
+    formData.append("tester_email", testerEmail.trim());
+    formData.append("tester_name", testerName.trim());
     formData.append("ecn", ecnFile);
     if (bomFile) {
       formData.append("bom", bomFile);
@@ -82,6 +98,27 @@ function App() {
       );
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function sendReport() {
+    if (!result?.persistence.attempt_id) return;
+    setNotificationStatus("Sending validation report…");
+    try {
+      const response = await fetch("/api/notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          attempt_id: result.persistence.attempt_id,
+          tester_email: testerEmail.trim(),
+          recipient: testerEmail.trim(),
+        }),
+      });
+      const payload = (await response.json()) as { error?: string; message?: string };
+      if (!response.ok || payload.error) throw new Error(payload.error ?? "Email could not be sent.");
+      setNotificationStatus(payload.message ?? "Validation report sent.");
+    } catch (error) {
+      setNotificationStatus(error instanceof Error ? error.message : "Email could not be sent.");
     }
   }
 
@@ -145,6 +182,14 @@ function App() {
           </div>
           <form onSubmit={runPrecheck}>
             <div className="file-grid">
+              <label className="file-input" htmlFor="tester-email">
+                <span className="file-label">Your email <em>Required</em></span>
+                <input id="tester-email" type="email" required value={testerEmail} onChange={(event) => setTesterEmail(event.target.value)} />
+              </label>
+              <label className="file-input" htmlFor="tester-name">
+                <span className="file-label">Your name <small>Optional</small></span>
+                <input id="tester-name" value={testerName} onChange={(event) => setTesterName(event.target.value)} />
+              </label>
               <FileInput
                 id="ecn-file"
                 label="ECN file"
@@ -180,8 +225,15 @@ function App() {
                     : "Resolve the blocking issues below, then run the pre-check again."}
                 </p>
               </div>
-              <button className="secondary-button" type="button" onClick={downloadReport}>Download report</button>
+              <div>
+                <button className="secondary-button" type="button" onClick={downloadReport}>Download report</button>
+                {result.persistence.saved && <button className="secondary-button" type="button" onClick={() => void sendReport()}>Email result to me</button>}
+              </div>
             </div>
+
+            {!result.persistence.saved && <p className="form-error" role="status">{result.persistence.message ?? "The result is available, but the evaluation was not saved."}</p>}
+            {result.persistence.saved && <p className="empty-state">Evaluation saved for reviewer follow-up.</p>}
+            {notificationStatus && <p className="empty-state" role="status">{notificationStatus}</p>}
 
             <div className="metric-grid" aria-label="Pre-check summary">
               <Metric label="Files checked" value={String(result.summary.total_files)} />

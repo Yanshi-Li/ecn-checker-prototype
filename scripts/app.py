@@ -21,6 +21,19 @@ from flask import Flask, jsonify, render_template, request
 from scripts.ecn_checker import run_checks
 from scripts.stages.intake import load_file
 from scripts.precheck_pipeline import run_precheck
+from scripts import evaluation_queries
+from scripts.evaluation_store import (
+    complete_precheck,
+    connect_evaluation_db,
+    create_session,
+    initialise_schema,
+    record_notification_attempt,
+    start_precheck,
+    store_evaluation_files,
+)
+from scripts.stages.validation_notification import send_validation_email
+
+
 
 
 app = Flask(
@@ -138,7 +151,32 @@ def _save_uploaded_file(file_storage) -> str:
         return temporary.name
 
 
-def _precheck_response(packet: dict, file_count: int) -> dict:
+def _persist_precheck(
+    tester_email: str,
+    tester_name: str,
+    packet: dict,
+    uploaded_files: list[dict],
+) -> dict:
+    """Persist a completed pre-check when local PostgreSQL is configured."""
+    if not os.environ.get("ECN_DB_PASSWORD"):
+        return {"saved": False, "message": "Evaluation database is not configured."}
+
+    with connect_evaluation_db() as connection:
+        initialise_schema(connection)
+        session_id = create_session(connection, tester_email, tester_name)
+        attempt_id = start_precheck(connection, session_id)
+        store_evaluation_files(connection, attempt_id, uploaded_files)
+        duration = complete_precheck(
+            connection,
+            attempt_id,
+            session_id,
+            packet["gate"]["decision"],
+            {"packet": packet},
+        )
+    return {"saved": True, "attempt_id": attempt_id, "duration_seconds": duration}
+
+
+def _precheck_response(packet: dict, file_count: int, persistence: dict | None = None) -> dict:
     gate = packet.get("gate", {})
     findings = []
     for category in ("blockers", "part_issues", "conflict_alerts", "warnings"):
@@ -162,6 +200,7 @@ def _precheck_response(packet: dict, file_count: int) -> dict:
             "warnings": warnings,
         },
         "findings": findings,
+        "persistence": persistence or {"saved": False},
     }
 
 
@@ -170,19 +209,40 @@ def api_precheck():
     """Run the same staged pipeline used by the Streamlit upload workflow."""
     ecn_file = request.files.get("ecn")
     bom_file = request.files.get("bom")
+    tester_email = request.form.get("tester_email", "").strip()
+    tester_name = request.form.get("tester_name", "").strip()
     if ecn_file is None or not ecn_file.filename:
         return jsonify({"error": "An ECN file is required."}), 400
+    if not tester_email:
+        return jsonify({"error": "Tester email is required to save the evaluation."}), 400
 
     temporary_paths = []
     try:
+        ecn_bytes = ecn_file.read()
+        ecn_file.stream.seek(0)
         ecn_path = _save_uploaded_file(ecn_file)
         temporary_paths.append(ecn_path)
+        uploaded_files = [{
+            "role": "ecn",
+            "filename": ecn_file.filename,
+            "mime_type": ecn_file.mimetype,
+            "bytes": ecn_bytes,
+        }]
         bom_path = None
         if bom_file is not None and bom_file.filename:
+            bom_bytes = bom_file.read()
+            bom_file.stream.seek(0)
             bom_path = _save_uploaded_file(bom_file)
             temporary_paths.append(bom_path)
+            uploaded_files.append({
+                "role": "bom",
+                "filename": bom_file.filename,
+                "mime_type": bom_file.mimetype,
+                "bytes": bom_bytes,
+            })
         packet = run_precheck(ecn_path, bom_path)
-        return jsonify(_precheck_response(packet, 1 + int(bom_path is not None)))
+        persistence = _persist_precheck(tester_email, tester_name, packet, uploaded_files)
+        return jsonify(_precheck_response(packet, len(uploaded_files), persistence))
     except Exception as exc:
         return jsonify({"error": f"The pre-check could not be completed: {exc}"}), 422
     finally:
@@ -193,8 +253,54 @@ def api_precheck():
                 pass
 
 
+
+
+@app.route("/api/notification", methods=["POST"])
+def api_notification():
+    """Send an auditable report from a tester-owned saved pre-check."""
+    body = request.get_json(silent=True) or {}
+    attempt_id = body.get("attempt_id")
+    tester_email = str(body.get("tester_email", "")).strip()
+    recipient = str(body.get("recipient", "")).strip()
+    if not attempt_id or not tester_email or not recipient:
+        return jsonify({"error": "attempt_id, tester_email, and recipient are required."}), 400
+
+    try:
+        with connect_evaluation_db() as connection:
+            detail = evaluation_queries.get_attempt_detail(
+                connection,
+                int(attempt_id),
+                {"email": tester_email, "role": "TESTER"},
+            )
+        if detail is None:
+            return jsonify({"error": "Evaluation attempt was not found."}), 404
+        payload = detail.get("payload", {})
+        packet = payload.get("packet", {}) if isinstance(payload, dict) else {}
+        result = send_validation_email(packet, recipient)
+        status = "sent" if result.get("sent") else "failed"
+        with connect_evaluation_db() as connection:
+            record_notification_attempt(
+                connection,
+                int(attempt_id),
+                "validation_report",
+                recipient,
+                status,
+                result.get("message"),
+            )
+        return jsonify({"sent": bool(result.get("sent")), "message": result.get("message", "Email could not be sent.")})
+    except Exception as exc:
+        return jsonify({"error": f"The notification could not be sent: {type(exc).__name__}."}), 422
+
+
+
+
+
+
+
 @app.route("/upload", methods=["POST"])
 def upload():
+
+
 
     role = request.form.get("role", "ecn_creator")
     uploaded = request.files.getlist("files")
