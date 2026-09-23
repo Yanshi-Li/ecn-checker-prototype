@@ -29,6 +29,8 @@ if str(ROOT) not in sys.path:
 from scripts.batch_intake import BatchPreparation, build_batch_from_paths  # noqa: E402
 from scripts.batch_orchestration import BatchCase, BatchResult, run_batch  # noqa: E402
 from scripts import evaluation_queries  # noqa: E402
+from scripts.precheck_pipeline import run_precheck  # noqa: E402
+
 
 from scripts.evaluation_store import (  # noqa: E402
     assign_bom_input,
@@ -482,14 +484,9 @@ def _render_batch_result(result: BatchResult) -> None:
 
 
 def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
-    """Run the same validation stages used by the command-line orchestrator."""
-    packet = run_intake(ecn_path, bom_path)
-    packet = run_rule_engine(packet)
-    packet = run_ai_advisory(packet)
-    packet = run_context_engine(packet)
-    packet = run_merge_step(packet)
-    log_approved_change(packet)
-    return packet
+    """Run the shared staged pipeline used by every web interface."""
+    return run_precheck(ecn_path, bom_path)
+
 
 
 def _display_value(value: object) -> str:

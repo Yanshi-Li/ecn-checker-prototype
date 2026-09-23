@@ -8,21 +8,16 @@ type Finding = {
   message: string;
 };
 
-type FileResult = {
-  file: string;
-  file_type?: string;
-  issues: Finding[];
-};
-
 type PrecheckResponse = {
   error?: string;
+  decision: "PASS" | "FAIL" | string;
   summary: {
     total_files: number;
     total_issues: number;
     errors: number;
     warnings: number;
   };
-  results: FileResult[];
+  findings: Finding[];
 };
 
 const FIX_HINTS: Record<string, string> = {
@@ -52,11 +47,8 @@ function App() {
       .catch(() => setApiReady(false));
   }, []);
 
-  const findings = useMemo(
-    () => result?.results.flatMap((file) => file.issues) ?? [],
-    [result],
-  );
-  const isPass = result !== null && result.summary.errors === 0;
+  const findings = useMemo(() => result?.findings ?? [], [result]);
+  const isPass = result?.decision === "PASS";
 
   async function runPrecheck(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -71,20 +63,19 @@ function App() {
     setSelectedFinding(null);
 
     const formData = new FormData();
-    formData.append("role", "ecn_creator");
-    formData.append("files", ecnFile);
+    formData.append("ecn", ecnFile);
     if (bomFile) {
-      formData.append("files", bomFile);
+      formData.append("bom", bomFile);
     }
 
     try {
-      const response = await fetch("/upload", { method: "POST", body: formData });
+      const response = await fetch("/api/precheck", { method: "POST", body: formData });
       const payload = (await response.json()) as PrecheckResponse;
       if (!response.ok || payload.error) {
         throw new Error(payload.error ?? "The pre-check could not be completed.");
       }
       setResult(payload);
-      setSelectedFinding(payload.results.flatMap((file) => file.issues)[0] ?? null);
+      setSelectedFinding(payload.findings[0] ?? null);
     } catch (error) {
       setRequestError(
         error instanceof Error ? error.message : "The pre-check could not be completed.",
@@ -104,12 +95,9 @@ function App() {
       `Errors: ${result.summary.errors}`,
       `Warnings: ${result.summary.warnings}`,
       "",
-      ...result.results.flatMap((file) => [
-        `File: ${file.file}`,
-        ...file.issues.map(
-          (finding) => `[${finding.severity.toUpperCase()}] ${finding.rule}: ${finding.message}`,
-        ),
-      ]),
+      ...result.findings.map(
+        (finding) => `[${finding.severity.toUpperCase()}] ${finding.rule}: ${finding.message}`,
+      ),
     ];
     const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain" }));
     const link = document.createElement("a");

@@ -20,6 +20,8 @@ from flask import Flask, jsonify, render_template, request
 
 from scripts.ecn_checker import run_checks
 from scripts.stages.intake import load_file
+from scripts.precheck_pipeline import run_precheck
+
 
 app = Flask(
     __name__,
@@ -124,8 +126,76 @@ def api_health():
     return jsonify({"status": "ok"})
 
 
+def _save_uploaded_file(file_storage) -> str:
+    """Write an upload to a temporary path while preserving its original stem."""
+    original = Path(file_storage.filename or "upload")
+    with tempfile.NamedTemporaryFile(
+        prefix=f"{original.stem}_",
+        suffix=original.suffix.lower(),
+        delete=False,
+    ) as temporary:
+        temporary.write(file_storage.read())
+        return temporary.name
+
+
+def _precheck_response(packet: dict, file_count: int) -> dict:
+    gate = packet.get("gate", {})
+    findings = []
+    for category in ("blockers", "part_issues", "conflict_alerts", "warnings"):
+        for finding in gate.get(category, []):
+            findings.append({
+                "rule": finding.get("rule_id") or finding.get("flag_type") or finding.get("type", category),
+                "severity": str(finding.get("severity", "advisory")).lower(),
+                "message": finding.get("message") or finding.get("detail", ""),
+                "location": finding.get("location"),
+                "evidence": finding.get("evidence"),
+                "category": category,
+            })
+    errors = sum(1 for finding in findings if finding["severity"] in {"error", "fail"})
+    warnings = sum(1 for finding in findings if finding["severity"] == "warning")
+    return {
+        "decision": gate.get("decision", "FAIL"),
+        "summary": {
+            "total_files": file_count,
+            "total_issues": len(findings),
+            "errors": errors,
+            "warnings": warnings,
+        },
+        "findings": findings,
+    }
+
+
+@app.route("/api/precheck", methods=["POST"])
+def api_precheck():
+    """Run the same staged pipeline used by the Streamlit upload workflow."""
+    ecn_file = request.files.get("ecn")
+    bom_file = request.files.get("bom")
+    if ecn_file is None or not ecn_file.filename:
+        return jsonify({"error": "An ECN file is required."}), 400
+
+    temporary_paths = []
+    try:
+        ecn_path = _save_uploaded_file(ecn_file)
+        temporary_paths.append(ecn_path)
+        bom_path = None
+        if bom_file is not None and bom_file.filename:
+            bom_path = _save_uploaded_file(bom_file)
+            temporary_paths.append(bom_path)
+        packet = run_precheck(ecn_path, bom_path)
+        return jsonify(_precheck_response(packet, 1 + int(bom_path is not None)))
+    except Exception as exc:
+        return jsonify({"error": f"The pre-check could not be completed: {exc}"}), 422
+    finally:
+        for temporary_path in temporary_paths:
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+
+
 @app.route("/upload", methods=["POST"])
 def upload():
+
     role = request.form.get("role", "ecn_creator")
     uploaded = request.files.getlist("files")
 
