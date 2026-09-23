@@ -1,10 +1,13 @@
+
 from __future__ import annotations
+
 import csv
 import io
 import os
 import sys
 import tempfile
 from pathlib import Path
+
 
 print("=== app.py starting ===", flush=True)
 
@@ -115,10 +118,17 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/api/health")
+def api_health():
+    """Provide a lightweight readiness check for the React development server."""
+    return jsonify({"status": "ok"})
+
+
 @app.route("/upload", methods=["POST"])
 def upload():
     role = request.form.get("role", "ecn_creator")
     uploaded = request.files.getlist("files")
+
 
     if not uploaded or all(f.filename == "" for f in uploaded):
         return jsonify({"error": "No files selected."}), 400
