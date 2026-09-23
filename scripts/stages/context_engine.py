@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rule_catalogue import rules_for_engine
+from scripts.rule_catalogue import rules_for_engine
 
 logger = logging.getLogger(__name__)
 

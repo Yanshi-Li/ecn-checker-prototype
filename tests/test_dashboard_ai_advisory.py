@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-
-from stages.dashboard import _render_ai_flags
+from scripts.stages.dashboard import _render_ai_flags
 
 
 def test_dashboard_does_not_report_no_flags_for_unsupported_non_clear_assessment():

@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Callable
 
-from rule_catalogue import load_rule_catalogue, rules_for_engine
+from scripts.rule_catalogue import load_rule_catalogue, rules_for_engine
 
 
 Evaluator = Callable[[dict, dict, dict], list[dict]]

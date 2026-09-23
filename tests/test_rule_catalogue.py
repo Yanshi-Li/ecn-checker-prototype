@@ -1,13 +1,11 @@
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
 
-from rule_catalogue import (  # noqa: E402
+from scripts.rule_catalogue import (  # noqa: E402
     DEFAULT_CATALOGUE_PATH,
     RuleCatalogueError,
     load_rule_catalogue,
@@ -45,7 +43,7 @@ def test_rules_are_assigned_to_their_owning_pipeline_stage():
 
 
 def test_every_active_rule_engine_check_has_an_evaluator():
-    from rule_engine import EVALUATOR_REGISTRY
+    from scripts.stages.rule_engine import EVALUATOR_REGISTRY
 
     assert all(
         rule["check"] in EVALUATOR_REGISTRY

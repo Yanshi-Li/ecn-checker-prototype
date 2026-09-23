@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 import httpx
 
-from rule_catalogue import rules_for_engine
+from scripts.rule_catalogue import rules_for_engine
 
 
 

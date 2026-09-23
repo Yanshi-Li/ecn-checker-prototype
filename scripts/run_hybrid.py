@@ -7,33 +7,24 @@ import os
 import sys
 import logging
 import argparse
-import importlib.util
 from pathlib import Path
 
-# â”€â”€ Path setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 ROOT = Path(__file__).parent.parent
 SCRIPTS = Path(__file__).parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
+from scripts.stages import (
+    ai_advisory as ai_advisory_mod,
+    context_engine as context_engine_mod,
+    dashboard as dashboard_mod,
+    email_notification as email_notification_mod,
+    intake as intake_mod,
+    merge_step as merge_step_mod,
+    rule_engine as rule_engine_mod,
+)
 
-def _load(name: str):
-    """Load a module by explicit file path to avoid PyPI package shadowing."""
-    path = SCRIPTS / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    print(f"  [loader] {name} -> {path}")
-    return mod
-
-
-intake_mod = _load("intake")
-rule_engine_mod = _load("rule_engine")
-ai_advisory_mod = _load("ai_advisory")
-context_engine_mod = _load("context_engine")
-merge_step_mod = _load("merge_step")
-dashboard_mod = _load("dashboard")
-email_notification_mod = _load("email_notification")
-
+# â”€â”€ Path setup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 run_intake = intake_mod.run_intake
 run_rule_engine = rule_engine_mod.run_rule_engine
 run_ai_advisory = ai_advisory_mod.run_ai_advisory
@@ -223,8 +214,7 @@ def run_pipeline(args: argparse.Namespace, output_suffix: str = "") -> dict:
 
 
     logger.info("â”€â”€ Stage 5: Dashboard â”€â”€")
-    if hasattr(dashboard_mod, "_impl") and hasattr(dashboard_mod, "OUT_DIR"):
-        dashboard_mod._impl.OUT_DIR = dashboard_mod.OUT_DIR
+    
 
     output_dir = ROOT / "out"
     dashboard_path = run_dashboard(

@@ -1,9 +1,7 @@
 import pytest
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from rule_engine import EVALUATOR_REGISTRY, UnknownRuleEvaluatorError, run_rule_engine
-from intake import build_ecn_packet, REQUIRED_ECN_FIELDS
+
+from scripts.stages.rule_engine import EVALUATOR_REGISTRY, UnknownRuleEvaluatorError, run_rule_engine
+from scripts.stages.intake import build_ecn_packet, REQUIRED_ECN_FIELDS
 
 
 def _base_packet(bom=None, header_overrides=None):

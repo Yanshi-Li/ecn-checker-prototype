@@ -1,9 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-
-from email_notification import send_fail_email, send_pass_email
+from scripts.stages.email_notification import send_fail_email, send_pass_email
 
 
 def _fail_packet():

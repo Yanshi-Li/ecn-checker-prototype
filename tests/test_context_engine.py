@@ -1,14 +1,13 @@
 import csv
-import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from context_engine import (
+
+from scripts.stages.context_engine import (
     check_historical_conflicts,
     check_part_status,
     log_approved_change,
     run_context_engine,
 )
-from stages.context_engine import _check_missing_supplier, _check_uom_mismatch
+from scripts.stages.context_engine import _check_missing_supplier, _check_uom_mismatch
 
 
 MOCK_PARTS = {

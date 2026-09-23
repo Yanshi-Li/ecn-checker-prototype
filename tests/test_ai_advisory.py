@@ -1,10 +1,8 @@
 import pytest
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from ai_advisory import _build_prompt, _resolve_llm_config, _rule_based_advisory, run_ai_advisory
-from stages import ai_advisory as advisory_impl
-from intake import build_ecn_packet, REQUIRED_ECN_FIELDS
+
+from scripts.stages.ai_advisory import _build_prompt, _resolve_llm_config, _rule_based_advisory, run_ai_advisory
+from scripts.stages import ai_advisory as advisory_impl
+from scripts.stages.intake import build_ecn_packet, REQUIRED_ECN_FIELDS
 
 
 def _packet(description="", bom=None, header_overrides=None):

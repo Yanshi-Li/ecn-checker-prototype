@@ -1,13 +1,11 @@
 import ast
-import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))
 
-from merge_step import (
+from scripts.stages.merge_step import (
     CONFLICT_ALERT_FLAG_TYPES,
     PART_ISSUE_FLAG_TYPES,
     WARNING_ONLY_FLAG_TYPES,
