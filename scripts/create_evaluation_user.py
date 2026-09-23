@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from getpass import getpass
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from scripts.evaluation_auth import ROLES
 from scripts.evaluation_queries import create_user
