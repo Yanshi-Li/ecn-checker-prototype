@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+    import { useEffect, useMemo, useState } from "react";
 
 type Severity = "error" | "warning" | string;
 
@@ -6,6 +6,13 @@ type Finding = {
   rule: string;
   severity: Severity;
   message: string;
+};
+
+type User = {
+  id: number;
+  email: string;
+  display_name: string;
+  role: "TESTER" | "REVIEWER" | "ADMINISTRATOR";
 };
 
 type PrecheckResponse = {
@@ -41,8 +48,11 @@ function formatRule(rule: string): string {
 function App() {
   const [ecnFile, setEcnFile] = useState<File | null>(null);
   const [bomFile, setBomFile] = useState<File | null>(null);
-  const [testerEmail, setTesterEmail] = useState("");
-  const [testerName, setTesterName] = useState("");
+  const [user, setUser] = useState<User | null>(null);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [nextCheckerEmail, setNextCheckerEmail] = useState("");
   const [result, setResult] = useState<PrecheckResponse | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
@@ -55,10 +65,43 @@ function App() {
     void fetch("/api/health")
       .then((response) => setApiReady(response.ok))
       .catch(() => setApiReady(false));
+    void fetch("/api/auth/session")
+      .then(async (response) => {
+        if (response.ok) {
+          const payload = (await response.json()) as { user: User };
+          setUser(payload.user);
+        }
+      })
+      .finally(() => setAuthLoading(false));
   }, []);
 
   const findings = useMemo(() => result?.findings ?? [], [result]);
   const isPass = result?.decision === "PASS";
+  const testerEmail = user?.email ?? "";
+
+  async function login(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoginError(null);
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
+      });
+      const payload = (await response.json()) as { error?: string; user?: User };
+      if (!response.ok || !payload.user) throw new Error(payload.error ?? "Login could not be completed.");
+      setUser(payload.user);
+      setLoginPassword("");
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "Login could not be completed.");
+    }
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setUser(null);
+    setResult(null);
+  }
 
   async function runPrecheck(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -66,8 +109,8 @@ function App() {
       setRequestError("Choose an ECN file before running the pre-check.");
       return;
     }
-    if (!testerEmail.trim()) {
-      setRequestError("Enter your email so this evaluation can be saved for review.");
+    if (!user || user.role !== "TESTER") {
+      setRequestError("Sign in with a tester account to run a pre-check.");
       return;
     }
 
@@ -78,8 +121,6 @@ function App() {
     setNotificationStatus(null);
 
     const formData = new FormData();
-    formData.append("tester_email", testerEmail.trim());
-    formData.append("tester_name", testerName.trim());
     formData.append("ecn", ecnFile);
     if (bomFile) {
       formData.append("bom", bomFile);
@@ -116,7 +157,6 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           attempt_id: result.persistence.attempt_id,
-          tester_email: testerEmail.trim(),
           recipient,
         }),
       });
@@ -150,6 +190,29 @@ function App() {
     URL.revokeObjectURL(url);
   }
 
+  if (authLoading) {
+    return <main className="login-shell"><p>Checking your sign-in session…</p></main>;
+  }
+
+  if (!user) {
+    return (
+      <main className="login-shell">
+        <form className="login-card" onSubmit={login}>
+          <div className="brand-mark">ECN</div>
+          <p className="eyebrow">ECN Checker</p>
+          <h1>Sign in to pre-check</h1>
+          <p className="lede">Use the account created for your evaluation role.</p>
+          <label htmlFor="login-email">Email</label>
+          <input id="login-email" type="email" required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} />
+          <label htmlFor="login-password">Password</label>
+          <input id="login-password" type="password" required value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
+          {loginError && <p className="form-error" role="alert">{loginError}</p>}
+          <button className="primary-button" type="submit">Sign in</button>
+        </form>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
@@ -176,6 +239,12 @@ function App() {
             <h1>Check an ECN before submission</h1>
             <p className="lede">Upload an ECN and optional BOM. We will show the outcome and the next action clearly.</p>
           </div>
+          <div className="signed-in-user">
+            <span>Signed in as</span>
+            <strong>{user.display_name}</strong>
+            <small>{user.email}</small>
+            <button type="button" onClick={() => void logout()}>Sign out</button>
+          </div>
         </header>
 
         <section className="upload-card" id="new-precheck" aria-labelledby="upload-heading">
@@ -188,14 +257,6 @@ function App() {
           </div>
           <form onSubmit={runPrecheck}>
             <div className="file-grid">
-              <label className="file-input" htmlFor="tester-email">
-                <span className="file-label">Your email <em>Required</em></span>
-                <input id="tester-email" type="email" required value={testerEmail} onChange={(event) => setTesterEmail(event.target.value)} />
-              </label>
-              <label className="file-input" htmlFor="tester-name">
-                <span className="file-label">Your name <small>Optional</small></span>
-                <input id="tester-name" value={testerName} onChange={(event) => setTesterName(event.target.value)} />
-              </label>
               <FileInput
                 id="ecn-file"
                 label="ECN file"

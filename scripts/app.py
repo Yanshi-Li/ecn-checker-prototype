@@ -16,7 +16,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session
+
 
 from scripts.ecn_checker import run_checks
 from scripts.stages.intake import load_file
@@ -40,7 +41,9 @@ app = Flask(
     __name__,
     template_folder=os.path.join(ROOT, "templates"),
 )
+app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB limit
+
 
 ROLE_ALLOWED_EXTENSIONS = {
     "ecn_creator": {".csv", ".xls", ".xlsx", ".xlsm", ".pdf", ".eml", ".txt"},
@@ -139,6 +142,56 @@ def api_health():
     return jsonify({"status": "ok"})
 
 
+def _current_user() -> dict | None:
+    """Return the authenticated user held in Flask's signed session cookie."""
+    user = session.get("user")
+    if not isinstance(user, dict) or not user.get("email") or not user.get("role"):
+        return None
+    return user
+
+
+@app.route("/api/auth/session")
+def api_auth_session():
+    user = _current_user()
+    if user is None:
+        return jsonify({"user": None}), 401
+    return jsonify({"user": user})
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    body = request.get_json(silent=True) or {}
+    email = str(body.get("email", "")).strip()
+    password = str(body.get("password", ""))
+    if not email or not password:
+        return jsonify({"error": "Email and password are required."}), 400
+    try:
+        with connect_evaluation_db() as connection:
+            initialise_schema(connection)
+            evaluation_queries.ensure_configured_admin(
+                connection,
+                os.environ.get("REVIEWER_ADMIN_EMAIL", ""),
+                os.environ.get("REVIEWER_ADMIN_PASSWORD", ""),
+            )
+            user = evaluation_queries.authenticate_user(connection, email, password)
+    except Exception:
+        return jsonify({"error": "Login is unavailable. Check the evaluation database configuration."}), 503
+    if user is None:
+        return jsonify({"error": "Email or password is incorrect."}), 401
+    session.clear()
+    session["user"] = user
+    return jsonify({"user": user})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    session.clear()
+    return "", 204
+
+
+
+
+
 def _save_uploaded_file(file_storage) -> str:
     """Write an upload to a temporary path while preserving its original stem."""
     original = Path(file_storage.filename or "upload")
@@ -209,12 +262,19 @@ def api_precheck():
     """Run the same staged pipeline used by the Streamlit upload workflow."""
     ecn_file = request.files.get("ecn")
     bom_file = request.files.get("bom")
-    tester_email = request.form.get("tester_email", "").strip()
-    tester_name = request.form.get("tester_name", "").strip()
+    user = _current_user()
+
+
+
+    if user is None:
+        return jsonify({"error": "Sign in before running a pre-check."}), 401
+    if user["role"] != "TESTER":
+        return jsonify({"error": "Only tester accounts can run a pre-check."}), 403
+    tester_email = str(user["email"])
+    tester_name = str(user.get("display_name", ""))
     if ecn_file is None or not ecn_file.filename:
         return jsonify({"error": "An ECN file is required."}), 400
-    if not tester_email:
-        return jsonify({"error": "Tester email is required to save the evaluation."}), 400
+
 
     temporary_paths = []
     try:
@@ -260,12 +320,21 @@ def api_notification():
     """Send an auditable report from a tester-owned saved pre-check."""
     body = request.get_json(silent=True) or {}
     attempt_id = body.get("attempt_id")
-    tester_email = str(body.get("tester_email", "")).strip()
+    user = _current_user()
+
+
+
     recipient = str(body.get("recipient", "")).strip()
-    if not attempt_id or not tester_email or not recipient:
-        return jsonify({"error": "attempt_id, tester_email, and recipient are required."}), 400
+    if user is None:
+        return jsonify({"error": "Sign in before sending a report."}), 401
+    if user["role"] != "TESTER":
+        return jsonify({"error": "Only tester accounts can send a report."}), 403
+    tester_email = str(user["email"])
+    if not attempt_id or not recipient:
+        return jsonify({"error": "attempt_id and recipient are required."}), 400
 
     try:
+
         with connect_evaluation_db() as connection:
             detail = evaluation_queries.get_attempt_detail(
                 connection,
