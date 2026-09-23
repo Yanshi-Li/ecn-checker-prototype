@@ -43,6 +43,7 @@ function App() {
   const [bomFile, setBomFile] = useState<File | null>(null);
   const [testerEmail, setTesterEmail] = useState("");
   const [testerName, setTesterName] = useState("");
+  const [nextCheckerEmail, setNextCheckerEmail] = useState("");
   const [result, setResult] = useState<PrecheckResponse | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -103,6 +104,11 @@ function App() {
 
   async function sendReport() {
     if (!result?.persistence.attempt_id) return;
+    const recipient = isPass ? nextCheckerEmail.trim() : testerEmail.trim();
+    if (!recipient) {
+      setNotificationStatus("Enter the next checker's email before sending this passed result.");
+      return;
+    }
     setNotificationStatus("Sending validation report…");
     try {
       const response = await fetch("/api/notification", {
@@ -111,7 +117,7 @@ function App() {
         body: JSON.stringify({
           attempt_id: result.persistence.attempt_id,
           tester_email: testerEmail.trim(),
-          recipient: testerEmail.trim(),
+          recipient,
         }),
       });
       const payload = (await response.json()) as { error?: string; message?: string };
@@ -225,9 +231,27 @@ function App() {
                     : "Resolve the blocking issues below, then run the pre-check again."}
                 </p>
               </div>
-              <div>
+              <div className="result-actions">
                 <button className="secondary-button" type="button" onClick={downloadReport}>Download report</button>
-                {result.persistence.saved && <button className="secondary-button" type="button" onClick={() => void sendReport()}>Email result to me</button>}
+                {result.persistence.saved && (isPass ? (
+                  <div className="next-checker-action">
+                    <label htmlFor="next-checker-email">Next checker email</label>
+                    <input
+                      id="next-checker-email"
+                      type="email"
+                      value={nextCheckerEmail}
+                      onChange={(event) => setNextCheckerEmail(event.target.value)}
+                      placeholder="checker@example.com"
+                    />
+                    <button className="secondary-button" type="button" onClick={() => void sendReport()}>
+                      Send to next checker
+                    </button>
+                  </div>
+                ) : (
+                  <button className="secondary-button" type="button" onClick={() => void sendReport()}>
+                    Email result to me
+                  </button>
+                ))}
               </div>
             </div>
 

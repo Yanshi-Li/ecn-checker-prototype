@@ -52,3 +52,76 @@ def test_precheck_uses_the_staged_pipeline_for_a_generic_ecn_filename(monkeypatc
     assert response.get_json()["findings"][0]["rule"] == "H01"
     assert Path(paths[0]).name.startswith("ECN_4079118_")
     assert paths[1] is None
+
+
+class _ConnectionContext:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        return self.connection
+
+    def __exit__(self, *args):
+        return False
+
+
+def test_notification_allows_a_pass_result_to_be_sent_to_the_next_checker(monkeypatch):
+    sent = {}
+    connection = object()
+
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "get_attempt_detail",
+        lambda *_: {"payload": {"packet": {"gate": {"decision": "PASS"}}}},
+    )
+    monkeypatch.setattr(
+        flask_app,
+        "send_validation_email",
+        lambda packet, recipient: sent.update(packet=packet, recipient=recipient)
+        or {"sent": True, "message": f"Validation report sent to {recipient}."},
+    )
+    recorded = []
+    monkeypatch.setattr(flask_app, "record_notification_attempt", lambda *args: recorded.append(args))
+    client = app.test_client()
+
+    response = client.post(
+        "/api/notification",
+        json={
+            "attempt_id": 17,
+            "tester_email": "creator@example.com",
+            "recipient": "next.checker@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "sent": True,
+        "message": "Validation report sent to next.checker@example.com.",
+    }
+    assert sent["recipient"] == "next.checker@example.com"
+    assert recorded[0][2:] == ("validation_report", "next.checker@example.com", "sent", "Validation report sent to next.checker@example.com.")
+
+
+def test_notification_rejects_sending_a_failed_result_to_someone_other_than_the_tester(monkeypatch):
+    connection = object()
+
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "get_attempt_detail",
+        lambda *_: {"payload": {"packet": {"gate": {"decision": "FAIL"}}}},
+    )
+    client = app.test_client()
+
+    response = client.post(
+        "/api/notification",
+        json={
+            "attempt_id": 18,
+            "tester_email": "creator@example.com",
+            "recipient": "next.checker@example.com",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json() == {"error": "Failed results can only be emailed to the tester."}

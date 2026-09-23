@@ -274,8 +274,15 @@ def api_notification():
             )
         if detail is None:
             return jsonify({"error": "Evaluation attempt was not found."}), 404
+
         payload = detail.get("payload", {})
         packet = payload.get("packet", {}) if isinstance(payload, dict) else {}
+        decision = str(packet.get("gate", {}).get("decision", "")).upper()
+        if decision == "FAIL" and recipient.casefold() != tester_email.casefold():
+            return jsonify({"error": "Failed results can only be emailed to the tester."}), 403
+        if decision not in {"PASS", "FAIL"}:
+            return jsonify({"error": "The saved result has no emailable decision."}), 422
+
         result = send_validation_email(packet, recipient)
         status = "sent" if result.get("sent") else "failed"
         with connect_evaluation_db() as connection:
@@ -287,13 +294,12 @@ def api_notification():
                 status,
                 result.get("message"),
             )
-        return jsonify({"sent": bool(result.get("sent")), "message": result.get("message", "Email could not be sent.")})
+        return jsonify({
+            "sent": bool(result.get("sent")),
+            "message": result.get("message", "Email could not be sent."),
+        })
     except Exception as exc:
         return jsonify({"error": f"The notification could not be sent: {type(exc).__name__}."}), 422
-
-
-
-
 
 
 

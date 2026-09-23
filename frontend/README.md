@@ -28,4 +28,11 @@ npm run typecheck
 npm run build
 ```
 
-The React UI requires the tester's email so each pre-check can be saved for review. When `ECN_DB_PASSWORD` and the related `ECN_DB_*` settings are configured, Flask stores the complete packet and original uploaded files in PostgreSQL. The tester can then explicitly email their validation report; Flask records the delivery outcome. Reviewer authentication and review queues remain in Streamlit.
+The React UI requires the tester's email so each pre-check can be saved for review. When `ECN_DB_PASSWORD` and the related `ECN_DB_*` settings are configured, Flask stores the complete packet and original uploaded files in PostgreSQL.
+
+The email path follows the gate decision:
+
+- For a `FAIL`, the creator can email the validation report only to their own identified email address, so they can correct and resubmit it.
+- For a `PASS`, the creator enters the next checker's email address and explicitly sends the validation report to that person.
+
+Flask records the delivery outcome for either path. Reviewer authentication and review queues remain in Streamlit.
