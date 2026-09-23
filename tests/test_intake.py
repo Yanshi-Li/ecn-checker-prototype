@@ -361,6 +361,14 @@ def test_load_sample_pdf_bom():
         "source": "Thailand",
         "line_number": "1",
     }
+    assert [(row["action"], row["source"]) for row in rows] == [
+        ("ADD", "Thailand"),
+        ("ADD", "Thailand"),
+        ("ADD", "Thailand"),
+        ("ADD", "Thailand"),
+    ]
+
+
 
 
 def test_load_pdf_bom_includes_part_master_and_structure_changes():

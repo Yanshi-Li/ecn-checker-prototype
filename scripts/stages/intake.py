@@ -633,6 +633,7 @@ def load_pdf_bom(filepath: str) -> list[dict]:
 
     parsed_rows = []
     header = None
+    table_defaults = {}
     with pdfplumber.open(filepath) as pdf:
         for page in pdf.pages:
             for table in page.extract_tables():
@@ -645,11 +646,13 @@ def load_pdf_bom(filepath: str) -> list[dict]:
                         header = _combine_mbom_headers(row, table[row_index + 1])
                         structure_table = True
                         structure_defaults = {}
+                        table_defaults = {}
                         row_index += 2
                         continue
                     if _is_mbom_header(row):
                         header = row
                         structure_table = False
+                        table_defaults = {}
                         row_index += 1
                         continue
                     row_keys = [_normalize_excel_key(cell) for cell in row]
@@ -671,28 +674,38 @@ def load_pdf_bom(filepath: str) -> list[dict]:
                     }
                     parsed = _normalize_mbom_row(raw_row)
                     row_index += 1
-                    if parsed:
-                        parsed["line_number"] = str(len(parsed_rows) + 1)
-                        if structure_table:
-                            normalized = {
-                                _normalize_excel_key(key): ("" if value is None else str(value).strip())
-                                for key, value in raw_row.items()
-                            }
-                            for field in (
-                                "parent_part_no",
-                                "parent_part_description",
-                                "action",
-                                "source",
-                            ):
-                                if not parsed.get(field) and structure_defaults.get(field):
-                                    parsed[field] = structure_defaults[field]
-                                if parsed.get(field):
-                                    structure_defaults[field] = parsed[field]
-                            parsed["line_reference"] = _lookup_value(
-                                normalized, "line ref", "line reference"
-                            )
-                            parsed["change_section"] = "BOM_STRUCTURE"
-                        parsed_rows.append(parsed)
+                    if not parsed:
+                        continue
+
+                    parsed["line_number"] = str(len(parsed_rows) + 1)
+                    normalized = {
+                        _normalize_excel_key(key): (
+                            "" if value is None else str(value).strip()
+                        )
+                        for key, value in raw_row.items()
+                    }
+                    # PDF exports commonly use vertically merged cells. A blank
+                    # action/source therefore means "same as the preceding row"
+                    # within the current table, not an unknown value.
+                    for field in ("action", "source"):
+                        if not parsed.get(field) and table_defaults.get(field):
+                            parsed[field] = table_defaults[field]
+                        if parsed.get(field):
+                            table_defaults[field] = parsed[field]
+                    if structure_table:
+                        for field in (
+                            "parent_part_no",
+                            "parent_part_description",
+                        ):
+                            if not parsed.get(field) and structure_defaults.get(field):
+                                parsed[field] = structure_defaults[field]
+                            if parsed.get(field):
+                                structure_defaults[field] = parsed[field]
+                        parsed["line_reference"] = _lookup_value(
+                            normalized, "line ref", "line reference"
+                        )
+                        parsed["change_section"] = "BOM_STRUCTURE"
+                    parsed_rows.append(parsed)
 
     logger.info("PDF BOM loaded: %s (%d rows)", filepath, len(parsed_rows))
     return parsed_rows
@@ -700,7 +713,11 @@ def load_pdf_bom(filepath: str) -> list[dict]:
 
 
 
+
+
+
 # ── Email Helpers ─────────────────────────────────────────────────────────────
+
 def _normalize_email_key(value: str) -> str:
     """Normalize email field names such as 'ECN ID' or 'Affected Assembly'."""
     normalized = re.sub(r"[^a-z0-9]+", " ", (value or "").strip().lower())
