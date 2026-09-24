@@ -325,6 +325,18 @@ def assign_reviewer(connection, attempt_id: int, reviewer_id: int, administrator
     refresh_review_status(connection, attempt_id)
 
 
+def list_assignments(connection, attempt_id: int) -> list[dict[str, object]]:
+    """Return active and revoked reviewer assignments for one attempt."""
+    return _rows(connection.execute(
+        """SELECT ra.id, ra.reviewer_id, u.display_name, u.email, ra.status,
+                  ra.assigned_at
+           FROM review_assignments ra
+           JOIN app_users u ON u.id = ra.reviewer_id
+           WHERE ra.precheck_attempt_id = %s
+           ORDER BY ra.assigned_at, ra.id""", (attempt_id,)
+    ))
+
+
 def list_assignable_attempts(connection) -> list[dict[str, object]]:
     """List completed attempts that an administrator may assign."""
     cursor = connection.execute(
@@ -336,6 +348,55 @@ def list_assignable_attempts(connection) -> list[dict[str, object]]:
            ORDER BY a.completed_at DESC NULLS LAST, a.id DESC"""
     )
     return _rows(cursor)
+
+
+def list_disputed_attempts(connection) -> list[dict[str, object]]:
+    """Return attempts requiring administrator dispute resolution."""
+    cursor = connection.execute(
+        """SELECT a.id AS attempt_id, a.system_decision,
+                  COALESCE(rs.status, 'ACTIVE') AS review_status,
+                  rs.resolution_comment, s.tester_email, s.tester_name
+           FROM precheck_attempts a
+           JOIN evaluation_sessions s ON s.id = a.session_id
+           JOIN evaluation_review_status rs ON rs.precheck_attempt_id = a.id
+           WHERE rs.status = 'DISPUTED'
+           ORDER BY a.started_at DESC, a.id DESC"""
+    )
+    return _rows(cursor)
+
+
+def get_reviewer_comparison(connection, attempt_id: int) -> dict[str, object] | None:
+    """Return all independent reviewer submissions for administrator comparison."""
+    attempt = _row(connection.execute(
+        """SELECT a.id AS attempt_id, a.system_decision,
+                  COALESCE(rs.status, 'ACTIVE') AS review_status
+           FROM precheck_attempts a
+           LEFT JOIN evaluation_review_status rs ON rs.precheck_attempt_id = a.id
+           WHERE a.id = %s""", (attempt_id,)
+    ))
+    if attempt is None:
+        return None
+    submissions = _rows(connection.execute(
+        """SELECT rs.id AS submission_id, rs.reviewer_id, u.display_name,
+                  u.email, rs.overall_judgement, rs.comment, rs.submitted_at
+           FROM reviewer_submissions rs
+           JOIN app_users u ON u.id = rs.reviewer_id
+           WHERE rs.precheck_attempt_id = %s
+           ORDER BY rs.submitted_at, rs.id""", (attempt_id,)
+    ))
+    rules = _rows(connection.execute(
+        """SELECT rr.submission_id, rr.rule_id, rr.judgement, rr.comment
+           FROM reviewer_rule_judgements rr
+           JOIN reviewer_submissions rs ON rs.id = rr.submission_id
+           WHERE rs.precheck_attempt_id = %s
+           ORDER BY rr.rule_id, rr.submission_id""", (attempt_id,)
+    ))
+    by_submission: dict[object, list[dict[str, object]]] = {}
+    for rule in rules:
+        by_submission.setdefault(rule["submission_id"], []).append(rule)
+    for submission in submissions:
+        submission["rule_judgements"] = by_submission.get(submission["submission_id"], [])
+    return {"attempt": attempt, "submissions": submissions}
 
 
 def get_review_status(connection, attempt_id: int) -> dict[str, object]:

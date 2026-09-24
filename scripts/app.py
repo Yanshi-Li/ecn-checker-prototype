@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from flask import Flask, jsonify, render_template, request, send_file, session
+from flask import Flask, Response, jsonify, render_template, request, send_file, session
 
 
 
@@ -325,6 +325,141 @@ def _reviewer_user() -> tuple[dict | None, tuple[object, int] | None]:
     return user, None
 
 
+def _administrator_user() -> tuple[dict | None, tuple[object, int] | None]:
+    user = _current_user()
+    if user is None:
+        return None, (jsonify({"error": "Sign in before opening administrator tools."}), 401)
+    if user.get("role") != "ADMINISTRATOR":
+        return None, (jsonify({"error": "Administrator access is required."}), 403)
+    return user, None
+
+
+@app.route("/api/admin/reviewers")
+def api_admin_reviewers():
+    user, error = _administrator_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+            return jsonify({"reviewers": evaluation_queries.list_users(connection, "REVIEWER")})
+    except Exception:
+        return jsonify({"error": "Reviewer accounts are unavailable."}), 503
+
+
+@app.route("/api/admin/assignable-attempts")
+def api_admin_assignable_attempts():
+    user, error = _administrator_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+            return jsonify({"attempts": evaluation_queries.list_assignable_attempts(connection)})
+    except Exception:
+        return jsonify({"error": "Assignable attempts are unavailable."}), 503
+
+
+@app.route("/api/admin/assignments", methods=["POST"])
+def api_admin_assign_reviewer():
+    user, error = _administrator_user()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    try:
+        attempt_id = int(body.get("attempt_id"))
+        reviewer_id = int(body.get("reviewer_id"))
+        with connect_evaluation_db() as connection:
+            evaluation_queries.assign_reviewer(connection, attempt_id, reviewer_id, int(user["id"]))
+            assignments = evaluation_queries.list_assignments(connection, attempt_id)
+        return jsonify({"saved": True, "assignments": assignments})
+    except (TypeError, ValueError):
+        return jsonify({"error": "attempt_id and reviewer_id are required."}), 400
+    except Exception:
+        return jsonify({"error": "The reviewer assignment could not be saved."}), 503
+
+
+@app.route("/api/admin/disputes")
+def api_admin_disputes():
+    user, error = _administrator_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+            return jsonify({"attempts": evaluation_queries.list_disputed_attempts(connection)})
+    except Exception:
+        return jsonify({"error": "Disputed attempts are unavailable."}), 503
+
+
+@app.route("/api/admin/attempts/<int:attempt_id>/comparison")
+def api_admin_comparison(attempt_id: int):
+    user, error = _administrator_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+            comparison = evaluation_queries.get_reviewer_comparison(connection, attempt_id)
+        if comparison is None:
+            return jsonify({"error": "Evaluation attempt was not found."}), 404
+        return jsonify(comparison)
+    except Exception:
+        return jsonify({"error": "Reviewer comparison is unavailable."}), 503
+
+
+@app.route("/api/admin/attempts/<int:attempt_id>/resolve", methods=["POST"])
+def api_admin_resolve_dispute(attempt_id: int):
+    user, error = _administrator_user()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    try:
+        with connect_evaluation_db() as connection:
+            evaluation_queries.resolve_review_dispute(connection, attempt_id, user, str(body.get("comment", "")))
+            status = evaluation_queries.get_review_status(connection, attempt_id)
+        return jsonify({"saved": True, "review_status": status})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        return jsonify({"error": "The dispute could not be resolved."}), 503
+
+
+@app.route("/api/admin/review-report")
+def api_admin_review_report():
+    user, error = _administrator_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+            return jsonify(evaluation_queries.get_cross_attempt_review_report(connection))
+    except Exception:
+        return jsonify({"error": "The review report is unavailable."}), 503
+
+
+@app.route("/api/admin/evaluation-export")
+def api_admin_evaluation_export():
+    user, error = _administrator_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+            rows = evaluation_queries.list_attempts(connection, {
+                "system_decision": request.args.get("decision", "ALL"),
+                "tester": request.args.get("tester", ""),
+                "case_identifier": request.args.get("ecn", ""),
+            })
+        if not rows:
+            csv_text = "attempt_id,system_decision,started_at,completed_at,duration_seconds,case_identifier,tester_email,tester_name,tester_judgement,agreement\n"
+        else:
+            import csv as csv_module
+            output = io.StringIO()
+            fieldnames = list(rows[0].keys())
+            writer = csv_module.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+            csv_text = output.getvalue()
+        return Response(csv_text, mimetype="text/csv", headers={"Content-Disposition": "attachment; filename=evaluation-export.csv"})
+    except Exception:
+        return jsonify({"error": "The evaluation export is unavailable."}), 503
+
+
 @app.route("/api/admin/evaluation-summary")
 def api_admin_evaluation_summary():
     """Return aggregate evaluation metrics for administrators."""
@@ -387,15 +522,15 @@ def api_reviewer_attempt_detail(attempt_id: int):
         return error
     try:
         with connect_evaluation_db() as connection:
-
             detail = evaluation_queries.get_attempt_detail(connection, attempt_id, user)
             if detail is not None:
                 detail["reviewer_submission"] = evaluation_queries.get_reviewer_submission(
                     connection, attempt_id, int(user["id"])
                 )
+                if user.get("role") == "ADMINISTRATOR":
+                    detail["assignments"] = evaluation_queries.list_assignments(connection, attempt_id)
+                    detail["reviewer_comparison"] = evaluation_queries.get_reviewer_comparison(connection, attempt_id)
         if detail is None:
-
-
             return jsonify({"error": "Evaluation attempt was not found."}), 404
         return jsonify(detail)
     except PermissionError:
@@ -465,6 +600,39 @@ def api_reviewer_judgement(attempt_id: int):
         return jsonify({"error": str(exc)}), 400
     except Exception:
         return jsonify({"error": "The reviewer judgement could not be saved."}), 503
+
+
+@app.route("/api/tester/attempts/<int:attempt_id>/judgement", methods=["POST"])
+def api_tester_judgement(attempt_id: int):
+    user = _current_user()
+    if user is None:
+        return jsonify({"error": "Sign in before submitting a tester judgement."}), 401
+    if user.get("role") not in {"TESTER", "ADMINISTRATOR"}:
+        return jsonify({"error": "Tester access is required."}), 403
+    body = request.get_json(silent=True) or {}
+    raw_rules = body.get("rule_judgements", {})
+    if not isinstance(raw_rules, dict):
+        return jsonify({"error": "rule_judgements must be an object."}), 400
+    try:
+        rule_judgements = {
+            str(rule_id): (str(value.get("judgement", "")), str(value.get("comment", "")))
+            for rule_id, value in raw_rules.items() if isinstance(value, dict)
+        }
+        with connect_evaluation_db() as connection:
+            detail = evaluation_queries.get_attempt_detail(connection, attempt_id, user)
+            if detail is None:
+                return jsonify({"error": "Evaluation attempt was not found."}), 404
+            evaluation_queries.save_tester_judgement(
+                connection, attempt_id, str(body.get("judgement", "")),
+                str(body.get("explanation", "")), str(user.get("email", "")), rule_judgements,
+            )
+        return jsonify({"saved": True})
+    except PermissionError:
+        return jsonify({"error": "This evaluation is not owned by the tester."}), 403
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        return jsonify({"error": "The tester judgement could not be saved."}), 503
 
 
 @app.route("/api/notification", methods=["POST"])

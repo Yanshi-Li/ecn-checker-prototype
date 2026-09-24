@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
 
+type Reviewer = { id: number; email: string; display_name: string };
+type Attempt = { attempt_id: number; system_decision: string; tester_email?: string; tester_name?: string; review_status?: string };
+type Dispute = Attempt;
+type Comparison = { attempt: Attempt; submissions: Array<{ submission_id: number; display_name: string; email: string; overall_judgement: string; comment?: string; rule_judgements?: Array<{ rule_id: string; judgement: string; comment?: string }> }> };
+
 type Summary = {
   total_attempts: number;
   pass_count: number;
@@ -25,6 +30,15 @@ export default function AdminDashboard() {
   const [ecn, setEcn] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reviewers, setReviewers] = useState<Reviewer[]>([]);
+  const [assignable, setAssignable] = useState<Attempt[]>([]);
+  const [disputes, setDisputes] = useState<Dispute[]>([]);
+  const [selectedAttempt, setSelectedAttempt] = useState("");
+  const [selectedReviewer, setSelectedReviewer] = useState("");
+  const [comparison, setComparison] = useState<Comparison | null>(null);
+  const [resolutionComment, setResolutionComment] = useState("");
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
+  const [reviewReport, setReviewReport] = useState<{ rule_group_count: number; rule_disagreement_count: number; rule_disagreement_percentage: number; disputed_attempt_count: number } | null>(null);
 
   async function loadSummary() {
     setLoading(true);
@@ -42,7 +56,48 @@ export default function AdminDashboard() {
     }
   }
 
-  useEffect(() => { void loadSummary(); }, [decision, tester, ecn]);
+  async function loadAdminTools() {
+    try {
+      const [reviewerResponse, attemptResponse, disputeResponse, reportResponse] = await Promise.all([
+        fetch("/api/admin/reviewers"), fetch("/api/admin/assignable-attempts"), fetch("/api/admin/disputes"), fetch("/api/admin/review-report"),
+      ]);
+      const reviewerPayload = await readJson<{ reviewers?: Reviewer[] }>(reviewerResponse);
+      const attemptPayload = await readJson<{ attempts?: Attempt[] }>(attemptResponse);
+      const disputePayload = await readJson<{ attempts?: Dispute[] }>(disputeResponse);
+      const reportPayload = await readJson<{ rule_group_count?: number; rule_disagreement_count?: number; rule_disagreement_percentage?: number; disputed_attempt_count?: number }>(reportResponse);
+      setReviewers(reviewerPayload.reviewers ?? []); setAssignable(attemptPayload.attempts ?? []); setDisputes(disputePayload.attempts ?? []);
+      setReviewReport({ rule_group_count: reportPayload.rule_group_count ?? 0, rule_disagreement_count: reportPayload.rule_disagreement_count ?? 0, rule_disagreement_percentage: reportPayload.rule_disagreement_percentage ?? 0, disputed_attempt_count: reportPayload.disputed_attempt_count ?? 0 });
+    } catch { setToolStatus("Administrator tools could not be loaded."); }
+  }
+
+  useEffect(() => { void loadSummary(); void loadAdminTools(); }, [decision, tester, ecn]);
+
+  async function assignReviewer() {
+    if (!selectedAttempt || !selectedReviewer) return;
+    const response = await fetch("/api/admin/assignments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ attempt_id: selectedAttempt, reviewer_id: selectedReviewer }) });
+    const payload = await readJson<{ error?: string }>(response);
+    setToolStatus(response.ok ? "Reviewer assigned." : payload.error ?? "Assignment failed.");
+    if (response.ok) void loadAdminTools();
+  }
+
+  async function openComparison(attemptId: string) {
+    const response = await fetch(`/api/admin/attempts/${attemptId}/comparison`);
+    const payload = await readJson<Comparison & { error?: string }>(response);
+    if (!response.ok) { setToolStatus(payload.error ?? "Comparison could not be loaded."); return; }
+    setComparison(payload);
+  }
+
+  async function resolveDispute(attemptId: number) {
+    const response = await fetch(`/api/admin/attempts/${attemptId}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ comment: resolutionComment }) });
+    const payload = await readJson<{ error?: string }>(response);
+    setToolStatus(response.ok ? "Dispute resolved." : payload.error ?? "Dispute could not be resolved.");
+    if (response.ok) { setResolutionComment(""); void loadAdminTools(); }
+  }
+
+  function exportEvaluation() {
+    const params = new URLSearchParams({ decision, tester, ecn });
+    window.location.href = `/api/admin/evaluation-export?${params.toString()}`;
+  }
 
   return (
     <section className="dashboard-section" aria-labelledby="dashboard-heading">
@@ -79,6 +134,16 @@ export default function AdminDashboard() {
         </section>
         <p className="dashboard-note">PASS and FAIL percentages use all completed attempts. Agreement uses only attempts where a tester judgement was submitted; {summary.total_attempts - summary.judged_count} judgement{summary.total_attempts - summary.judged_count === 1 ? " is" : "s are"} pending.</p>
       </>}
+      <section className="admin-tools" aria-label="Administrator tools">
+        <div className="section-heading compact"><div><p className="step">Administration</p><h2>Assignments and reviews</h2></div><button className="secondary-button" type="button" onClick={exportEvaluation}>Export evaluation CSV</button></div>
+        {reviewReport && <div className="dashboard-metrics review-report"><Metric label="Rule groups reviewed" value={String(reviewReport.rule_group_count)} /><Metric label="Rule disagreements" value={`${reviewReport.rule_disagreement_percentage}%`} detail={`${reviewReport.rule_disagreement_count} groups`} tone="danger" /><Metric label="Disputed attempts" value={String(reviewReport.disputed_attempt_count)} tone="danger" /></div>}
+        <div className="admin-tool-grid">
+          <div className="dashboard-card"><h3>Assign reviewers</h3><label>Attempt<select value={selectedAttempt} onChange={(event) => setSelectedAttempt(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>Attempt {attempt.attempt_id} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label><label>Reviewer<select value={selectedReviewer} onChange={(event) => setSelectedReviewer(event.target.value)}><option value="">Choose a reviewer</option>{reviewers.map((reviewer) => <option key={reviewer.id} value={reviewer.id}>{reviewer.display_name} ({reviewer.email})</option>)}</select></label><button className="primary-button" type="button" onClick={() => void assignReviewer()}>Assign reviewer</button></div>
+          <div className="dashboard-card"><h3>Reviewer comparison</h3><label>Attempt<select value={comparison?.attempt.attempt_id ?? ""} onChange={(event) => void openComparison(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>Attempt {attempt.attempt_id}</option>)}</select></label>{comparison ? <div className="comparison-table">{comparison.submissions.map((submission) => <article key={submission.submission_id}><strong>{submission.display_name}</strong><span>{submission.overall_judgement}</span><p>{submission.comment || "No comment"}</p>{submission.rule_judgements?.map((rule) => <small key={rule.rule_id}>{rule.rule_id}: {rule.judgement}</small>)}</article>)}</div> : <p className="empty-state">Compare independent reviewer judgements for one attempt.</p>}</div>
+          <div className="dashboard-card"><h3>Dispute resolution</h3>{disputes.length === 0 ? <p className="empty-state">No disputed attempts.</p> : disputes.map((dispute) => <article className="dispute-row" key={dispute.attempt_id}><strong>Attempt {dispute.attempt_id}</strong><span>{dispute.tester_email}</span><button className="evidence-link" type="button" onClick={() => void openComparison(String(dispute.attempt_id))}>Compare</button><textarea value={resolutionComment} onChange={(event) => setResolutionComment(event.target.value)} placeholder="Resolution comment" /><button className="secondary-button" type="button" onClick={() => void resolveDispute(dispute.attempt_id)}>Resolve dispute</button></article>)}</div>
+        </div>
+        {toolStatus && <p className="empty-state" role="status">{toolStatus}</p>}
+      </section>
     </section>
   );
 }

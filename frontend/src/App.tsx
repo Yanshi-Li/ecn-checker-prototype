@@ -333,6 +333,7 @@ function App() {
             {!result.persistence.saved && <p className="form-error" role="status">{result.persistence.message ?? "The result is available, but the evaluation was not saved."}</p>}
             {result.persistence.saved && <p className="empty-state">Evaluation saved for reviewer follow-up.</p>}
             {notificationStatus && <p className="empty-state" role="status">{notificationStatus}</p>}
+            {result.persistence.saved && result.persistence.attempt_id && <TesterJudgement result={result} findings={findings} />}
 
             <div className="metric-grid" aria-label="Pre-check summary">
               <Metric label="Files checked" value={String(result.summary.total_files)} />
@@ -401,6 +402,44 @@ function FileInput({ id, label, required = false, accept, file, onChange }: File
       <input id={id} type="file" required={required} accept={accept} onChange={(event) => onChange(event.target.files?.[0] ?? null)} />
     </label>
   );
+}
+
+function TesterJudgement({ result, findings }: { result: PrecheckResponse; findings: Finding[] }) {
+  const [judgement, setJudgement] = useState<"PASS" | "FAIL">(result.decision === "PASS" ? "PASS" : "FAIL");
+  const [explanation, setExplanation] = useState("");
+  const [ruleJudgements, setRuleJudgements] = useState<Record<string, { judgement: string; comment: string }>>({});
+  const [status, setStatus] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setStatus(null);
+    try {
+      const response = await fetch(`/api/tester/attempts/${result.persistence.attempt_id}/judgement`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ judgement, explanation, rule_judgements: ruleJudgements }),
+      });
+      const payload = await readJson<{ error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error ?? "The judgement could not be saved.");
+      setStatus("Your judgement was saved for evaluation.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "The judgement could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <form className="tester-judgement" onSubmit={submit}>
+    <h3>Was this result correct?</h3>
+    <label htmlFor="tester-judgement">Your overall judgement</label>
+    <select id="tester-judgement" value={judgement} onChange={(event) => setJudgement(event.target.value as "PASS" | "FAIL")}><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select>
+    <label htmlFor="tester-explanation">Explanation</label>
+    <textarea id="tester-explanation" value={explanation} onChange={(event) => setExplanation(event.target.value)} placeholder="Explain whether the system result was correct" />
+    {findings.map((finding, index) => { const id = finding.rule || `finding-${index}`; const value = ruleJudgements[id] ?? { judgement: "CORRECT", comment: "" }; return <div className="rule-judgement" key={id}><label htmlFor={`tester-rule-${id}`}>{id}</label><select id={`tester-rule-${id}`} value={value.judgement} onChange={(event) => setRuleJudgements({ ...ruleJudgements, [id]: { ...value, judgement: event.target.value } })}><option value="CORRECT">CORRECT</option><option value="INCORRECT">INCORRECT</option><option value="UNCLEAR">UNCLEAR</option><option value="NOT_APPLICABLE">NOT_APPLICABLE</option></select><input value={value.comment} onChange={(event) => setRuleJudgements({ ...ruleJudgements, [id]: { ...value, comment: event.target.value } })} placeholder="Rule comment (optional)" /></div>; })}
+    <button className="secondary-button" type="submit" disabled={saving}>{saving ? "Saving…" : "Submit tester judgement"}</button>
+    {status && <p className="empty-state" role="status">{status}</p>}
+  </form>;
 }
 
 function Metric({ label, value, tone }: { label: string; value: string; tone?: "danger" | "success" }) {
