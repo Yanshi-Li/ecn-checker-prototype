@@ -1,4 +1,6 @@
     import { useEffect, useMemo, useState } from "react";
+import ReviewerArea from "./ReviewerArea";
+import AdminDashboard from "./AdminDashboard";
 
 type Severity = "error" | "warning" | string;
 
@@ -45,6 +47,16 @@ function formatRule(rule: string): string {
   return rule === "UPLOAD" ? "File upload" : `Rule ${rule}`;
 }
 
+async function readJson<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  if (!text.trim()) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("The server returned an invalid response.");
+  }
+}
+
 function App() {
   const [ecnFile, setEcnFile] = useState<File | null>(null);
   const [bomFile, setBomFile] = useState<File | null>(null);
@@ -60,6 +72,7 @@ function App() {
   const [apiReady, setApiReady] = useState<boolean | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"precheck" | "reviewer" | "dashboard">("precheck");
 
   useEffect(() => {
     void fetch("/api/health")
@@ -68,7 +81,7 @@ function App() {
     void fetch("/api/auth/session")
       .then(async (response) => {
         if (response.ok) {
-          const payload = (await response.json()) as { user: User };
+          const payload = await readJson<{ user: User }>(response);
           setUser(payload.user);
         }
       })
@@ -88,7 +101,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
       });
-      const payload = (await response.json()) as { error?: string; user?: User };
+      const payload = await readJson<{ error?: string; user?: User }>(response);
       if (!response.ok || !payload.user) throw new Error(payload.error ?? "Login could not be completed.");
       setUser(payload.user);
       setLoginPassword("");
@@ -109,8 +122,8 @@ function App() {
       setRequestError("Choose an ECN file before running the pre-check.");
       return;
     }
-    if (!user || user.role !== "TESTER") {
-      setRequestError("Sign in with a tester account to run a pre-check.");
+    if (!user || !["TESTER", "ADMINISTRATOR"].includes(user.role)) {
+      setRequestError("Sign in with a tester or administrator account to run a pre-check.");
       return;
     }
 
@@ -128,7 +141,7 @@ function App() {
 
     try {
       const response = await fetch("/api/precheck", { method: "POST", body: formData });
-      const payload = (await response.json()) as PrecheckResponse;
+      const payload = await readJson<PrecheckResponse>(response);
       if (!response.ok || payload.error) {
         throw new Error(payload.error ?? "The pre-check could not be completed.");
       }
@@ -160,7 +173,7 @@ function App() {
           recipient,
         }),
       });
-      const payload = (await response.json()) as { error?: string; message?: string };
+      const payload = await readJson<{ error?: string; message?: string }>(response);
       if (!response.ok || payload.error) throw new Error(payload.error ?? "Email could not be sent.");
       setNotificationStatus(payload.message ?? "Validation report sent.");
     } catch (error) {
@@ -222,9 +235,9 @@ function App() {
           <span>Pre-check workspace</span>
         </div>
         <nav>
-          <a className="nav-item active" href="#new-precheck">New pre-check</a>
-          <a className="nav-item" href="#results">Results</a>
-          <span className="nav-item muted">Reviewer queue <small>Coming next</small></span>
+          <button className={`nav-item ${activeTab === "precheck" ? "active" : ""}`} type="button" onClick={() => setActiveTab("precheck")}>New pre-check</button>
+          {["REVIEWER", "ADMINISTRATOR"].includes(user.role) && <button className={`nav-item ${activeTab === "reviewer" ? "active" : ""}`} type="button" onClick={() => setActiveTab("reviewer")}>Reviewer queue</button>}
+          {user.role === "ADMINISTRATOR" && <button className={`nav-item ${activeTab === "dashboard" ? "active" : ""}`} type="button" onClick={() => setActiveTab("dashboard")}>Admin dashboard</button>}
         </nav>
         <div className="connection-status">
           <span className={`status-dot ${apiReady ? "online" : "offline"}`} />
@@ -233,7 +246,7 @@ function App() {
       </aside>
 
       <section className="content">
-        <header className="page-header">
+        {activeTab !== "reviewer" && activeTab !== "dashboard" && <header className="page-header">
           <div>
             <p className="eyebrow">ECN creator</p>
             <h1>Check an ECN before submission</h1>
@@ -245,8 +258,9 @@ function App() {
             <small>{user.email}</small>
             <button type="button" onClick={() => void logout()}>Sign out</button>
           </div>
-        </header>
+        </header>}
 
+        {activeTab === "dashboard" && user.role === "ADMINISTRATOR" ? <AdminDashboard /> : activeTab === "reviewer" && ["REVIEWER", "ADMINISTRATOR"].includes(user.role) ? <ReviewerArea user={user} /> : <>
         <section className="upload-card" id="new-precheck" aria-labelledby="upload-heading">
           <div className="section-heading">
             <div>
@@ -363,6 +377,7 @@ function App() {
             </div>
           </section>
         )}
+        </>}
       </section>
     </main>
   );

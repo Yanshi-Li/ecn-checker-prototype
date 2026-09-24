@@ -16,7 +16,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from flask import Flask, jsonify, render_template, request, session
+from flask import Flask, jsonify, render_template, request, send_file, session
+
 
 
 from scripts.ecn_checker import run_checks
@@ -264,14 +265,13 @@ def api_precheck():
     bom_file = request.files.get("bom")
     user = _current_user()
 
-
-
     if user is None:
         return jsonify({"error": "Sign in before running a pre-check."}), 401
-    if user["role"] != "TESTER":
-        return jsonify({"error": "Only tester accounts can run a pre-check."}), 403
+    if user["role"] not in {"TESTER", "ADMINISTRATOR"}:
+        return jsonify({"error": "Only tester or administrator accounts can run a pre-check."}), 403
     tester_email = str(user["email"])
     tester_name = str(user.get("display_name", ""))
+
     if ecn_file is None or not ecn_file.filename:
         return jsonify({"error": "An ECN file is required."}), 400
 
@@ -315,32 +315,184 @@ def api_precheck():
 
 
 
+def _reviewer_user() -> tuple[dict | None, tuple[object, int] | None]:
+    """Return the signed-in reviewer or an appropriate JSON error response."""
+    user = _current_user()
+    if user is None:
+        return None, (jsonify({"error": "Sign in before opening the reviewer area."}), 401)
+    if user.get("role") not in {"REVIEWER", "ADMINISTRATOR"}:
+        return None, (jsonify({"error": "Reviewer or administrator access is required."}), 403)
+    return user, None
+
+
+@app.route("/api/admin/evaluation-summary")
+def api_admin_evaluation_summary():
+    """Return aggregate evaluation metrics for administrators."""
+    user = _current_user()
+    if user is None:
+        return jsonify({"error": "Sign in before opening the administrator dashboard."}), 401
+    if user.get("role") != "ADMINISTRATOR":
+        return jsonify({"error": "Administrator access is required."}), 403
+    try:
+        with connect_evaluation_db() as connection:
+            initialise_schema(connection)
+            summary = evaluation_queries.get_evaluation_summary(connection, {
+                "system_decision": request.args.get("decision", "ALL"),
+                "tester": request.args.get("tester", ""),
+                "case_identifier": request.args.get("ecn", ""),
+            })
+        return jsonify(summary)
+    except Exception:
+        return jsonify({"error": "The evaluation summary is unavailable."}), 503
+
+
+@app.route("/api/reviewer/queue")
+def api_reviewer_queue():
+    """Return a filtered, paginated review queue."""
+    user, error = _reviewer_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+            initialise_schema(connection)
+            if not request.args:
+                attempts = evaluation_queries.list_review_queue(connection, user)
+                result = {"attempts": attempts}
+            else:
+                result = evaluation_queries.list_review_queue_page(
+                    connection,
+                    user,
+                    {
+                        "page": request.args.get("page", 1, type=int),
+                        "page_size": request.args.get("page_size", 20, type=int),
+                        "decision": request.args.get("decision", "ALL"),
+                        "review_status": request.args.get("review_status", "ALL"),
+                        "tester": request.args.get("tester", ""),
+                    },
+                )
+        return jsonify(result)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid queue pagination or filter values."}), 400
+    except Exception:
+        return jsonify({"error": "The reviewer queue is unavailable."}), 503
+
+
+
+
+@app.route("/api/reviewer/attempts/<int:attempt_id>")
+def api_reviewer_attempt_detail(attempt_id: int):
+    """Return one authorized review attempt and its findings."""
+    user, error = _reviewer_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+
+            detail = evaluation_queries.get_attempt_detail(connection, attempt_id, user)
+            if detail is not None:
+                detail["reviewer_submission"] = evaluation_queries.get_reviewer_submission(
+                    connection, attempt_id, int(user["id"])
+                )
+        if detail is None:
+
+
+            return jsonify({"error": "Evaluation attempt was not found."}), 404
+        return jsonify(detail)
+    except PermissionError:
+        return jsonify({"error": "This attempt is not assigned to you."}), 403
+    except Exception:
+        return jsonify({"error": "The evaluation attempt is unavailable."}), 503
+
+
+@app.route("/api/reviewer/attempts/<int:attempt_id>/files/<role>")
+def api_reviewer_file(attempt_id: int, role: str):
+    """Download an original ECN or BOM after authorization."""
+    user, error = _reviewer_user()
+    if error:
+        return error
+    try:
+        with connect_evaluation_db() as connection:
+            original = evaluation_queries.get_original_file(connection, attempt_id, role, user)
+        if original is None:
+            return jsonify({"error": "The requested file was not found."}), 404
+        return send_file(
+            io.BytesIO(original["content"]),
+            mimetype=original["mime_type"],
+            as_attachment=True,
+            download_name=original["filename"],
+        )
+    except PermissionError:
+        return jsonify({"error": "This attempt is not assigned to you."}), 403
+    except ValueError:
+        return jsonify({"error": "The file role is invalid."}), 400
+    except Exception:
+        return jsonify({"error": "The original file is unavailable."}), 503
+
+
+@app.route("/api/reviewer/attempts/<int:attempt_id>/judgement", methods=["POST"])
+def api_reviewer_judgement(attempt_id: int):
+    """Store an independent reviewer judgement for an assigned attempt."""
+    user, error = _reviewer_user()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    raw_rules = body.get("rule_judgements", {})
+    if not isinstance(raw_rules, dict):
+        return jsonify({"error": "rule_judgements must be an object."}), 400
+    rule_judgements = {}
+    for rule_id, value in raw_rules.items():
+        if not isinstance(value, dict):
+            return jsonify({"error": "Each rule judgement must contain judgement and comment."}), 400
+        rule_judgements[str(rule_id)] = (
+            str(value.get("judgement", "")),
+            str(value.get("comment", "")),
+        )
+    try:
+        with connect_evaluation_db() as connection:
+            evaluation_queries.submit_reviewer_judgement(
+                connection,
+                attempt_id,
+                user,
+                str(body.get("judgement", "")),
+                str(body.get("comment", "")),
+                rule_judgements,
+            )
+            status = evaluation_queries.get_review_status(connection, attempt_id)
+        return jsonify({"saved": True, "review_status": status})
+    except PermissionError:
+        return jsonify({"error": "This attempt is not assigned to you."}), 403
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        return jsonify({"error": "The reviewer judgement could not be saved."}), 503
+
+
 @app.route("/api/notification", methods=["POST"])
 def api_notification():
+
     """Send an auditable report from a tester-owned saved pre-check."""
     body = request.get_json(silent=True) or {}
     attempt_id = body.get("attempt_id")
     user = _current_user()
-
-
-
     recipient = str(body.get("recipient", "")).strip()
     if user is None:
         return jsonify({"error": "Sign in before sending a report."}), 401
-    if user["role"] != "TESTER":
-        return jsonify({"error": "Only tester accounts can send a report."}), 403
+    if user["role"] not in {"TESTER", "ADMINISTRATOR"}:
+        return jsonify({"error": "Only tester or administrator accounts can send a report."}), 403
     tester_email = str(user["email"])
+
     if not attempt_id or not recipient:
         return jsonify({"error": "attempt_id and recipient are required."}), 400
 
     try:
-
         with connect_evaluation_db() as connection:
             detail = evaluation_queries.get_attempt_detail(
                 connection,
                 int(attempt_id),
-                {"email": tester_email, "role": "TESTER"},
+                {"email": tester_email, "role": user["role"]},
             )
+
+
         if detail is None:
             return jsonify({"error": "Evaluation attempt was not found."}), 404
 

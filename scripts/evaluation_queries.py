@@ -155,13 +155,16 @@ def get_attempt_detail(
                   a.result_payload, s.tester_email, s.tester_name, s.task_name,
                   j.judgement AS tester_judgement, j.explanation AS judgement_explanation,
                   j.recorded_at AS judgement_recorded_at
-           """ + _BASE_FROM + " WHERE a.id = %s" , (attempt_id,))
+           """ + _BASE_FROM + " WHERE a.id = %s", (attempt_id,))
     detail = _row(cursor)
     if detail is None:
         return None
+
     files = _rows(connection.execute(
         """SELECT id, role, filename, mime_type, size_bytes, sha256, captured_at
-           FROM evaluation_files WHERE precheck_attempt_id = %s ORDER BY id""", (attempt_id,)))
+           FROM evaluation_files WHERE precheck_attempt_id = %s ORDER BY id""",
+        (attempt_id,),
+    ))
     detail["files"] = files
     payload = detail.get("result_payload") or {}
     packet = payload.get("packet", {}) if isinstance(payload, dict) else {}
@@ -175,9 +178,16 @@ def get_attempt_detail(
     for finding in ai_notes.get("flags", []) or []:
         if isinstance(finding, dict):
             findings.append({"category": "ai_notes", **finding})
+
     detail["findings"] = findings
     detail["payload"] = payload
     return detail
+
+
+
+
+
+
 
 
 def save_tester_judgement(
@@ -504,13 +514,18 @@ def get_cross_attempt_review_report(connection) -> dict[str, object]:
 
 def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, object]]:
     """Return only attempts the authenticated reviewer is allowed to inspect."""
+
     role = normalise_role(user["role"])
+
     if not can_review(role):
         raise PermissionError("reviewer access required")
     if can_administer(role):
         clause, params = "", []
+        assignment_join = "LEFT JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
     else:
+
         clause, params = "WHERE ra.reviewer_id = %s AND ra.status <> 'REVOKED'", [user["id"]]
+        assignment_join = "JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
     cursor = connection.execute(
         """SELECT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
                   ra.status AS assignment_status, ra.reviewer_id,
@@ -518,15 +533,85 @@ def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, 
                   s.tester_email, s.tester_name
            FROM precheck_attempts a
            JOIN evaluation_sessions s ON s.id = a.session_id
-           JOIN review_assignments ra ON ra.precheck_attempt_id = a.id
+           """ + assignment_join + """
            LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
            """ + clause + " ORDER BY a.started_at DESC, a.id DESC",
         params,
     )
+
     return _rows(cursor)
 
 
+def list_review_queue_page(
+    connection,
+    user: Mapping[str, object],
+    filters: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Return one filtered page of attempts visible to the reviewer."""
+    role = normalise_role(user["role"])
+    if not can_review(role):
+        raise PermissionError("reviewer access required")
+    filters = filters or {}
+    page = max(1, int(filters.get("page", 1)))
+    page_size = min(100, max(1, int(filters.get("page_size", 20))))
+    conditions = ["a.system_decision IS NOT NULL"]
+    params: list[object] = []
+    if can_administer(role):
+        assignment_join = "LEFT JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
+    else:
+        assignment_join = "JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
+        conditions.append("ra.reviewer_id = %s AND ra.status <> 'REVOKED'")
+        params.append(user["id"])
+    decision = str(filters.get("decision", "ALL")).upper()
+    if decision in {"PASS", "FAIL"}:
+        conditions.append("a.system_decision = %s")
+        params.append(decision)
+    review_status = str(filters.get("review_status", "ALL")).upper()
+    if review_status in REVIEW_STATUSES:
+        conditions.append("COALESCE(rev.status, 'ACTIVE') = %s")
+        params.append(review_status)
+    tester = str(filters.get("tester", "")).strip()
+    if tester:
+        conditions.append("(s.tester_email ILIKE %s OR COALESCE(s.tester_name, '') ILIKE %s)")
+        params.extend((f"%{tester}%", f"%{tester}%"))
+    where = " AND ".join(conditions)
+    count_cursor = connection.execute(
+        """SELECT COUNT(DISTINCT a.id)
+           FROM precheck_attempts a
+           JOIN evaluation_sessions s ON s.id = a.session_id
+           """ + assignment_join + """
+           LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
+           WHERE """ + where,
+        params,
+    )
+    total = int(count_cursor.fetchone()[0])
+    offset = (page - 1) * page_size
+    rows = _rows(connection.execute(
+        """SELECT DISTINCT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
+                  EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
+                  ra.status AS assignment_status, ra.reviewer_id,
+                  COALESCE(rev.status, 'ACTIVE') AS review_status,
+                  s.tester_email, s.tester_name
+           FROM precheck_attempts a
+           JOIN evaluation_sessions s ON s.id = a.session_id
+           """ + assignment_join + """
+           LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
+           WHERE """ + where + " ORDER BY a.started_at DESC, a.id DESC LIMIT %s OFFSET %s",
+        params + [page_size, offset],
+    ))
+    return {
+        "attempts": rows,
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": (total + page_size - 1) // page_size,
+        },
+    }
+
+
 def submit_reviewer_judgement(
+
     connection, attempt_id: int, reviewer: Mapping[str, object], overall: str,
     comment: str = "", rule_judgements: Mapping[str, tuple[str, str]] | None = None,
 ) -> None:
