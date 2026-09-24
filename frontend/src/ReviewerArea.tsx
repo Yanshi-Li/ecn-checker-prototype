@@ -89,6 +89,7 @@ export default function ReviewerArea({ user }: { user: User }) {
   const [queue, setQueue] = useState<QueueAttempt[]>([]);
   const [pagination, setPagination] = useState<QueuePagination>({ page: 1, page_size: 10, total: 0, total_pages: 0 });
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("1");
   const [decisionFilter, setDecisionFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [testerFilter, setTesterFilter] = useState("");
@@ -121,11 +122,23 @@ export default function ReviewerArea({ user }: { user: User }) {
       setQueue(payload.attempts ?? []);
       setPagination(payload.pagination ?? { page: requestedPage, page_size: 10, total: 0, total_pages: 0 });
       setPage(requestedPage);
+      setPageInput(String(requestedPage));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The reviewer queue could not be loaded.");
     } finally {
       setLoading(false);
     }
+  }
+
+  function goToTypedPage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const requestedPage = Number.parseInt(pageInput, 10);
+    if (!Number.isFinite(requestedPage)) {
+      setPageInput(String(page));
+      return;
+    }
+    const lastPage = Math.max(1, pagination.total_pages);
+    void loadQueue(Math.min(lastPage, Math.max(1, requestedPage)));
   }
 
   async function openAttempt(attemptId: number) {
@@ -207,7 +220,7 @@ export default function ReviewerArea({ user }: { user: User }) {
               <small>{attempt.review_status ?? attempt.assignment_status ?? "ACTIVE"}</small>
             </button>
           ))}
-          {pagination.total_pages > 1 && <nav className="pagination" aria-label="Attempt pages"><button type="button" disabled={page <= 1} onClick={() => void loadQueue(page - 1)}>Previous</button><span>Page {page} of {pagination.total_pages}</span><button type="button" disabled={page >= pagination.total_pages} onClick={() => void loadQueue(page + 1)}>Next</button></nav>}
+          {pagination.total_pages > 1 && <nav className="pagination" aria-label="Attempt pages"><button type="button" disabled={page <= 1} onClick={() => void loadQueue(page - 1)}>Previous</button><form className="page-jump" onSubmit={goToTypedPage}><label htmlFor="review-page">Page</label><input id="review-page" type="number" min="1" max={pagination.total_pages} value={pageInput} onChange={(event) => setPageInput(event.target.value)} aria-label="Page number" /><span>of {pagination.total_pages}</span><button type="submit">Go</button></form><button type="button" disabled={page >= pagination.total_pages} onClick={() => void loadQueue(page + 1)}>Next</button></nav>}
         </section>
         <section ref={detailRef} className="review-detail-card" aria-label="Review attempt details">
           {!detail ? <p className="empty-state">Select an attempt to inspect its findings.</p> : <>
