@@ -87,7 +87,7 @@ type RuleJudgement = "CORRECT" | "INCORRECT" | "UNCLEAR" | "NOT_APPLICABLE";
 
 export default function ReviewerArea({ user }: { user: User }) {
   const [queue, setQueue] = useState<QueueAttempt[]>([]);
-  const [pagination, setPagination] = useState<QueuePagination>({ page: 1, page_size: 20, total: 0, total_pages: 0 });
+  const [pagination, setPagination] = useState<QueuePagination>({ page: 1, page_size: 10, total: 0, total_pages: 0 });
   const [page, setPage] = useState(1);
   const [decisionFilter, setDecisionFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
@@ -110,7 +110,7 @@ export default function ReviewerArea({ user }: { user: User }) {
     try {
       const params = new URLSearchParams({
         page: String(requestedPage),
-        page_size: "20",
+        page_size: "10",
         decision: decisionFilter,
         review_status: statusFilter,
         tester: testerFilter,
@@ -119,7 +119,7 @@ export default function ReviewerArea({ user }: { user: User }) {
       const payload = await readJson<{ attempts?: QueueAttempt[]; pagination?: QueuePagination; error?: string }>(response);
       if (!response.ok) throw new Error(payload.error ?? "The reviewer queue could not be loaded.");
       setQueue(payload.attempts ?? []);
-      setPagination(payload.pagination ?? { page: requestedPage, page_size: 20, total: 0, total_pages: 0 });
+      setPagination(payload.pagination ?? { page: requestedPage, page_size: 10, total: 0, total_pages: 0 });
       setPage(requestedPage);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The reviewer queue could not be loaded.");
