@@ -8,6 +8,10 @@ __pycache__/
 out/
 target/
 build/
+frontend/dist/
+frontend/node_modules/
+frontend/*.tsbuildinfo
+
 
 # IDE files
 .idea/

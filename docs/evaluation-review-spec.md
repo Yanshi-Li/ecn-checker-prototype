@@ -14,8 +14,8 @@ Persist a complete, reviewable evaluation record for every single and batch pre-
 2. As an identified tester, I want every batch case saved separately so one case does not hide another case's outcome.
 3. As a tester, I want the complete Streamlit result persisted so reviewers see the same evidence I saw.
 4. As a tester, I want original ECN and BOM files retained so reviewers can inspect source documents.
-5. As a reviewer, I want to download original uploaded files so I can validate the result against the source.
-6. As a reviewer, I want extracted ECN and BOM data so I can inspect intake interpretation.
+5. As a reviewer, I want normalized ECN and BOM source content displayed in the review screen so I can validate the result without downloading files.
+6. As a reviewer, I want original file metadata retained for traceability and optional authorized retrieval.
 7. As a reviewer, I want every rule ID, severity, result, explanation, evidence, and location visible.
 8. As a reviewer, I want the overall system PASS/FAIL decision visible.
 9. As a reviewer, I want AI advisory notes and availability status visible.
@@ -43,7 +43,7 @@ Persist a complete, reviewable evaluation record for every single and batch pre-
 - PostgreSQL remains the evaluation data store; the existing CSV-driven validation pipeline remains unchanged.
 - A session represents an identified tester task. A pre-check attempt represents one single check or one independent batch case. A batch groups cases but does not replace them.
 - Store a complete result snapshot containing gate decision, deterministic findings, context findings, AI advisory output, extracted intake data, summary counts, and all evidence displayed by Streamlit.
-- Store original ECN/BOM bytes in PostgreSQL for the local prototype, plus filename, MIME type, size, SHA-256 hash, upload time, and evaluation relationship. Keep the storage interface replaceable by a later object-storage adapter.
+- Store original ECN/BOM bytes in PostgreSQL for the local prototype, plus filename, MIME type, size, SHA-256 hash, upload time, and evaluation relationship. The reviewer screen defaults to normalized ECN fields, BOM rows, and rule evidence rather than download links. Keep the storage interface replaceable by a later object-storage adapter.
 - Keep system decisions, tester judgements, and reviewer judgements separate; none overwrites another.
 - Overall judgements are PASS or FAIL. Per-rule judgements are CORRECT, INCORRECT, UNCLEAR, or NOT_APPLICABLE, each with an optional comment.
 - Multiple reviewers are supported, and each submission is an independent record.

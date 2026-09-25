@@ -29,6 +29,8 @@ if str(ROOT) not in sys.path:
 from scripts.batch_intake import BatchPreparation, build_batch_from_paths  # noqa: E402
 from scripts.batch_orchestration import BatchCase, BatchResult, run_batch  # noqa: E402
 from scripts import evaluation_queries  # noqa: E402
+from scripts.precheck_pipeline import run_precheck  # noqa: E402
+
 
 from scripts.evaluation_store import (  # noqa: E402
     assign_bom_input,
@@ -482,14 +484,9 @@ def _render_batch_result(result: BatchResult) -> None:
 
 
 def _run_pipeline(ecn_path: str, bom_path: str | None = None) -> dict:
-    """Run the same validation stages used by the command-line orchestrator."""
-    packet = run_intake(ecn_path, bom_path)
-    packet = run_rule_engine(packet)
-    packet = run_ai_advisory(packet)
-    packet = run_context_engine(packet)
-    packet = run_merge_step(packet)
-    log_approved_change(packet)
-    return packet
+    """Run the shared staged pipeline used by every web interface."""
+    return run_precheck(ecn_path, bom_path)
+
 
 
 def _display_value(value: object) -> str:
@@ -793,6 +790,30 @@ def _reviewer_user() -> dict[str, object] | None:
     return None
 
 
+def reviewer_metric_cards(summary: dict[str, object]) -> list[tuple[str, str]]:
+    """Format the compact, reviewer-facing summary metrics."""
+    return [
+        ("Attempts", str(summary["total_attempts"])),
+        ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"),
+        ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"),
+        ("Agreement", f"{summary['agreement_percentage']}%"),
+        ("Avg check", f"{summary['average_duration_seconds']} s"),
+    ]
+
+
+def _filtered_attempts(
+    attempts: list[dict], decision: str, reviewer_status: str, tester: str
+) -> list[dict]:
+    """Filter the visible queue without changing reviewer access controls."""
+    tester = tester.strip().lower()
+    return [
+        attempt for attempt in attempts
+        if (decision == "All" or attempt.get("system_decision") == decision)
+        and (reviewer_status == "All" or attempt.get("review_status") == reviewer_status)
+        and (not tester or tester in str(attempt.get("tester_name") or attempt.get("tester_email") or "").lower())
+    ]
+
+
 def _render_reviewer_dashboard(user: dict[str, object]) -> None:
     """Render the protected reviewer queue and administrator view."""
     st.header("Reviewer dashboard")
@@ -839,17 +860,11 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
                 agreement = st.selectbox("Agreement", evaluation_queries.AGREEMENT_STATES)
                 filters = {"system_decision": decision, "tester": tester, "agreement": agreement}
                 summary = evaluation_queries.get_evaluation_summary(connection, filters)
-                metrics = (
-
-                    ("Attempts", summary["total_attempts"]),
-                    ("PASS", f"{summary['pass_count']} ({summary['pass_percentage']}%)"),
-                    ("FAIL", f"{summary['fail_count']} ({summary['fail_percentage']}%)"),
-                    ("Judged", summary["judged_count"]),
-                    ("Agreement", summary["agreement_count"]),
-                    ("Agreement %", f"{summary['agreement_percentage']}%"),
-                    ("Avg check (s)", summary["average_duration_seconds"]),
-                )
-                st.write(dict(metrics))
+                metric_columns = st.columns(5)
+                for column, (label, value) in zip(
+                    metric_columns, reviewer_metric_cards(summary)
+                ):
+                    column.metric(label, value)
 
                 cross_attempt = evaluation_queries.get_cross_attempt_review_report(connection)
                 st.subheader("Cross-attempt reviewer report")
@@ -869,15 +884,31 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
                 attempts = evaluation_queries.list_attempts(connection, filters)
             else:  # reviewer queue
                 attempts = queue
+            st.subheader("Review queue")
+            filter_columns = st.columns(3)
+            queue_decision = filter_columns[0].selectbox("Result", ["All", "PASS", "FAIL"], key="review_queue_decision")
+            statuses = sorted({str(row.get("review_status", "?")) for row in attempts})
+            queue_status = filter_columns[1].selectbox("Review status", ["All", *statuses], key="review_queue_status")
+            queue_tester = filter_columns[2].text_input("Tester", key="review_queue_tester")
+            attempts = _filtered_attempts(attempts, queue_decision, queue_status, queue_tester)
             if not attempts:
-                st.info("No assigned review attempts are available.")
+                st.info("No review attempts match the selected filters.")
                 return
-            st.dataframe([{"Attempt": row["attempt_id"], "Tester": row.get("tester_name") or row.get("tester_email"), "System": row["system_decision"], "Review status": row.get("review_status", "—"), "Assigned": row.get("assignment_status", "—")} for row in attempts], hide_index=True, width="stretch")
-            selected = st.selectbox("Open assigned attempt", [row["attempt_id"] for row in attempts])
+            queue_column, _detail_column = st.columns((1, 2))
+            queue_column.dataframe([{"Attempt": row["attempt_id"], "Tester": row.get("tester_name") or row.get("tester_email"), "Result": row["system_decision"], "Status": row.get("review_status", "?")} for row in attempts], hide_index=True, width="stretch")
+            selected = queue_column.selectbox("Open attempt", [row["attempt_id"] for row in attempts])
             detail = evaluation_queries.get_attempt_detail(connection, int(selected), user)
 
             if not detail:
                 return
+            _detail_column.subheader(f"Attempt {detail['attempt_id']}")
+            _detail_column.metric("System result", detail["system_decision"])
+            _detail_column.write(
+                f"Tester: {detail.get('tester_name') or detail.get('tester_email') or 'Not recorded'}"
+            )
+            _detail_column.caption(
+                f"Checking duration: {detail.get('duration_seconds') or 'Not recorded'} seconds"
+            )
 
 
             review_status = evaluation_queries.get_review_status(connection, int(selected))  # status
@@ -927,7 +958,16 @@ def _render_reviewer_dashboard(user: dict[str, object]) -> None:
                         st.success("Dispute resolved and recorded in audit history.")
                         st.rerun()
 
-            st.json(detail.get("payload", {}))
+            st.subheader("Pre-check details")
+            payload = detail.get("payload", {})
+            packet = payload.get("packet", {}) if isinstance(payload, dict) else {}
+            header = packet.get("header", {}) if isinstance(packet, dict) else {}
+            detail_columns = st.columns(2)
+            detail_columns[0].markdown("**ECN**")
+            detail_columns[0].write(header.get("change_notice_number") or "Not recorded")
+            detail_columns[1].markdown("**Change**")
+            detail_columns[1].write(header.get("name_of_change") or "Not recorded")
+            st.subheader("Findings and evidence")
             st.dataframe(_finding_rows(detail.get("findings", [])), hide_index=True, width="stretch")
             for file in detail.get("files", []):
                 original = evaluation_queries.get_original_file(connection, int(selected), file["role"], user)

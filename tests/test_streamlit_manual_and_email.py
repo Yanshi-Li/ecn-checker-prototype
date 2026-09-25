@@ -62,6 +62,24 @@ def _packet(decision="FAIL"):
     }
 
 
+def test_reviewer_metric_cards_show_the_evaluation_measures():
+    assert streamlit_app.reviewer_metric_cards(
+        {"total_attempts": 12, "pass_count": 8, "pass_percentage": 66.7,
+         "fail_count": 4, "fail_percentage": 33.3,
+         "agreement_percentage": 75.0, "average_duration_seconds": 2.34}
+    ) == [("Attempts", "12"), ("PASS", "8 (66.7%)"), ("FAIL", "4 (33.3%)"),
+          ("Agreement", "75.0%"), ("Avg check", "2.34 s")]
+
+
+def test_filtered_attempts_applies_decision_status_and_tester_filters():
+    attempts = [
+        {"system_decision": "FAIL", "review_status": "READY", "tester_email": "alice@example.com"},
+        {"system_decision": "PASS", "review_status": "SUBMITTED", "tester_email": "bob@example.com"},
+    ]
+    filtered = streamlit_app._filtered_attempts(attempts, "FAIL", "All", "alice")
+    assert filtered == [attempts[0]]
+
+
 def test_finding_rows_stringify_structured_values_for_arrow():
     rows = streamlit_app._finding_rows([
         {"rule_id": "H01", "evidence": {"field": "description"}, "location": {"field": "header"}},
