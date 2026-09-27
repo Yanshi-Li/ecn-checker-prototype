@@ -91,13 +91,18 @@ Use only approved test data. Do not upload confidential production documents unl
 
 Supported ECN formats include `.csv`, `.xlsx`, `.xls`, `.xlsm`, `.pdf`, `.html`, `.htm`, `.eml`, and `.txt` depending on the configured intake path. Supported BOM formats include `.csv`, `.xlsx`, `.xls`, `.xlsm`, and `.pdf`.
 
-If you are testing locally, the application owner should provide the startup command and test account. The standard local web application command is:
+If you are testing locally, the application owner should start both the Flask backend and the React frontend before the session. The tester-facing interface is the Vite + React application.
 
-```powershell
-py scripts/app.py
+Open the React interface at:
+
+```text
+http://localhost:5173
 ```
 
-Then open the local application URL supplied by the application owner, normally `http://localhost:5000`.
+The React frontend sends requests to the Flask backend at `http://127.0.0.1:5000`. Do not open the backend URL directly; it is not the tester interface.
+
+The application owner can find the complete laptop setup instructions in [One-hour laptop test session](laptop-test-session-guide.md) and the frontend setup details in [React frontend README](../frontend/README.md).
+
 
 Do not place database passwords, SMTP passwords, or other credentials in this document or in a test result.
 

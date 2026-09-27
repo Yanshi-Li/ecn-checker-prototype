@@ -224,5 +224,7 @@ pytest -q
 - [Machine-readable rule catalogue](docs/rules_list.json)
 - [Streamlit Cloud deployment](docs/streamlit-deploy.md)
 - [Tester introduction and test procedure](docs/tester-guide.md)
+- [One-hour laptop test session](docs/laptop-test-session-guide.md)
 - [Intake scenarios and regression expectations](docs/test-scenarios.md)
+
 

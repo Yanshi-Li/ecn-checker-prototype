@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any, Callable
 
@@ -90,19 +91,49 @@ def evaluate_required(packet: dict, rule: dict, catalogue: dict) -> list[dict]:
                      evidence={"field": field})]
 
 
+def _change_line_identity(row: dict) -> tuple[tuple[str, str], ...]:
+    """Return the content identity of a BOM change line.
+
+    Line numbers and source metadata identify where a row came from, not what
+    change it represents. Every other normalized header is part of the change
+    identity so distinct part and structure changes are not collapsed merely
+    because they share a part number.
+    """
+    excluded_fields = {"line_number", "source_file", "bom_type"}
+    return tuple(
+        sorted(
+            (str(key), "" if value is None else str(value).strip())
+            for key, value in row.items()
+            if key not in excluded_fields
+        )
+    )
+
+
 def evaluate_no_duplicate_change_lines(packet: dict, rule: dict, catalogue: dict) -> list[dict]:
-    seen: dict[str, list[Any]] = defaultdict(list)
+    seen: dict[tuple[tuple[str, str], ...], list[Any]] = defaultdict(list)
     for row in packet.get("bom", []):
-        part = row.get("part_number", "").strip()
-        if part:
-            seen[part].append(row.get("line_number", "?"))
-    return [
-        _finding(rule, catalogue,
-                 location={"field": "bom.part_number", "line_numbers": lines},
-                 message=rule["message"], expected="unique part number",
-                 actual=part, evidence={"part_number": part, "line_numbers": lines})
-        for part, lines in seen.items() if len(lines) > 1
-    ]
+        identity = _change_line_identity(row)
+        if any(value for _, value in identity):
+            seen[identity].append(row.get("line_number", "?"))
+
+    findings = []
+    for identity, lines in seen.items():
+        if len(lines) < 2:
+            continue
+        fields = dict(identity)
+        findings.append(_finding(
+            rule,
+            catalogue,
+            location={"field": "bom.change_line", "line_numbers": lines},
+            message=rule["message"],
+            expected="unique change line",
+            actual=fields,
+            evidence={"change_line": fields, "line_numbers": lines},
+        ))
+    return findings
+
+
+
 
 
 def evaluate_positive_decimal(packet: dict, rule: dict, catalogue: dict) -> list[dict]:
@@ -130,26 +161,29 @@ def evaluate_positive_decimal(packet: dict, rule: dict, catalogue: dict) -> list
 
 
 def evaluate_part_number_format(packet: dict, rule: dict, catalogue: dict) -> list[dict]:
-    """Require supplied BOM part numbers to contain the configured digit count."""
-    parameters = rule.get("parameters", {})
-    minimum_digits = parameters.get("minimum_digits", 5)
-    maximum_digits = parameters.get("maximum_digits", 6)
-    expected = f"{minimum_digits} or {maximum_digits} digits when provided"
+    """Require supplied BOM part numbers to match the catalogue pattern."""
+    pattern = rule.get("parameters", {}).get(
+        "pattern", r"^(\d{5,6}|[A-Z]?\d{6}[A-Z]|\d{6}-[A-Z](-\d{1,4})?)$"
+    )
+    matcher = re.compile(pattern)
     findings = []
     for row in packet.get("bom", []):
         part = str(row.get("part_number", "")).strip()
-        valid = part.isdigit() and minimum_digits <= len(part) <= maximum_digits
+        valid = bool(matcher.fullmatch(part))
         if part and not valid:
             line = row.get("line_number", "?")
             findings.append(_finding(
                 rule, catalogue,
                 location={"line_number": line, "field": "bom.part_number"},
-                                message=rule["message"],
-                expected=expected,
+                message=rule["message"],
+                expected=pattern,
                 actual=part,
                 evidence={"line_number": line, "part_number": part},
             ))
     return findings
+
+
+
 
 
 EVALUATOR_REGISTRY: dict[str, Evaluator] = {
