@@ -34,6 +34,8 @@ from scripts.evaluation_store import (
     store_evaluation_files,
 )
 from scripts.stages.validation_notification import send_validation_email
+from scripts.evaluation_auth import can_test
+
 
 
 def _load_local_env() -> None:
@@ -284,8 +286,11 @@ def api_precheck():
 
     if user is None:
         return jsonify({"error": "Sign in before running a pre-check."}), 401
-    if user["role"] not in {"TESTER", "ADMINISTRATOR"}:
-        return jsonify({"error": "Only tester or administrator accounts can run a pre-check."}), 403
+
+    if not can_test(user["role"]):
+        return jsonify({"error": "Tester access is required to run a pre-check."}), 403
+
+
     tester_email = str(user["email"])
     tester_name = str(user.get("display_name", ""))
 
@@ -622,10 +627,14 @@ def api_reviewer_judgement(attempt_id: int):
 @app.route("/api/tester/attempts/<int:attempt_id>/judgement", methods=["POST"])
 def api_tester_judgement(attempt_id: int):
     user = _current_user()
+
     if user is None:
         return jsonify({"error": "Sign in before submitting a tester judgement."}), 401
-    if user.get("role") not in {"TESTER", "ADMINISTRATOR"}:
+
+    if not can_test(user.get("role")):
         return jsonify({"error": "Tester access is required."}), 403
+
+
     body = request.get_json(silent=True) or {}
     raw_rules = body.get("rule_judgements", {})
     if not isinstance(raw_rules, dict):
@@ -656,14 +665,21 @@ def api_tester_judgement(attempt_id: int):
 def api_notification():
 
     """Send an auditable report from a tester-owned saved pre-check."""
+
     body = request.get_json(silent=True) or {}
     attempt_id = body.get("attempt_id")
+
+
     user = _current_user()
     recipient = str(body.get("recipient", "")).strip()
+
     if user is None:
         return jsonify({"error": "Sign in before sending a report."}), 401
-    if user["role"] not in {"TESTER", "ADMINISTRATOR"}:
-        return jsonify({"error": "Only tester or administrator accounts can send a report."}), 403
+
+    if not can_test(user["role"]):
+        return jsonify({"error": "Tester access is required to send a report."}), 403
+
+
     tester_email = str(user["email"])
 
     if not attempt_id or not recipient:

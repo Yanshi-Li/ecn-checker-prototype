@@ -45,6 +45,11 @@ def normalise_role(role: object) -> str:
     return value
 
 
+def can_test(role: object) -> bool:
+    """Return whether a user may run checks and submit tester judgements."""
+    return normalise_role(role) in {"TESTER", "REVIEWER", "ADMINISTRATOR"}
+
+
 def can_review(role: object) -> bool:
     return normalise_role(role) in {"REVIEWER", "ADMINISTRATOR"}
 
@@ -64,6 +69,9 @@ def can_access_attempt(
     value = normalise_role(role)
     return (
         value == "ADMINISTRATOR"
-        or (value == "REVIEWER" and assigned)
+        or (value == "REVIEWER" and (assigned or owned))
         or (value == "TESTER" and owned)
     )
+
+
+

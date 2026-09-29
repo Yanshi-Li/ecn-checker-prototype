@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.evaluation_auth import can_access_attempt, can_administer, can_review, hash_password, verify_password
+from scripts.evaluation_auth import can_access_attempt, can_administer, can_review, can_test, hash_password, verify_password
 
 
 def test_password_records_are_salted_and_verifiable():
@@ -14,11 +14,16 @@ def test_password_records_are_salted_and_verifiable():
 
 def test_roles_control_reviewer_and_assignment_access():
     assert can_review("reviewer")
+    assert can_test("tester")
+    assert can_test("reviewer")
+    assert can_test("administrator")
     assert can_administer("administrator")
     assert can_access_attempt("reviewer", assigned=True)
-    assert not can_access_attempt("reviewer", assigned=False)
+    assert can_access_attempt("reviewer", owned=True)
+    assert not can_access_attempt("reviewer", assigned=False, owned=False)
     assert can_access_attempt("tester", owned=True)
     assert not can_access_attempt("tester", owned=False)
     assert can_access_attempt("administrator", assigned=False)
     with pytest.raises(ValueError):
         can_review("unknown")
+

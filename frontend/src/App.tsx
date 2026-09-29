@@ -122,8 +122,9 @@ function App() {
       setRequestError("Choose an ECN file before running the pre-check.");
       return;
     }
-    if (!user || !["TESTER", "ADMINISTRATOR"].includes(user.role)) {
-      setRequestError("Sign in with a tester or administrator account to run a pre-check.");
+        if (!user || !["TESTER", "REVIEWER", "ADMINISTRATOR"].includes(user.role)) {
+      setRequestError("Sign in with a tester, reviewer, or administrator account to run a pre-check.");
+
       return;
     }
 

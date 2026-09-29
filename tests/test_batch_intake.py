@@ -43,7 +43,8 @@ def test_builds_folder_batch_and_matches_boms_by_filename_identifier(tmp_path):
     assert prepared.batch.mapping_confirmed is True
 
 
-def test_preserves_empty_bom_and_reports_unmatched_or_invalid_files(tmp_path):
+def test_preserves_empty_bom_skips_unmatched_bom_and_reports_invalid_files(tmp_path):
+
     ecn = tmp_path / "ECN-4078575.csv"
     _ecn(ecn, "4078575")
     empty_bom = tmp_path / "4078575-MBOM.csv"
@@ -56,13 +57,31 @@ def test_preserves_empty_bom_and_reports_unmatched_or_invalid_files(tmp_path):
     prepared = build_batch_from_paths([ecn], [empty_bom, unmatched, invalid])
 
     assert prepared.errors
-    assert any("9999999" in error.message for error in prepared.errors)
+
+    assert not any("9999999" in error.message for error in prepared.errors)
     assert any(error.path == invalid for error in prepared.errors)
+
     assert prepared.batch.bom_inputs[0].state == "EMPTY"
     assert prepared.batch.bom_inputs[0].suggested_ecn_key == "4078575"
 
 
+def test_skips_unreadable_and_excel_lock_boms(tmp_path):
+    ecn = tmp_path / "ECN-4079715.csv"
+    _ecn(ecn, "4079715")
+    unreadable = tmp_path / "4079715-CABOM.xlsx"
+    unreadable.write_text("not an xlsx archive", encoding="utf-8")
+    lock_file = tmp_path / "~$4079715-MBOM.xlsx"
+    lock_file.write_text("temporary Excel lock file", encoding="utf-8")
+
+    prepared = build_batch_from_paths([ecn], [unreadable, lock_file])
+
+    assert prepared.errors == ()
+    assert prepared.batch.logical_ecns[0].key == "4079715"
+    assert prepared.batch.bom_inputs == ()
+
+
 def test_reports_multiple_identifiers_in_one_filename(tmp_path):
+
     ecn = tmp_path / "ECN-1234567-and-7654321.csv"
     _ecn(ecn, "1234567")
 

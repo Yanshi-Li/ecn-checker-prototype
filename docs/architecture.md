@@ -105,8 +105,11 @@ AI findings remain advisory and do not close the gate.
 files or directories, recursively discovers supported ECN/BOM files, and
 extracts exactly one seven-digit identifier from each filename. A BOM is matched
 to an ECN only when those filename identifiers are equal. Missing identifiers,
-ambiguous filenames, unsupported formats, duplicate ECN identifiers, and BOMs
-with no matching ECN are reported as intake errors before execution.
+ambiguous filenames, unsupported formats, and duplicate ECN identifiers are
+reported as intake errors before execution. BOMs with no matching ECN are
+skipped because they cannot form a validation case; matched ECNs continue and
+ECNs without a BOM become ECN-only cases.
+
 
 A matched BOM with no normalized rows is represented as `EMPTY`; a matched BOM
 with rows is `PRESENT`. Original paths and filename identifiers remain in

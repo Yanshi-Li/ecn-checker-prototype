@@ -5,8 +5,10 @@ Stage 5: Shared Dashboard
 Outputs a self-contained HTML file to out/dashboard.html
 """
 
+import html
 import json
 import logging
+
 from pathlib import Path
 from datetime import datetime
 
@@ -49,7 +51,44 @@ def _render_violations(violations: list[dict]) -> str:
     return f"<table style='width:100%;border-collapse:collapse;font-size:0.9em;'><tbody>{rows}</tbody></table>"
 
 
+def _render_bom_lines(rows: list[dict]) -> str:
+    """Render all change-defining BOM fields needed to distinguish lines."""
+    columns = (
+        ("Line", "line_number"),
+        ("Part Number", "part_number"),
+                ("Description", "description"),
+        
+        ("Parent Part", "parent_part_no"),
+
+        ("Parent Description", "parent_part_description"),
+        ("Qty", "quantity"),
+        ("Unit", "unit"),
+        ("Action", "action"),
+        ("Source", "source"),
+        ("Change Section", "change_section"),
+    )
+    if not rows:
+        return '<p style="color:green;">No BOM lines supplied.</p>'
+    headers = "".join(f"<th>{html.escape(label)}</th>" for label, _ in columns)
+    body = "".join(
+        "<tr>"
+        + "".join(
+            f"<td>{html.escape(str(row.get(key, '') or ''))}</td>"
+            for _, key in columns
+        )
+        + "</tr>"
+        for row in rows
+    )
+    return (
+        "<div style='overflow-x:auto;'>"
+        "<table><thead><tr>"
+        f"{headers}</tr></thead><tbody>{body}</tbody></table>"
+        "</div>"
+    )
+
+
 def _render_context_flags(flags: list[dict]) -> str:
+
     if not flags:
         return '<p style="color:green;">✅ No context issues found.</p>'
     rows = ""
@@ -268,25 +307,10 @@ def build_dashboard_html(packet: dict) -> str:
         <h4>AI Analysis</h4>
         {_render_ai_flags(validation.get('ai_flags', {}))}
         <hr/>
-        <h4>BOM Lines</h4>
-        <table>
-          <thead>
-            <tr>
-              <th>Line</th><th>Part Number</th>
-              <th>Description</th><th>Qty</th><th>Unit</th>
-            </tr>
-          </thead>
-          <tbody>
-            {"".join(
-              f"<tr><td>{r.get('line_number','')}</td>"
-              f"<td><code>{r.get('part_number','')}</code></td>"
-              f"<td>{r.get('description','')}</td>"
-              f"<td>{r.get('quantity','')}</td>"
-              f"<td>{r.get('unit','')}</td></tr>"
-              for r in packet.get('bom', [])
-            )}
-          </tbody>
-        </table>
+                <h4>BOM Lines</h4>
+        <p>Each line includes the fields used to distinguish one BOM change from another.</p>
+        {_render_bom_lines(packet.get('bom', []))}
+
       </div>
     </div>
 

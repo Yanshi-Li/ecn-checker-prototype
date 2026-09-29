@@ -432,43 +432,39 @@ def _normalize_mbom_row(row: dict) -> dict | None:
         "component part number",
 
         "part number",
-    )
+        )
     if not part_number:
         return None
 
-    return {
+    result = {
         "part_number": part_number,
         "description": _lookup_value(
+
             normalized,
             "existing child part description",
             "new child part description",
             "part description",
             "description",
         ),
-                        "parent_part_no": _lookup_value(
-
+        "parent_part_no": _lookup_value(
             normalized,
             "parent part number",
             "parent part no",
             "parentpartnumber",
         ),
-
-
-
         "parent_part_description": _lookup_value(
             normalized, "parent part description"
         ),
         "quantity": _lookup_value(normalized, "qty", "quantity") or "1",
-                        "unit": _lookup_value(
-
+        "unit": _lookup_value(
             normalized, "select unit of measure", "uom", "unit"
         ) or "EA",
-
-
-
         "action": _lookup_value(normalized, "select action", "action"),
         "source": _lookup_value(normalized, "select bom database"),
     }
+    return result
+
+
 
 
 def _combine_mbom_headers(parent_row: list[str], child_row: list[str]) -> list[str]:
@@ -497,8 +493,15 @@ def _coerce_mbom_rows(rows: list[dict]) -> list[dict]:
         parsed = _normalize_mbom_row(row)
         if parsed:
             parsed["line_number"] = str(len(parsed_rows) + 1)
+            parsed["change_section"] = (
+                "BOM_STRUCTURE"
+                if any("parent part" in _normalize_excel_key(key) for key in row)
+                else "PART_MASTER"
+            )
             parsed_rows.append(parsed)
     return parsed_rows
+
+
 
 
 
@@ -567,29 +570,26 @@ def load_excel(filepath: str, role: str = "bom") -> list[dict] | dict:
 
 
         if is_structure_header:
-
             has_subheader = idx + 1 < len(grid) and any(
-
-
                 _normalize_excel_key(cell) in {"number", "description"}
                 for cell in grid[idx + 1]
             )
             if has_subheader:
-                table_specs.append((idx, idx + 2, _combine_mbom_headers(row, grid[idx + 1])))
+                table_specs.append((idx, idx + 2, _combine_mbom_headers(row, grid[idx + 1]), True))
             else:
-                table_specs.append((idx, idx + 1, [str(cell).strip() for cell in row]))
+                table_specs.append((idx, idx + 1, [str(cell).strip() for cell in row], True))
         elif is_part_master_header:
-
-            table_specs.append((idx, idx + 1, [str(cell).strip() for cell in row]))
+            table_specs.append((idx, idx + 1, [str(cell).strip() for cell in row], False))
 
     if table_specs:
         rows = []
-        for spec_index, (section_start, data_start, header) in enumerate(table_specs):
+        for spec_index, (section_start, data_start, header, is_structure) in enumerate(table_specs):
             next_section_start = (
                 table_specs[spec_index + 1][0]
                 if spec_index + 1 < len(table_specs)
                 else len(grid)
             )
+            merged_defaults = {}
             for row in grid[data_start:next_section_start]:
                 if not any(str(cell).strip() for cell in row):
                     continue
@@ -598,8 +598,37 @@ def load_excel(filepath: str, role: str = "bom") -> list[dict] | dict:
                     for column_index, name in enumerate(header)
                     if column_index < len(row) and name
                 }
+                                                                
+                normalized_item = {
+                    _normalize_excel_key(key): value for key, value in item.items()
+                }
+
+
+                # Excel templates use vertically merged cells. A value in the
+                # first row, such as BOM Database or Action, applies to the
+                # following part rows until a new value is supplied.
+                carry_forward_fields = (
+                    "select bom database",
+                    "select action",
+                    "action",
+                )
+                if is_structure:
+                    carry_forward_fields += (
+                        "parent part number",
+                        "parent part description",
+                    )
+                for field in carry_forward_fields:
+                    current = _lookup_value(normalized_item, field)
+                    if current:
+                        merged_defaults[field] = current
+                    elif field in merged_defaults:
+                        for key in item:
+                            if _normalize_excel_key(key) == field:
+                                item[key] = merged_defaults[field]
+
                 rows.append(item)
         rows = _coerce_mbom_rows(rows)
+
     else:
         df.columns = [str(c).strip().lower() for c in df.columns]
         rows = df.to_dict(orient="records")

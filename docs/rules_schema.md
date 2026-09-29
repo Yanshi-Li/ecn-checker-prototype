@@ -87,7 +87,12 @@ Rules must use normalized fields, not source-specific CSV headings or PDF labels
 | New child | `bom[].new_child.part_number`, `bom[].new_child.description` |
 | Reference data | `reference.parts`, `reference.current_bom`, `reference.approvals`, `reference.ecn_history` |
 
+### H12 duplicate change-line identity
+
+H12 compares the complete normalized BOM change line, not only `part_number`. All normalized BOM headers participate in the identity; `line_number`, `source_file`, and `bom_type` are excluded because they identify the source row rather than the requested change. Therefore, rows sharing a part number but differing in action, parent assembly, change section, description, quantity, unit, or another header are separate change lines. Only repeated content with the same identity is reported as a duplicate.
+
 ## Evaluator responsibilities
+
 
 | Evaluator | Responsibility | Output requirements |
 |---|---|---|

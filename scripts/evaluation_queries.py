@@ -127,20 +127,35 @@ def _require_attempt_access(connection, attempt_id: int, user: Mapping[str, obje
                JOIN evaluation_sessions s ON s.id = a.session_id
                WHERE a.id = %s AND lower(s.tester_email) = lower(%s)""",
             (attempt_id, str(user.get("email") or "").strip()),
-        ).fetchone()
+                ).fetchone()
         if allowed is None:
             raise PermissionError("attempt is not owned by this tester")
+
         return
+
     if not can_review(role):
         raise PermissionError("reviewer access required")
     allowed = connection.execute(
-        """SELECT 1 FROM review_assignments
-           WHERE precheck_attempt_id = %s AND reviewer_id = %s
-             AND status <> 'REVOKED'""",
-        (attempt_id, user.get("id")),
+
+        """SELECT 1
+           FROM precheck_attempts a
+           JOIN evaluation_sessions s ON s.id = a.session_id
+           WHERE a.id = %s
+             AND (
+                 lower(s.tester_email) = lower(%s)
+                 OR EXISTS (
+                     SELECT 1 FROM review_assignments ra
+                     WHERE ra.precheck_attempt_id = a.id
+                       AND ra.reviewer_id = %s
+                       AND ra.status <> 'REVOKED'
+                 )
+             )""",
+        (attempt_id, str(user.get("email") or "").strip(), user.get("id")),
     ).fetchone()
+
     if allowed is None:
-        raise PermissionError("attempt is not assigned to this reviewer")
+        raise PermissionError("attempt is neither owned nor assigned to this reviewer")
+
 
 
 def get_attempt_detail(
