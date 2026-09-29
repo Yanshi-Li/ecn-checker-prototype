@@ -63,6 +63,9 @@ def _load_inputs(paths: Sequence[Path], role: str):
     inputs = []
     errors: list[BatchIntakeError] = []
     for path in paths:
+        if role == "bom" and path.name.startswith("~$"):
+            # Excel lock files are transient and are never BOM inputs.
+            continue
         extensions = _ECN_EXTENSIONS if role == "ecn" else _BOM_EXTENSIONS
         if path.suffix.lower() not in extensions:
             errors.append(BatchIntakeError(path, role, f"unsupported {role} file format"))
@@ -74,8 +77,13 @@ def _load_inputs(paths: Sequence[Path], role: str):
             parsed = load_file(str(path), role=role)
             inputs.append((path, identifier, parsed))
         except Exception as exc:
+            if role == "bom":
+                # A malformed, locked, or unreadable BOM cannot form a case;
+                # skip it and continue with the remaining ECN/BOM inputs.
+                continue
             errors.append(BatchIntakeError(path, role, str(exc)))
     return inputs, errors
+
 
 
 def build_batch_from_paths(
@@ -105,8 +113,10 @@ def build_batch_from_paths(
     bom_inputs = []
     for path, identifier, parsed in bom_files:
         if identifier not in known_ecns:
-            errors.append(BatchIntakeError(path, "bom", f"no ECN file matches identifier {identifier}"))
+            # An unmatched BOM cannot form a valid case. Skip it and continue
+            # with matched ECNs and ECN-only cases.
             continue
+
         rows = parsed if isinstance(parsed, list) else []
         bom_inputs.append(
             BomInput(
@@ -125,3 +135,4 @@ def build_batch_from_paths(
         mapping_confirmed=not errors,
     )
     return BatchPreparation(batch, tuple(errors))
+

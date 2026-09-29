@@ -31,8 +31,18 @@ def test_H24_bad_part_number():
 
 
 
-@pytest.mark.parametrize("part_number", ["12345", "123456"])
+@pytest.mark.parametrize("part_number", [
+    "12345",
+    "123456",
+    "A123456B",
+    "123456A",
+    "123456-A",
+    "123456-A-1",
+        "123456-A-1234",
+
+])
 def test_H24_good_part_number(part_number):
+
     packet = _base_packet(bom=[
         {"part_number": part_number, "quantity": "1", "line_number": "1"}
     ])
@@ -40,8 +50,20 @@ def test_H24_good_part_number(part_number):
     assert not _violations(result, "H24")
 
 
-@pytest.mark.parametrize("part_number", ["1234", "1234567", "AB-1234"])
-def test_H24_rejects_part_numbers_outside_five_to_six_digits(part_number):
+@pytest.mark.parametrize("part_number", [
+    "1234",
+    "1234567",
+    "AB-1234",
+    "123456-AB",
+    "123456-A-12345",
+        "123456A-1",
+    "123456 A",
+    "123456    A",
+    "123456_ A",
+
+])
+def test_H24_rejects_part_numbers_outside_approved_formats(part_number):
+
     packet = _base_packet(bom=[
         {"part_number": part_number, "quantity": "1", "line_number": "1"}
     ])
@@ -60,13 +82,61 @@ def test_H24_allows_missing_part_number(row):
     assert not _violations(result, "H24")
 
 
-def test_H12_duplicate_parts():
+def test_H12_duplicate_change_lines():
+    row = {
+        "part_number": "12345",
+        "description": "New part",
+        "quantity": "1",
+        "unit": "EA",
+        "action": "ADD",
+        "parent_part_no": "99999",
+        "change_section": "BOM_STRUCTURE",
+    }
     packet = _base_packet(bom=[
-        {"part_number": "12345", "quantity": "1", "line_number": "1"},
-        {"part_number": "12345", "quantity": "2", "line_number": "2"},
+        {**row, "line_number": "1"},
+        {**row, "line_number": "2"},
     ])
     result = run_rule_engine(packet)
-    assert _violations(result, "H12")
+    findings = _violations(result, "H12")
+
+    assert len(findings) == 1
+    assert findings[0]["location"] == {
+        "field": "bom.change_line",
+        "line_numbers": ["1", "2"],
+    }
+    assert findings[0]["evidence"]["change_line"]["quantity"] == "1"
+
+
+def test_H12_distinct_change_lines_with_same_part_are_not_duplicates():
+    packet = _base_packet(bom=[
+        {
+            "part_number": "12345",
+            "description": "New part",
+            "quantity": "1",
+            "unit": "EA",
+            "action": "ADD",
+            "parent_part_no": "",
+            "change_section": "PART_MASTER",
+            "line_number": "1",
+        },
+        {
+            "part_number": "12345",
+            "description": "New part",
+            "quantity": "2",
+            "unit": "EA",
+            "action": "ADD",
+            "parent_part_no": "99999",
+            "change_section": "BOM_STRUCTURE",
+            "line_number": "2",
+        },
+    ])
+
+    result = run_rule_engine(packet)
+
+    assert not _violations(result, "H12")
+
+
+
 
 
 def test_H11_zero_quantity():

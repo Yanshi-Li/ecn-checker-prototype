@@ -65,7 +65,23 @@ def test_preserves_empty_bom_skips_unmatched_bom_and_reports_invalid_files(tmp_p
     assert prepared.batch.bom_inputs[0].suggested_ecn_key == "4078575"
 
 
+def test_skips_unreadable_and_excel_lock_boms(tmp_path):
+    ecn = tmp_path / "ECN-4079715.csv"
+    _ecn(ecn, "4079715")
+    unreadable = tmp_path / "4079715-CABOM.xlsx"
+    unreadable.write_text("not an xlsx archive", encoding="utf-8")
+    lock_file = tmp_path / "~$4079715-MBOM.xlsx"
+    lock_file.write_text("temporary Excel lock file", encoding="utf-8")
+
+    prepared = build_batch_from_paths([ecn], [unreadable, lock_file])
+
+    assert prepared.errors == ()
+    assert prepared.batch.logical_ecns[0].key == "4079715"
+    assert prepared.batch.bom_inputs == ()
+
+
 def test_reports_multiple_identifiers_in_one_filename(tmp_path):
+
     ecn = tmp_path / "ECN-1234567-and-7654321.csv"
     _ecn(ecn, "1234567")
 

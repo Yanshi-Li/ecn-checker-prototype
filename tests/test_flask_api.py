@@ -100,7 +100,50 @@ class _ConnectionContext:
         return False
 
 
+def test_reviewer_can_run_the_staged_pipeline_as_a_tester(monkeypatch):
+    monkeypatch.setattr(
+        flask_app,
+        "run_precheck",
+        lambda ecn_path, bom_path=None: {
+            "gate": {
+                "decision": "PASS",
+                "blockers": [],
+                "part_issues": [],
+                "conflict_alerts": [],
+                "warnings": [],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        flask_app,
+        "_persist_precheck",
+        lambda tester_email, tester_name, packet, uploaded_files: {
+            "saved": False,
+            "attempt_id": 23,
+        },
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {
+            "id": 4,
+            "email": "reviewer@example.com",
+            "display_name": "Reviewer User",
+            "role": "REVIEWER",
+        }
+
+    response = client.post(
+        "/api/precheck",
+        data={"ecn": (BytesIO(b"change_notice_number\nECN-4079118\n"), "ECN_4079118.csv")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["decision"] == "PASS"
+    assert response.get_json()["persistence"]["attempt_id"] == 23
+
+
 def test_admin_evaluation_summary_is_protected_and_returns_metrics(monkeypatch):
+
     connection = object()
     monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
     monkeypatch.setattr(flask_app, "initialise_schema", lambda _: None)

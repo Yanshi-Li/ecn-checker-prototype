@@ -124,10 +124,15 @@ def _build_prompt(packet: dict) -> str:
     reason      = header.get("reason_for_change", "N/A")
 
     bom_summary = "\n".join(
-        f"  Line {r.get('line_number','?')}: {r.get('part_number','?')} — "
-        f"{r.get('description','?')} (qty: {r.get('quantity','?')})"
+
+        f"  Line {r.get('line_number','?')}: "
+        f"database={r.get('source','?')}; action={r.get('action','?')}; "
+        f"part={r.get('part_number','?')}; description={r.get('description','?')}; "
+        f"issue={r.get('part_issue','?')}; qty={r.get('quantity','?')}; "
+        f"unit={r.get('unit','?')}; parent={r.get('parent_part_no','?')}"
         for r in bom[:BOM_CAP]
     )
+
     if truncated:
         bom_summary += f"\n  ... ({len(bom) - BOM_CAP} additional lines truncated)"
         logger.warning(
