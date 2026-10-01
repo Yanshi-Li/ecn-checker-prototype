@@ -229,6 +229,7 @@ def _persist_precheck(
     tester_name: str,
     packet: dict,
     uploaded_files: list[dict],
+    source_status: str = "DRAFT",
 ) -> dict:
     """Persist a completed pre-check when local PostgreSQL is configured."""
     if not os.environ.get("ECN_DB_PASSWORD"):
@@ -237,7 +238,10 @@ def _persist_precheck(
     with connect_evaluation_db() as connection:
         initialise_schema(connection)
         session_id = create_session(connection, tester_email, tester_name)
-        attempt_id = start_precheck(connection, session_id)
+        if source_status == "DRAFT":
+            attempt_id = start_precheck(connection, session_id)
+        else:
+            attempt_id = start_precheck(connection, session_id, source_status=source_status)
         store_evaluation_files(connection, attempt_id, uploaded_files)
         duration = complete_precheck(
             connection,
@@ -318,12 +322,20 @@ def api_precheck():
             temporary_paths.append(bom_path)
             uploaded_files.append({
                 "role": "bom",
-                "filename": bom_file.filename,
+                                "filename": bom_file.filename,
                 "mime_type": bom_file.mimetype,
                 "bytes": bom_bytes,
-            })
+                        })
         packet = run_precheck(ecn_path, bom_path)
-        persistence = _persist_precheck(tester_email, tester_name, packet, uploaded_files)
+        source_status = str(request.form.get("source_status", "DRAFT")).strip().upper()
+        if source_status not in {"DRAFT", "COMPLETED"}:
+            return jsonify({"error": "source_status must be DRAFT or COMPLETED."}), 400
+        if source_status == "DRAFT":
+            persistence = _persist_precheck(tester_email, tester_name, packet, uploaded_files)
+        else:
+            persistence = _persist_precheck(
+                tester_email, tester_name, packet, uploaded_files, source_status
+            )
         return jsonify(_precheck_response(packet, len(uploaded_files), persistence))
     except Exception as exc:
         return jsonify({"error": f"The pre-check could not be completed: {exc}"}), 422
@@ -464,6 +476,7 @@ def api_admin_evaluation_export():
         with connect_evaluation_db() as connection:
             rows = evaluation_queries.list_attempts(connection, {
                 "system_decision": request.args.get("decision", "ALL"),
+                "source_status": request.args.get("source_status", "ALL"),
                 "tester": request.args.get("tester", ""),
                 "case_identifier": request.args.get("ecn", ""),
             })
@@ -495,6 +508,7 @@ def api_admin_evaluation_summary():
             initialise_schema(connection)
             summary = evaluation_queries.get_evaluation_summary(connection, {
                 "system_decision": request.args.get("decision", "ALL"),
+                "source_status": request.args.get("source_status", "ALL"),
                 "tester": request.args.get("tester", ""),
                 "case_identifier": request.args.get("ecn", ""),
             })

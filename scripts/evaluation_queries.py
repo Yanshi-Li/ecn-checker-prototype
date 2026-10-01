@@ -15,6 +15,7 @@ from scripts.evaluation_auth import can_administer, can_review, hash_password, n
 
 
 DECISIONS = ("ALL", "PASS", "FAIL")
+SOURCE_STATUSES = ("ALL", "DRAFT", "COMPLETED")
 AGREEMENT_STATES = ("ALL", "AGREED", "DISAGREED", "UNJUDGED")
 REVIEW_STATUSES = ("ACTIVE", "READY_FOR_REVIEW", "IN_REVIEW", "REVIEWED", "DISPUTED")
 
@@ -38,6 +39,11 @@ def _where(filters: Mapping[str, object] | None = None, alias: str = "a"):
     if decision in {"PASS", "FAIL"}:
         clauses.append(f"{alias}.system_decision = %s")
         params.append(decision)
+    source_status = str(filters.get("source_status", "ALL")).upper()
+    if source_status in {"DRAFT", "COMPLETED"}:
+        clauses.append(f"{alias}.source_status = %s")
+        params.append(source_status)
+
     case_identifier = str(filters.get("case_identifier", "")).strip()
     if case_identifier:
         clauses.append("le.logical_ecn_key ILIKE %s")
@@ -77,8 +83,10 @@ def list_attempts(connection, filters: Mapping[str, object] | None = None) -> li
     """List completed attempts, with optional reviewer filters."""
     where, params = _where(filters)
     cursor = connection.execute(
-        """SELECT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
+                """SELECT a.id AS attempt_id, a.attempt_name, a.source_status, a.attempt_number,
+                  a.system_decision, a.started_at, a.completed_at,
                   EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
+
                   COALESCE(le.logical_ecn_key, a.result_payload->>'case_id') AS case_identifier,
                   s.tester_email, s.tester_name, j.judgement AS tester_judgement,
                   (j.judgement IS NOT NULL AND j.judgement = a.system_decision) AS agreement
@@ -164,7 +172,8 @@ def get_attempt_detail(
     """Return an authorized attempt, payload, findings, and file metadata."""
     _require_attempt_access(connection, attempt_id, user)
     cursor = connection.execute(
-        """SELECT a.id AS attempt_id, a.session_id, a.case_id, a.system_decision,
+                """SELECT a.id AS attempt_id, a.session_id, a.case_id, a.attempt_name,
+                  a.source_status, a.attempt_number, a.system_decision,
                   a.started_at, a.completed_at,
                   EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
                   a.result_payload, s.tester_email, s.tester_name, s.task_name,

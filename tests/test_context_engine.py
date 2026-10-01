@@ -7,7 +7,12 @@ from scripts.stages.context_engine import (
     log_approved_change,
     run_context_engine,
 )
-from scripts.stages.context_engine import _check_missing_supplier, _check_uom_mismatch
+from scripts.stages.context_engine import (
+    _check_missing_supplier,
+    _check_uom_mismatch,
+    _load_parts_db,
+)
+
 
 
 MOCK_PARTS = {
@@ -244,13 +249,16 @@ def test_context_engine_uses_parts_master_source_without_copying_it(tmp_path):
 
 
 def test_context_engine_defaults_to_direct_part_master_source(tmp_path):
+    root = Path(__file__).parent.parent
     result = run_context_engine(_packet(), context_db_dir=tmp_path / "context_db")
 
     artifacts = result["validation"]["context_artifacts"]
-    assert Path(artifacts["parts_master_source"]) == (
-        Path(__file__).parent.parent / "data" / "Part_Master.csv"
-    )
+    parts_master_path = root / "data" / "Part_Master.csv"
+    assert Path(artifacts["parts_master_source"]) == parts_master_path
+    assert parts_master_path.exists()
+    assert "015000627" in _load_parts_db(parts_master_path)
     assert not (tmp_path / "context_db" / "parts_master_database.csv").exists()
+
 
 
 def test_fail_gate_does_not_write_to_conflict_log(tmp_path):

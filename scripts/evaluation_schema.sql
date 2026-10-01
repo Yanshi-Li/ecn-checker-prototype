@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS precheck_attempts (
     case_id BIGINT REFERENCES precheck_cases(id),
     system_decision TEXT
         CHECK (system_decision IN ('PASS', 'FAIL')),
+    source_status TEXT NOT NULL DEFAULT 'DRAFT'
+        CHECK (source_status IN ('DRAFT', 'COMPLETED')),
+    attempt_name TEXT NOT NULL DEFAULT 'legacy',
+    idempotency_key TEXT,
+    attempt_number INTEGER NOT NULL DEFAULT 1 CHECK (attempt_number > 0),
 
     started_at TIMESTAMPTZ NOT NULL,
     completed_at TIMESTAMPTZ,
@@ -171,6 +176,25 @@ CREATE TABLE IF NOT EXISTS notification_attempts (
 
 ALTER TABLE precheck_attempts
     ADD COLUMN IF NOT EXISTS case_id BIGINT REFERENCES precheck_cases(id);
+
+ALTER TABLE precheck_attempts
+    ADD COLUMN IF NOT EXISTS source_status TEXT NOT NULL DEFAULT 'DRAFT';
+
+ALTER TABLE precheck_attempts
+    ADD COLUMN IF NOT EXISTS attempt_name TEXT NOT NULL DEFAULT 'legacy';
+
+ALTER TABLE precheck_attempts
+    ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+
+ALTER TABLE precheck_attempts
+    ADD COLUMN IF NOT EXISTS attempt_number INTEGER NOT NULL DEFAULT 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS precheck_attempts_idempotency_key_uq
+    ON precheck_attempts (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS precheck_attempts_source_status_idx
+    ON precheck_attempts (source_status);
 
 CREATE INDEX IF NOT EXISTS evaluation_events_session_idx
     ON evaluation_events (session_id, occurred_at);
