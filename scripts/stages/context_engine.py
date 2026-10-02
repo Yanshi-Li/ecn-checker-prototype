@@ -7,6 +7,8 @@ Also persists context test databases/logs for repeatable module testing.
 
 import csv
 import logging
+import re
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -239,63 +241,31 @@ def check_part_status(part_number: str, parts_db: dict) -> dict:
     return result
 
 
-def check_historical_conflicts(
-    change_notice_number: str, part_number: str, history: list[dict]
-) -> list[dict]:
-    """Return historical change notices that touched the same part number."""
-    current_change_notice_number = (change_notice_number or "").strip()
-    normalized_part_number = (part_number or "").strip()
-    if not normalized_part_number:
-        return []
 
-    conflicts = []
-    for entry in history or []:
-        if not isinstance(entry, dict):
-            continue
-        historical_part = str(entry.get("part_number", "")).strip()
-        if historical_part != normalized_part_number:
-            continue
-        conflicting_change_notice_number = str(
-            entry.get("change_notice_number", "")
-        ).strip()
-        if (
-            not conflicting_change_notice_number
-            or conflicting_change_notice_number == current_change_notice_number
-        ):
-            continue
-        conflicts.append({
-            "conflicting_change_notice_number": conflicting_change_notice_number,
-            "part_number": normalized_part_number,
-            "status": str(entry.get("status", "")).strip(),
-            "date": str(entry.get("date", "")).strip(),
-            "change_type": str(entry.get("change_type", "")).strip(),
-        })
-    return conflicts
-
-
-
-def _load_history_log(filepath: Path) -> list[dict]:
-    rows = _read_csv_rows(filepath)
-    history = []
-    for row in rows:
-        part_number = row.get("part_number", "").strip()
-        if not part_number:
-            continue
-        history.append({
-            "change_notice_number": row.get("change_notice_number", "").strip(),
-            "part_number": part_number,
-            "change_type": row.get("change_type", "").strip(),
-            "date": row.get("date", "").strip(),
-            "status": row.get("status", "").strip(),
-        })
-    return history
 
 
 # ── Reference data loader ────────────────────────────────────────────────────
+def _canonical_part_column(name: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", name.strip().casefold()).strip("_")
+    aliases = {
+        "partnumber": "part_number",
+        "part_number": "part_number",
+        "unit_measure": "unit_of_measure",
+        "unit_of_measure": "unit_of_measure",
+        "primary_role": "primary_role",
+        "lifecycle_state": "lifecycle_state",
+        "lifecycle_status": "lifecycle_status",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def _load_parts_db(filepath: Path) -> dict:
     """
-    Load reference parts database into a dict keyed by part_number.
-    Returns empty dict if file does not exist.
+    Load a parts master CSV, including the report-style Part_Master.csv format.
+
+    The checked-in reference file has a report title row before a human-readable
+    header (for example, ``Part Number`` and ``Unit Measure``). The loader finds
+    that header and normalizes its column names to the fields used by the checks.
     """
     if not filepath.exists():
         logger.warning(
@@ -303,16 +273,48 @@ def _load_parts_db(filepath: Path) -> dict:
         )
         return {}
 
+    with open(filepath, newline="", encoding="utf-8-sig") as file_handle:
+        csv_rows = list(csv.reader(file_handle))
+
+    header_index = next(
+        (
+            index
+            for index, row in enumerate(csv_rows)
+            if any(_canonical_part_column(cell) == "part_number" for cell in row)
+        ),
+        None,
+    )
+    if header_index is None:
+        logger.warning("Parts DB at %s has no Part Number column.", filepath)
+        return {}
+
+    headers = [_canonical_part_column(cell) for cell in csv_rows[header_index]]
     parts = {}
-    with open(filepath, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            pn = row.get("part_number", "").strip()
-            if pn:
-                parts[pn] = {k.strip().lower(): v.strip() for k, v in row.items()}
+    for values in csv_rows[header_index + 1 :]:
+        if not any(value.strip() for value in values):
+            continue
+        row = {
+            header: (values[index] if index < len(values) else "").strip()
+            for index, header in enumerate(headers)
+            if header
+        }
+        pn = row.get("part_number", "")
+        if not pn:
+            continue
+
+        # The report uses Primary Role/Class instead of a status column.
+        if "status" not in row:
+            role = row.get("primary_role", "").casefold()
+            part_class = row.get("class", "").casefold()
+            if role == "ob" or "obsolete" in part_class:
+                row["status"] = "OBSOLETE"
+            elif role:
+                row["status"] = "ACTIVE"
+        parts[pn] = row
 
     logger.info("Parts DB loaded: %d parts from %s", len(parts), filepath)
     return parts
+
 
 
 # ── Context checks ────────────────────────────────────────────────────────────
@@ -392,6 +394,7 @@ def _check_missing_supplier(bom: list[dict], parts_db: dict) -> list[dict]:
                 "message": f"Part '{pn}' has no supplier recorded in the Parts Master DB.",
             })
     return flags
+
 
 
 def _check_uom_mismatch(bom: list[dict], parts_db: dict) -> list[dict]:
@@ -498,7 +501,7 @@ def run_context_engine(
     parts_db = _load_parts_db(Path(artifacts["parts_master_source"]))
 
 
-    history = packet.get("history") or _load_history_log(Path(artifacts["ecn_conflict_log"]))
+    
 
     all_flags = []
 
@@ -518,24 +521,7 @@ def run_context_engine(
     all_flags += _check_quantity_anomalies(bom, parts_db)
     all_flags += _check_description_mismatch(bom, parts_db)
 
-    change_notice_number = packet.get("header", {}).get("change_notice_number", "")
-    for row in bom:
-        pn = row.get("part_number", "").strip()
-        if not pn:
-            continue
-        for conflict in check_historical_conflicts(change_notice_number, pn, history):
-            all_flags.append({
-                "flag_type": "HISTORICAL_CONFLICT",
-                # Historical conflicts close the gate pending review.
-                "severity": "ERROR",
-                "part_number": pn,
-                "line_number": row.get("line_number", "?"),
-                "message": (
-                    f"Part '{pn}' was previously touched by Change Notice Number "
-                    f"'{conflict['conflicting_change_notice_number']}' and may conflict "
-                    "with the current change."
-                ),
-            })
+    
 
 
     packet["validation"]["context_flags"] = all_flags; packet["validation"]["context_artifacts"] = artifacts

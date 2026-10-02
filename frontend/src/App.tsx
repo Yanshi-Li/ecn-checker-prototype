@@ -60,6 +60,7 @@ async function readJson<T>(response: Response): Promise<T> {
 function App() {
   const [ecnFile, setEcnFile] = useState<File | null>(null);
   const [bomFile, setBomFile] = useState<File | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<"DRAFT" | "COMPLETED">("DRAFT");
   const [user, setUser] = useState<User | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -135,10 +136,11 @@ function App() {
     setNotificationStatus(null);
 
     const formData = new FormData();
-    formData.append("ecn", ecnFile);
+        formData.append("ecn", ecnFile);
     if (bomFile) {
       formData.append("bom", bomFile);
     }
+    formData.append("source_status", sourceStatus);
 
     try {
       const response = await fetch("/api/precheck", { method: "POST", body: formData });
@@ -288,6 +290,11 @@ function App() {
                 onChange={setBomFile}
               />
             </div>
+            <label htmlFor="source-status">Source status</label>
+            <select id="source-status" value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value as "DRAFT" | "COMPLETED")}>
+              <option value="DRAFT">DRAFT — still being prepared</option>
+              <option value="COMPLETED">COMPLETED — ready for review</option>
+            </select>
             {requestError && <p className="form-error" role="alert">{requestError}</p>}
             <button className="primary-button" type="submit" disabled={submitting || apiReady === false}>
               {submitting ? "Running pre-check…" : "Run pre-check"}

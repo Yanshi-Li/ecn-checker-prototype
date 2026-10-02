@@ -88,10 +88,16 @@ and are not executed by this incremental change. The part-number format policy i
 entry and emits the unified finding contract; no Rxx compatibility finding is
 emitted by the staged rule engine.
 
-Context checks likewise emit flag types such as `DISCONTINUED_PART`,
-`MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`. The merge step
-uses those legacy `ERROR` values and configured context flag types for the
-current PASS/FAIL decision. The AI Advisory prompt is generated from active
+Context checks emit flag types such as `DISCONTINUED_PART`,
+`MISSING_SUPPLIER`, and `UOM_MISMATCH`. `MISSING_SUPPLIER` is the D03
+supplier check and applies only to normalized `EBOM` rows; MBOM and unknown
+BOM types do not emit D03. Historical ECN records are retained as
+
+context artifacts but are not evaluated or emitted as `HISTORICAL_CONFLICT`
+findings, so they do not add review work or affect the PASS/FAIL decision. The
+merge step uses the remaining context `ERROR` values and configured flag types
+for the current PASS/FAIL decision. The AI Advisory prompt is generated from active
+
 catalogue definitions for S01–S05, and its flags carry canonical rule IDs plus
 catalogue metadata and evidence. Legacy A rule IDs are not emitted. S01 and
 S05 are LLM-owned; when the provider is unavailable the fallback reports them

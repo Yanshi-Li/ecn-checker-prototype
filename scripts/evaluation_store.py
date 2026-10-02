@@ -134,7 +134,8 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
                (session_id, case_id, system_decision, started_at, completed_at, result_payload,
                 source_status, attempt_name, idempotency_key)
                VALUES (%s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP), %s, %s, %s, %s)
-               ON CONFLICT (idempotency_key) DO UPDATE SET
+                              ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET
+
                  session_id = EXCLUDED.session_id, case_id = EXCLUDED.case_id,
                  system_decision = EXCLUDED.system_decision, started_at = EXCLUDED.started_at,
                  completed_at = EXCLUDED.completed_at, result_payload = EXCLUDED.result_payload,

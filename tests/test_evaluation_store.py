@@ -164,9 +164,16 @@ def test_persist_snapshot_keeps_complete_payload_file_metadata_and_notification_
     attempt_params = next(
         params for statement, params in connection.executed
         if "INSERT INTO precheck_attempts" in statement
-    )
+        )
     assert attempt_params[1:3] == (19, "PASS")
+
+    attempt_statement = next(
+        statement for statement, _ in connection.executed
+        if "INSERT INTO precheck_attempts" in statement
+    )
+    assert "ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL" in attempt_statement
     insert_statements = [statement for statement, _ in connection.executed]
+
     assert any("result_payload" in statement for statement in insert_statements)
     assert any("evaluation_files" in statement for statement in insert_statements)
     assert any("notification_attempts" in statement for statement in insert_statements)

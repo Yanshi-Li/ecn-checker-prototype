@@ -1,9 +1,10 @@
 """Aggregate pipeline findings and calculate the v1.2 ECN gate decision.
 
 The gate closes when Node 2 produces an ERROR-severity blocker, or Node 4
-produces a configured part issue or conflict alert. Warnings and Node 3 AI
-notes are advisory only. A packet passes only when all three gate-closing
-categories are empty.
+produces a configured part issue. Historical-conflict records are ignored.
+Warnings and Node 3 AI notes are advisory only. A packet passes only when all
+gate-closing categories are empty.
+
 """
 
 import logging
@@ -15,8 +16,10 @@ PART_ISSUE_FLAG_TYPES = {
     "MISSING_SUPPLIER",
     "UOM_MISMATCH",
 }
-CONFLICT_ALERT_FLAG_TYPES = {"HISTORICAL_CONFLICT"}
+CONFLICT_ALERT_FLAG_TYPES = set()
+IGNORED_CONTEXT_FLAG_TYPES = {"HISTORICAL_CONFLICT"}
 WARNING_ONLY_FLAG_TYPES = {
+
     "UNKNOWN_PART",
     "QUANTITY_ANOMALY",
     "DESCRIPTION_MISMATCH",
@@ -35,14 +38,16 @@ def run_merge_step(packet: dict) -> dict:
     intake_warnings = validation.get("bom_warnings", [])
     blockers = [item for item in rule_violations if item.get("gate_effect") == "FAIL"]
     rule_warnings = [item for item in rule_violations if item.get("gate_effect") != "FAIL"]
-
     part_issues, conflict_alerts, context_warnings = [], [], []
+
     for flag in context_flags:
         flag_type = flag.get("flag_type")
         if flag_type in PART_ISSUE_FLAG_TYPES:
             part_issues.append(flag)
         elif flag_type in CONFLICT_ALERT_FLAG_TYPES:
             conflict_alerts.append(flag)
+        elif flag_type in IGNORED_CONTEXT_FLAG_TYPES:
+            continue
         elif flag_type in WARNING_ONLY_FLAG_TYPES:
             context_warnings.append(flag)
         else:
@@ -50,6 +55,7 @@ def run_merge_step(packet: dict) -> dict:
                 f"Unclassified context flag_type: {flag_type!r}. "
                 "Register it in a merge-step classification set."
             )
+
 
     decision = "PASS" if not (blockers or part_issues or conflict_alerts) else "FAIL"
     overall_risk = ai_flags.get("overall_risk")

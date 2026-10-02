@@ -26,6 +26,7 @@ async function readJson<T>(response: Response): Promise<T> {
 export default function AdminDashboard() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [decision, setDecision] = useState("ALL");
+  const [sourceStatus, setSourceStatus] = useState("ALL");
   const [tester, setTester] = useState("");
   const [ecn, setEcn] = useState("");
   const [loading, setLoading] = useState(true);
@@ -44,7 +45,7 @@ export default function AdminDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ decision, tester, ecn });
+      const params = new URLSearchParams({ decision, source_status: sourceStatus, tester, ecn });
       const response = await fetch(`/api/admin/evaluation-summary?${params}`);
       const payload = await readJson<Summary & { error?: string }>(response);
       if (!response.ok) throw new Error(payload.error ?? "The dashboard could not be loaded.");
@@ -95,7 +96,7 @@ export default function AdminDashboard() {
   }
 
   function exportEvaluation() {
-    const params = new URLSearchParams({ decision, tester, ecn });
+    const params = new URLSearchParams({ decision, source_status: sourceStatus, tester, ecn });
     window.location.href = `/api/admin/evaluation-export?${params.toString()}`;
   }
 
@@ -111,6 +112,7 @@ export default function AdminDashboard() {
       </div>
       <div className="dashboard-filters" aria-label="Dashboard filters">
         <label>Decision<select value={decision} onChange={(event) => setDecision(event.target.value)}><option value="ALL">All decisions</option><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select></label>
+        <label>Source status<select value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value)}><option value="ALL">All source statuses</option><option value="DRAFT">DRAFT</option><option value="COMPLETED">COMPLETED</option></select></label>
         <label>Tester<input value={tester} onChange={(event) => setTester(event.target.value)} placeholder="Name or email" /></label>
         <label>ECN<input value={ecn} onChange={(event) => setEcn(event.target.value)} placeholder="ECN number" /></label>
       </div>

@@ -38,6 +38,7 @@ def test_d03_is_limited_to_ebom_supplier_checks():
 
 def test_rules_are_assigned_to_their_owning_pipeline_stage():
     assert {rule["id"] for rule in rules_for_engine("rule_engine")} == {
+
         "H01", "H03", "H11", "H12", "H24",
     }
     assert {rule["id"] for rule in rules_for_engine("context_engine")} == {

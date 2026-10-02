@@ -82,13 +82,14 @@ def test_uom_mismatch_fails_gate_as_part_issue():
     assert result["gate"]["part_issues"] == [flag]
 
 
-def test_historical_conflict_fails_gate_as_an_error():
+def test_historical_conflict_is_ignored_for_legacy_packets():
     flag = _context("HISTORICAL_CONFLICT", "ERROR")
     result = run_merge_step(_packet(context_flags=[flag]))
 
-    assert result["gate"]["decision"] == "FAIL"
-    assert result["gate"]["conflict_alerts"] == [flag]
+    assert result["gate"]["decision"] == "PASS"
+    assert result["gate"]["conflict_alerts"] == []
     assert flag not in result["gate"]["warnings"]
+
 
 
 def test_context_engine_flag_types_all_have_an_explicit_gate_classification():
@@ -155,17 +156,26 @@ def test_ai_notes_never_change_gate_decision():
 def test_each_gate_category_is_aggregated_together():
     blocker = _rule("BLOCKER")
     part_issue = _context("DISCONTINUED_PART", "ERROR")
-    conflict = _context("HISTORICAL_CONFLICT", "ERROR")
+
     warning = _context("DESCRIPTION_MISMATCH", "WARNING")
+
     result = run_merge_step(
         _packet(
             rule_violations=[blocker],
-            context_flags=[part_issue, conflict, warning],
+            context_flags=[part_issue, warning],
         )
     )
 
+
+        
+
     assert result["gate"]["decision"] == "FAIL"
     assert result["gate"]["blockers"] == [blocker]
+
+
     assert result["gate"]["part_issues"] == [part_issue]
-    assert result["gate"]["conflict_alerts"] == [conflict]
+
+    assert result["gate"]["conflict_alerts"] == []
+
+
     assert result["gate"]["warnings"] == [warning]
