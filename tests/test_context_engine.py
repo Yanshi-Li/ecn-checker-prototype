@@ -117,19 +117,30 @@ def test_ecn_2026_003_no_self_conflict():
     assert conflicts == []
 
 
-def test_missing_supplier_is_flagged_for_known_part():
-    bom = [{"line_number": "7", "part_number": "P-100"}]
+def test_missing_supplier_is_flagged_for_known_ebom_part():
+    bom = [{"line_number": "7", "part_number": "P-100", "bom_type": "EBOM"}]
     parts_db = {"P-100": {"supplier": ""}}
 
     flags = _check_missing_supplier(bom, parts_db)
 
     assert flags == [{
+        "rule_id": "D03",
         "flag_type": "MISSING_SUPPLIER",
         "severity": "ERROR",
         "part_number": "P-100",
         "line_number": "7",
         "message": "Part 'P-100' has no supplier recorded in the Parts Master DB.",
     }]
+
+
+def test_missing_supplier_skips_mbom_and_unknown_bom_types():
+    bom = [
+        {"line_number": "1", "part_number": "P-100", "bom_type": "MBOM"},
+        {"line_number": "2", "part_number": "P-100", "bom_type": "UNKNOWN"},
+    ]
+    parts_db = {"P-100": {"supplier": ""}}
+
+    assert _check_missing_supplier(bom, parts_db) == []
 
 
 def test_missing_supplier_skips_known_part_with_supplier_and_unknown_part():

@@ -374,13 +374,17 @@ def _check_discontinued_parts(bom: list[dict], parts_db: dict) -> list[dict]:
 
 
 def _check_missing_supplier(bom: list[dict], parts_db: dict) -> list[dict]:
-    """Flag known BOM parts that have no supplier in the reference database."""
+    """Flag known EBOM parts that have no supplier in the reference database."""
     flags = []
     for row in bom:
+        if str(row.get("bom_type", "")).strip().upper() != "EBOM":
+            continue
+
         pn = row.get("part_number", "").strip()
         ref = parts_db.get(pn)
         if pn and ref is not None and not ref.get("supplier", "").strip():
             flags.append({
+                "rule_id": "D03",
                 "flag_type": "MISSING_SUPPLIER",
                 "severity": "ERROR",
                 "part_number": pn,

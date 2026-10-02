@@ -30,6 +30,12 @@ def test_active_catalogue_is_valid_and_contains_each_source_rule():
     assert catalogue_ids == source_ids
 
 
+def test_d03_is_limited_to_ebom_supplier_checks():
+    d03 = next(rule for rule in load_rule_catalogue()["rules"] if rule["id"] == "D03")
+
+    assert d03["bom_type"] == "EBOM"
+
+
 def test_rules_are_assigned_to_their_owning_pipeline_stage():
     assert {rule["id"] for rule in rules_for_engine("rule_engine")} == {
         "H01", "H03", "H11", "H12", "H24",
