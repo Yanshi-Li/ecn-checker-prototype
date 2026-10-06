@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from flask import Flask, Response, jsonify, render_template, request, send_file, session
+from flask import Flask, Response, jsonify, render_template, request, send_file, send_from_directory, session
 
 
 
@@ -57,9 +57,13 @@ def _load_local_env() -> None:
 _load_local_env()
 
 
+DIST = os.path.join(ROOT, "frontend", "dist")
+
 app = Flask(
     __name__,
     template_folder=os.path.join(ROOT, "templates"),
+    static_folder=DIST,
+    static_url_path="",
 )
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB limit
@@ -153,7 +157,7 @@ def _normalise_uploaded_data(filename: str, payload: object, role: str) -> tuple
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return send_from_directory(DIST, "index.html")
 
 
 @app.route("/api/health")
