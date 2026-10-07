@@ -12,7 +12,9 @@ import re
 from typing import Iterable, Sequence
 
 from .batch_orchestration import BomInput, LogicalEcnInput, NormalizedBatch
+from .evaluation_attempts import derive_source_status_from_path
 from .stages.intake import load_file
+
 
 
 _IDENTIFIER_PATTERN = re.compile(r"(?<!\d)(\d{7})(?!\d)")
@@ -102,10 +104,14 @@ def build_batch_from_paths(
 
     known_ecns = set(ecn_keys)
     logical_ecns = tuple(
-        LogicalEcnInput(
+                LogicalEcnInput(
             identifier,
             parsed,
-            {"source_file": str(path), "filename_identifier": identifier},
+            {
+                "source_file": str(path),
+                "filename_identifier": identifier,
+                "source_status": derive_source_status_from_path(str(path)),
+            },
         )
         for path, identifier, parsed in ecn_files
     )

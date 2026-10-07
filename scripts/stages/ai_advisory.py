@@ -264,7 +264,7 @@ def _provider_config(provider: str) -> dict | None:
             "base_url": _get_config_value(
                 "OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"
             ),
-            "model": _get_config_value("OPENAI_MODEL", "gpt-4o-mini"),
+            "model": _get_config_value("OPENAI_MODEL", "gpt-codex"),
         }
 
     if provider == "gemini":
