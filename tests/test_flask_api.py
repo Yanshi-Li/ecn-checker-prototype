@@ -162,7 +162,110 @@ def test_admin_evaluation_summary_is_protected_and_returns_metrics(monkeypatch):
     assert response.get_json()["pass_percentage"] == 50.0
 
 
+def test_admin_attempt_endpoint_uses_canonical_filters_and_returns_business_fields(monkeypatch):
+    connection = object()
+    received = {}
+    attempt = {"attempt_id": 17, "attempt_name": "4079118_MBOM_COMPLETED", "ecn_number": "4079118",
+               "source_status": "COMPLETED", "decision": "PASS"}
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(flask_app, "initialise_schema", lambda _: None)
+    monkeypatch.setattr(flask_app.evaluation_queries, "list_attempts", lambda _, filters: received.update(filters) or [attempt])
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@example.com", "role": "ADMINISTRATOR"}
+
+    response = client.get("/api/admin/evaluation-attempts?ecn_number=4079&source_status=COMPLETED&decision=PASS")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"attempts": [attempt]}
+    assert {key: received[key] for key in ("ecn_number", "source_status", "decision")} == {
+        "ecn_number": "4079", "source_status": "COMPLETED", "decision": "PASS",
+    }
+
+
+def test_tester_attempt_endpoint_applies_same_canonical_filters_and_owns_scope(monkeypatch):
+    connection = object()
+    received = {}
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(flask_app, "initialise_schema", lambda _: None)
+    monkeypatch.setattr(flask_app.evaluation_queries, "list_attempts", lambda _, filters: received.update(filters) or [])
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 4, "email": "tester@example.com", "role": "TESTER"}
+
+    response = client.get("/api/tester/evaluation-attempts?ecn_number=4079&source_status=DRAFT&decision=FAIL")
+
+    assert response.status_code == 200
+    assert received == {
+        "ecn_number": "4079", "source_status": "DRAFT", "decision": "FAIL",
+        "tester_email": "tester@example.com",
+    }
+
+
+def test_attempt_filter_endpoints_reject_invalid_enums(monkeypatch):
+    connection = object()
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(flask_app, "initialise_schema", lambda _: None)
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@example.com", "role": "ADMINISTRATOR"}
+
+    response = client.get("/api/admin/evaluation-attempts?source_status=ARCHIVED")
+
+    assert response.status_code == 400
+    assert "source_status" in response.get_json()["error"]
+
+
+def test_admin_evaluation_export_uses_shared_filters_and_returns_csv(monkeypatch):
+    connection = object()
+    received = {}
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "list_attempts",
+        lambda _, filters: received.update(filters) or [{
+            "attempt_id": 8,
+            "system_decision": "PASS",
+            "source_status": "COMPLETED",
+            "ecn_number": "4079118",
+        }],
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@example.com", "role": "ADMINISTRATOR"}
+
+    response = client.get(
+        "/api/admin/evaluation-export?decision=PASS&source_status=COMPLETED&ecn_number=4079"
+    )
+
+    assert response.status_code == 200
+    assert response.mimetype == "text/csv"
+    assert "4079118" in response.get_data(as_text=True)
+    assert received["decision"] == "PASS"
+    assert received["source_status"] == "COMPLETED"
+    assert received["ecn_number"] == "4079"
+
+
+def test_admin_evaluation_export_rejects_invalid_filters(monkeypatch):
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(object()))
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "list_attempts",
+        lambda *_: (_ for _ in ()).throw(ValueError("source_status must be ALL, DRAFT, or COMPLETED")),
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@example.com", "role": "ADMINISTRATOR"}
+
+    response = client.get("/api/admin/evaluation-export?source_status=ARCHIVED")
+
+    assert response.status_code == 400
+    assert "source_status" in response.get_json()["error"]
+
+
 def test_admin_evaluation_summary_rejects_non_administrators():
+
+
     client = app.test_client()
     with client.session_transaction() as session:
         session["user"] = {"id": 4, "email": "reviewer@example.com", "role": "REVIEWER"}

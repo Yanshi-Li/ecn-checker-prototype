@@ -70,7 +70,7 @@ try:
 except ImportError:
     HAS_OPENAI = False
 
-BOM_CAP = 20  # max BOM lines sent to AI
+
 PART_NUMBER_PATTERN = re.compile(r"\b[A-Z]{1,4}-\d{2,8}(?:-[A-Z0-9]+)?\b")
 ACTION_ALIASES = {
     "add": "ADD",
@@ -111,10 +111,10 @@ def _rule_instructions() -> str:
 def _build_prompt(packet: dict) -> str:
     header = packet.get("header", {})
     bom = packet.get("bom", [])
-    truncated = len(bom) > BOM_CAP
 
-    # Map PDF-parsed keys to prompt-friendly values
+    # Map PDF-parsed keys to prompt-friendly values.
     change_notice_number = header.get("change_notice_number", "N/A")
+
     title       = header.get("name_of_change") or header.get("title", "N/A")
     description = header.get("description") or header.get("description_of_change", "")
     change_type = header.get("change_type", "N/A")
@@ -124,21 +124,13 @@ def _build_prompt(packet: dict) -> str:
     reason      = header.get("reason_for_change", "N/A")
 
     bom_summary = "\n".join(
-
         f"  Line {r.get('line_number','?')}: "
         f"database={r.get('source','?')}; action={r.get('action','?')}; "
         f"part={r.get('part_number','?')}; description={r.get('description','?')}; "
         f"issue={r.get('part_issue','?')}; qty={r.get('quantity','?')}; "
         f"unit={r.get('unit','?')}; parent={r.get('parent_part_no','?')}"
-        for r in bom[:BOM_CAP]
+        for r in bom
     )
-
-    if truncated:
-        bom_summary += f"\n  ... ({len(bom) - BOM_CAP} additional lines truncated)"
-        logger.warning(
-            "BOM has %d lines; only first %d sent to AI. Review may be incomplete.",
-            len(bom), BOM_CAP,
-        )
 
     prompt = f"""You are an ECN (Engineering Change Notice) quality reviewer.
 
@@ -245,7 +237,7 @@ def _rule_flag(
         "rule_id": rule_id,
         "type": flag_type,
         "detail": detail,
-                "line_number": line_number,
+        "line_number": line_number,
         "evaluation_status": evaluation_status,
         "review_required": evaluation_status != "PASS",
         "evidence": evidence if evidence is not None else detail,
@@ -272,7 +264,7 @@ def _provider_config(provider: str) -> dict | None:
             "base_url": _get_config_value(
                 "OPENAI_BASE_URL", "https://gateway.aitools.corp.fisherpaykel.com"
             ),
-            "model": _get_config_value("OPENAI_MODEL", "gpt-4o-mini"),
+            "model": _get_config_value("OPENAI_MODEL", "gpt-codex"),
         }
 
     if provider == "gemini":

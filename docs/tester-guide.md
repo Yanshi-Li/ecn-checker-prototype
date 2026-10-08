@@ -148,7 +148,10 @@ The ECN is required. The BOM is optional for scenarios that test ECN-only valida
 
 If the application reports that the check could not be completed, record the exact message, the files used, and whether the result was saved.
 
+After a completed check, use **Your pre-check attempts** to verify the saved record. Filter by ECN number, source status, or decision; the tester view is limited to attempts belonging to the signed-in tester. The administrator dashboard exposes the same filters over all testers' attempts. Results should match when the same filters are selected, apart from the administrator's additional tester filter.
+
 ### Step 5: Review the result
+
 
 Record the following information from the result screen:
 
@@ -314,6 +317,8 @@ Also review rule-level disagreements. A rule with frequent `INCORRECT` or `UNCLE
 - [ ] I recorded the test case and input file names.
 - [ ] I uploaded the intended ECN and BOM.
 - [ ] I timed the check from **Pre-check** to displayed result.
+- [ ] I verified the saved attempt using ECN number, source-status, and decision filters.
+
 - [ ] I recorded the overall system decision.
 - [ ] I reviewed every rule, explanation, and evidence item.
 - [ ] I recorded my independent tester judgement.

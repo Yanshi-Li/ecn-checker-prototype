@@ -95,6 +95,7 @@ def _render_context_flags(flags: list[dict]) -> str:
     for f in flags:
         rows += f"""
         <tr>
+          <td><code>{f.get('rule_id', '—')}</code></td>
           <td><code>{f.get('part_number','')}</code></td>
           <td>{_badge(f.get('severity','INFO'))}</td>
           <td>{f.get('flag_type','')}</td>
@@ -104,6 +105,7 @@ def _render_context_flags(flags: list[dict]) -> str:
     <table style="width:100%;border-collapse:collapse;font-size:0.9em;">
       <thead>
         <tr style="background:#f0f0f0;">
+                    <th style="padding:6px;text-align:left;">Rule</th>
           <th style="padding:6px;text-align:left;">Part</th>
           <th style="padding:6px;text-align:left;">Severity</th>
           <th style="padding:6px;text-align:left;">Type</th>

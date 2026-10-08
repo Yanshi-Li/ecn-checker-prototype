@@ -2,12 +2,16 @@ import csv
 from pathlib import Path
 
 from scripts.stages.context_engine import (
-    check_historical_conflicts,
     check_part_status,
     log_approved_change,
     run_context_engine,
 )
-from scripts.stages.context_engine import _check_missing_supplier, _check_uom_mismatch
+from scripts.stages.context_engine import (
+    _check_missing_supplier,
+    _check_uom_mismatch,
+    _load_parts_db,
+)
+
 
 
 MOCK_PARTS = {
@@ -26,16 +30,7 @@ MOCK_PARTS = {
               "description": "Capacitor 10uF", "part_number": "C-200"},
 }
 
-MOCK_HISTORY = [
-    {"change_notice_number": "ECN-OLD-001", "part_number": "AB-1001",
-     "change_type": "modify", "date": "2023-01-01", "status": "APPROVED"},
-    # ECN-2026-002: cost reduction replacing C-300 with C-350
-    {"change_notice_number": "ECN-2026-002", "part_number": "C-300",
-     "change_type": "replace", "date": "2026-10-01", "status": "APPROVED"},
-    # ECN-2026-003: stock shortage concession replacing C-200 with C-260
-    {"change_notice_number": "ECN-2026-003", "part_number": "C-200",
-     "change_type": "replace", "date": "2026-11-15", "status": "PENDING"},
-]
+
 
 
 def test_obsolete_part_detected():
@@ -55,21 +50,7 @@ def test_part_not_found():
     assert result["status"] == "NOT_FOUND"
 
 
-def test_historical_conflict_found():
-    conflicts = check_historical_conflicts("ECN-NEW-002", "AB-1001", MOCK_HISTORY)
-    assert len(conflicts) == 1
-    assert conflicts[0]["conflicting_change_notice_number"] == "ECN-OLD-001"
 
-
-def test_no_conflict_same_ecn():
-    # Same ECN ID should not conflict with itself
-    conflicts = check_historical_conflicts("ECN-OLD-001", "AB-1001", MOCK_HISTORY)
-    assert conflicts == []
-
-
-def test_no_conflict_different_part():
-    conflicts = check_historical_conflicts("ECN-NEW-002", "AB-1002", MOCK_HISTORY)
-    assert conflicts == []
 
 
 # ── Tests for new ECN-2026-002 parts ────────────────────────────────────────
@@ -86,40 +67,19 @@ def test_c260_active_part_ok():
     assert result["found"] is True
 
 
-def test_c300_replaced_by_ecn_2026_002():
-    # A new ECN touching C-300 should conflict with ECN-2026-002
-    conflicts = check_historical_conflicts("ECN-NEW-999", "C-300", MOCK_HISTORY)
-    assert len(conflicts) == 1
-    assert conflicts[0]["conflicting_change_notice_number"] == "ECN-2026-002"
 
 
-def test_c200_replaced_by_ecn_2026_003():
-    # A new ECN touching C-200 should conflict with the pending ECN-2026-003
-    conflicts = check_historical_conflicts("ECN-NEW-999", "C-200", MOCK_HISTORY)
-    assert len(conflicts) == 1
-    assert conflicts[0]["conflicting_change_notice_number"] == "ECN-2026-003"
 
-
-def test_ecn_2026_002_no_self_conflict():
-    # ECN-2026-002 should not conflict with itself
-    conflicts = check_historical_conflicts("ECN-2026-002", "C-300", MOCK_HISTORY)
-    assert conflicts == []
-
-
-def test_ecn_2026_003_no_self_conflict():
-    # ECN-2026-003 should not conflict with itself
-    conflicts = check_historical_conflicts("ECN-2026-003", "C-200", MOCK_HISTORY)
-    assert conflicts == []
-
-
-def test_missing_supplier_is_flagged_for_known_part():
-    bom = [{"line_number": "7", "part_number": "P-100"}]
+def test_missing_supplier_is_flagged_for_known_ebom_part():
+    bom = [{"line_number": "7", "part_number": "P-100", "bom_type": "EBOM"}]
     parts_db = {"P-100": {"supplier": ""}}
+
 
     flags = _check_missing_supplier(bom, parts_db)
 
     assert flags == [{
         "flag_type": "MISSING_SUPPLIER",
+        "rule_id": "D03",
         "severity": "ERROR",
         "part_number": "P-100",
         "line_number": "7",
@@ -127,7 +87,22 @@ def test_missing_supplier_is_flagged_for_known_part():
     }]
 
 
+
+
+
+
+def test_missing_supplier_skips_mbom_and_unknown_bom_types():
+    bom = [
+        {"line_number": "1", "part_number": "P-100", "bom_type": "MBOM"},
+        {"line_number": "2", "part_number": "P-100", "bom_type": "UNKNOWN"},
+    ]
+    parts_db = {"P-100": {"supplier": ""}}
+
+    assert _check_missing_supplier(bom, parts_db) == []
+
+
 def test_missing_supplier_skips_known_part_with_supplier_and_unknown_part():
+
     bom = [
         {"line_number": "1", "part_number": "P-100"},
         {"line_number": "2", "part_number": "P-999"},
@@ -207,35 +182,46 @@ def _packet() -> dict:
     }
 
 
-def test_context_engine_uses_parts_master_source_without_copying_it(tmp_path):
+def test_context_engine_does_not_emit_historical_conflicts(tmp_path):
     packet = _packet()
-    root = Path(__file__).parent.parent
+    parts_db_path = tmp_path / "parts.csv"
+    parts_db_path.write_text(
+        "part_number,supplier\nC-300,Approved Supplier\nC-350,Approved Supplier\n",
+        encoding="utf-8",
+    )
+    history_db_path = tmp_path / "history.csv"
+    history_db_path.write_text(
+        "change_notice_number,part_number,change_type,date,status\n"
+        "ECN-OLD-001,C-300,replace,2025-01-01,APPROVED\n",
+        encoding="utf-8",
+    )
 
     result = run_context_engine(
         packet,
-        parts_db_path=root / "data" / "parts_master.csv",
-        history_db_path=root / "data" / "ecn_history.csv",
+        parts_db_path=parts_db_path,
+        history_db_path=history_db_path,
         context_db_dir=tmp_path / "context_db",
     )
+
 
     historical_conflicts = [
         flag
         for flag in result["validation"]["context_flags"]
         if flag["flag_type"] == "HISTORICAL_CONFLICT"
-    ]
-    assert len(historical_conflicts) == 1
-    assert historical_conflicts[0]["severity"] == "ERROR"
+        ]
+    assert historical_conflicts == []
+
 
     artifacts = result["validation"]["context_artifacts"]
     parts_source_path = Path(artifacts["parts_master_source"])
     conflict_log_path = Path(artifacts["ecn_conflict_log"])
     bom_records_path = Path(artifacts["bom_structure_records"])
 
-    assert parts_source_path == root / "data" / "parts_master.csv"
+    assert parts_source_path == parts_db_path
     assert conflict_log_path.exists()
     assert bom_records_path.exists()
     assert not (tmp_path / "context_db" / "parts_master_database.csv").exists()
-    assert len(_csv_rows(conflict_log_path)) == 4  # history seed only; no unapproved run rows
+    assert len(_csv_rows(conflict_log_path)) == 1  # history seed only; no unapproved run rows
     assert len(_csv_rows(bom_records_path)) == 2
 
 
@@ -244,13 +230,16 @@ def test_context_engine_uses_parts_master_source_without_copying_it(tmp_path):
 
 
 def test_context_engine_defaults_to_direct_part_master_source(tmp_path):
+    root = Path(__file__).parent.parent
     result = run_context_engine(_packet(), context_db_dir=tmp_path / "context_db")
 
     artifacts = result["validation"]["context_artifacts"]
-    assert Path(artifacts["parts_master_source"]) == (
-        Path(__file__).parent.parent / "data" / "Part_Master.csv"
-    )
+    parts_master_path = root / "data" / "Part_Master.csv"
+    assert Path(artifacts["parts_master_source"]) == parts_master_path
+    assert parts_master_path.exists()
+    assert "015000627" in _load_parts_db(parts_master_path)
     assert not (tmp_path / "context_db" / "parts_master_database.csv").exists()
+
 
 
 def test_fail_gate_does_not_write_to_conflict_log(tmp_path):

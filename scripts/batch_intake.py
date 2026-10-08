@@ -12,7 +12,9 @@ import re
 from typing import Iterable, Sequence
 
 from .batch_orchestration import BomInput, LogicalEcnInput, NormalizedBatch
+from .evaluation_attempts import derive_source_status_from_path
 from .stages.intake import load_file
+
 
 
 _IDENTIFIER_PATTERN = re.compile(r"(?<!\d)(\d{7})(?!\d)")
@@ -46,6 +48,7 @@ def extract_filename_identifier(filename: str | Path) -> str | None:
             f"filename {Path(filename).name!r} contains multiple seven-digit identifiers"
         )
     return unique[0] if unique else None
+
 
 
 def _expand_paths(paths: Iterable[str | Path]) -> list[Path]:
@@ -85,7 +88,6 @@ def _load_inputs(paths: Sequence[Path], role: str):
     return inputs, errors
 
 
-
 def build_batch_from_paths(
     ecn_paths: Sequence[str | Path],
     bom_paths: Sequence[str | Path] = (),
@@ -94,6 +96,7 @@ def build_batch_from_paths(
     ecn_files, ecn_errors = _load_inputs(_expand_paths(ecn_paths), "ecn")
     bom_files, bom_errors = _load_inputs(_expand_paths(bom_paths), "bom")
     errors = [*ecn_errors, *bom_errors]
+    
 
     ecn_keys = [identifier for _, identifier, _ in ecn_files]
     duplicate_ecns = {key for key in ecn_keys if ecn_keys.count(key) > 1}
@@ -101,20 +104,30 @@ def build_batch_from_paths(
         errors.append(BatchIntakeError(Path(key), "ecn", f"multiple ECN files use identifier {key}"))
 
     known_ecns = set(ecn_keys)
-    logical_ecns = tuple(
-        LogicalEcnInput(
-            identifier,
-            parsed,
-            {"source_file": str(path), "filename_identifier": identifier},
+    logical_ecns = []
+    for path, identifier, parsed in ecn_files:
+        try:
+            source_status = derive_source_status_from_path(str(path))
+        except ValueError as exc:
+            errors.append(BatchIntakeError(path, "ecn", str(exc)))
+            continue
+        logical_ecns.append(
+            LogicalEcnInput(
+                identifier,
+                parsed,
+                {
+                    "source_file": str(path),
+                    "filename_identifier": identifier,
+                    "source_status": source_status,
+                },
+            )
         )
-        for path, identifier, parsed in ecn_files
-    )
 
     bom_inputs = []
     for path, identifier, parsed in bom_files:
         if identifier not in known_ecns:
-            # An unmatched BOM cannot form a valid case. Skip it and continue
-            # with matched ECNs and ECN-only cases.
+            # An unmatched BOM cannot form a case. Skip it and continue with
+            # matched ECNs and ECN-only cases.
             continue
 
         rows = parsed if isinstance(parsed, list) else []
@@ -135,4 +148,5 @@ def build_batch_from_paths(
         mapping_confirmed=not errors,
     )
     return BatchPreparation(batch, tuple(errors))
+
 

@@ -116,6 +116,7 @@ def test_streamlit_upload_temp_path_preserves_filename_identifier():
 
 
 
+
 def test_manual_bom_csv_generates_line_numbers_and_defaults():
     csv_text = streamlit_app.manual_bom_csv([{"part_number": "P-1"}, {"part_number": "P-2", "quantity": "2.5"}])
 
@@ -171,15 +172,20 @@ def test_batch_preview_rows_groups_boms_by_filename_identifier():
     ]
 
 
-def test_persisted_batch_case_records_attempt_and_decision(monkeypatch):
+def test_persisted_batch_case_records_completed_source_status(monkeypatch):
     case = streamlit_app.BatchCase(
-        "ECN-1:ECN_ONLY",
-        LogicalEcnInput("ECN-1", {}, {"source_file": "ecn.csv"}),
+        "4079118:ECN_ONLY",
+        LogicalEcnInput("4079118", {}, {
+            "source_file": r"data\ecn_completed\ECN-4079118.csv",
+            "source_status": "COMPLETED",
+        }),
         None,
-    )
+        )
     calls = []
 
     class Connection:
+
+
         def __enter__(self):
             return self
 
@@ -188,7 +194,13 @@ def test_persisted_batch_case_records_attempt_and_decision(monkeypatch):
 
     monkeypatch.setattr(streamlit_app, "_evaluation_db_config", lambda: {"ECN_DB_PASSWORD": "x"})
     monkeypatch.setattr(streamlit_app, "connect_evaluation_db", lambda config: Connection())
-    monkeypatch.setattr(streamlit_app, "start_precheck", lambda connection, session, case_id: 10)
+    monkeypatch.setattr(
+        streamlit_app,
+        "start_precheck",
+        lambda connection, session, case_id, **kwargs: calls.append((case_id, kwargs)) or 10,
+    )
+
+
     monkeypatch.setattr(streamlit_app, "_execute_batch_case", lambda value: {"decision": "PASS", "packet": _packet("PASS")})
     monkeypatch.setattr(
         streamlit_app,
@@ -206,8 +218,11 @@ def test_persisted_batch_case_records_attempt_and_decision(monkeypatch):
     )
 
     assert result["decision"] == "PASS"
-    assert calls[0][0:2] == (10, "PASS")
-    assert calls[1] == (7, "PASS")
+    assert calls[0] == (7, {"source_status": "COMPLETED", "attempt_name": "4079118_MBOM_COMPLETED"})
+
+    assert calls[1][0:2] == (10, "PASS")
+    assert calls[2] == (7, "PASS")
+
 
 
 def test_batch_error_rows_expose_role_file_and_problem():

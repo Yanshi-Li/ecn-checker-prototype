@@ -88,10 +88,16 @@ and are not executed by this incremental change. The part-number format policy i
 entry and emits the unified finding contract; no Rxx compatibility finding is
 emitted by the staged rule engine.
 
-Context checks likewise emit flag types such as `DISCONTINUED_PART`,
-`MISSING_SUPPLIER`, `UOM_MISMATCH`, and `HISTORICAL_CONFLICT`. The merge step
-uses those legacy `ERROR` values and configured context flag types for the
-current PASS/FAIL decision. The AI Advisory prompt is generated from active
+Context checks emit flag types such as `DISCONTINUED_PART`,
+`MISSING_SUPPLIER`, and `UOM_MISMATCH`. `MISSING_SUPPLIER` is the D03
+supplier check and applies only to normalized `EBOM` rows; MBOM and unknown
+BOM types do not emit D03. Historical ECN records are retained as
+
+context artifacts but are not evaluated or emitted as `HISTORICAL_CONFLICT`
+findings, so they do not add review work or affect the PASS/FAIL decision. The
+merge step uses the remaining context `ERROR` values and configured flag types
+for the current PASS/FAIL decision. The AI Advisory prompt is generated from active
+
 catalogue definitions for S01–S05, and its flags carry canonical rule IDs plus
 catalogue metadata and evidence. Legacy A rule IDs are not emitted. S01 and
 S05 are LLM-owned; when the provider is unavailable the fallback reports them
@@ -106,9 +112,13 @@ files or directories, recursively discovers supported ECN/BOM files, and
 extracts exactly one seven-digit identifier from each filename. A BOM is matched
 to an ECN only when those filename identifiers are equal. Missing identifiers,
 ambiguous filenames, unsupported formats, and duplicate ECN identifiers are
-reported as intake errors before execution. BOMs with no matching ECN are
-skipped because they cannot form a validation case; matched ECNs continue and
-ECNs without a BOM become ECN-only cases.
+reported as intake errors before execution. Each ECN must also come from a
+folder named `ecn_draft` or `ecn_completed`; its `DRAFT`/`COMPLETED` source
+status is copied into batch metadata, and unknown source folders stop the batch
+before validation. BOMs with no matching ECN are skipped because they cannot
+form a validation case; matched ECNs continue and ECNs without a BOM become
+ECN-only cases.
+
 
 
 A matched BOM with no normalized rows is represented as `EMPTY`; a matched BOM
@@ -159,7 +169,12 @@ this store when `ECN_DB_PASSWORD` is configured and otherwise continues in memor
 contains a manifest, one complete JSON result per case, and the original files.
 Import verifies every file's hash and size before calling the destination store;
 re-importing the same verified bundle is idempotent. The CLI writes one with
-`py scripts/run_batch.py ... --export-bundle out/evaluation.zip`.
+`py scripts/run_batch.py ... --export-bundle out/evaluation.zip`. With PostgreSQL
+configured, the same CLI run also persists each completed case with its source
+status, canonical `{ecn_number}_MBOM_{DRAFT|COMPLETED}` attempt name, full result,
+and original input bytes. A database outage is reported as a persistence warning
+and does not change validation outcomes.
+
 
 `scripts/evaluation_queries.py` is the query seam for the Streamlit Reviewer
 Dashboard. It lists persisted attempts, calculates PASS/FAIL and tester-system

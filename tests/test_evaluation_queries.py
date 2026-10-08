@@ -62,12 +62,51 @@ def test_summary_counts_percentages_and_excludes_unjudged_agreement_denominator(
 
 def test_list_attempts_builds_observable_pass_case_and_tester_filters():
     connection = Connection([Cursor(ATTEMPT_COLUMNS, [])])
-    queries.list_attempts(connection, {"system_decision": "PASS", "case_identifier": "407", "tester": "lee"})
+    queries.list_attempts(connection, {"decision": "PASS", "ecn_number": "407", "tester": "lee"    })
+
     sql, params = connection.statements[0]
+
+
     assert "a.system_decision = %s" in sql
-    assert "le.logical_ecn_key ILIKE %s" in sql
+    assert "ILIKE %s" in sql
     assert "s.tester_email ILIKE %s" in sql
     assert params[:3] == ["PASS", "%407%", "%lee%"]
+
+
+def test_list_attempts_rejects_invalid_decision_or_source_status():
+    with pytest.raises(ValueError, match="decision"):
+        queries.list_attempts(Connection([]), {"decision": "MAYBE"})
+    with pytest.raises(ValueError, match="source_status"):
+        queries.list_attempts(Connection([]), {"source_status": "ARCHIVED"})
+
+
+def test_list_attempts_applies_canonical_filters_with_and_logic_and_shapes_business_fields():
+    columns = ["attempt_id", "attempt_name", "source_status", "attempt_number", "system_decision",
+               "started_at", "completed_at", "duration_seconds", "case_identifier", "tester_email",
+               "tester_name", "tester_judgement", "agreement"]
+    row = (4, "4079118_MBOM_COMPLETED", None, 1, "PASS", None, None, 1.0, "4079118",
+           "tester@example.com", "Tester", None, False)
+    connection = Connection([Cursor(columns, [row])])
+
+    attempts = queries.list_attempts(connection, {
+        "ecn_number": "4079", "source_status": "COMPLETED", "decision": "PASS",
+    })
+
+    sql, params = connection.statements[0]
+
+
+    assert "a.system_decision = %s" in sql
+    assert "COALESCE(NULLIF(a.source_status, ''), CASE" in sql
+
+
+
+
+    assert "ILIKE %s" in sql
+    assert params == ["PASS", "COMPLETED", "%4079%"]
+    assert attempts[0]["ecn_number"] == "4079118"
+    assert attempts[0]["source_status"] == "COMPLETED"
+    assert attempts[0]["decision"] == "PASS"
+
 
 
 def test_detail_contains_payload_findings_and_files():

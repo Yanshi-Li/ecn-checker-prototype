@@ -1,6 +1,8 @@
     import { useEffect, useMemo, useState } from "react";
 import ReviewerArea from "./ReviewerArea";
 import AdminDashboard from "./AdminDashboard";
+import { buildAttemptFilterParams } from "./evaluationAttemptFilters";
+
 
 type Severity = "error" | "warning" | string;
 
@@ -17,7 +19,19 @@ type User = {
   role: "TESTER" | "REVIEWER" | "ADMINISTRATOR";
 };
 
+type EvaluationAttempt = {
+  attempt_id: number;
+  attempt_name?: string;
+  ecn_number?: string;
+  source_status?: string;
+  decision?: string;
+  system_decision?: string;
+  duration_seconds?: number;
+  started_at?: string;
+};
+
 type PrecheckResponse = {
+
   error?: string;
   decision: "PASS" | "FAIL" | string;
   summary: {
@@ -60,6 +74,7 @@ async function readJson<T>(response: Response): Promise<T> {
 function App() {
   const [ecnFile, setEcnFile] = useState<File | null>(null);
   const [bomFile, setBomFile] = useState<File | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<"DRAFT" | "COMPLETED">("DRAFT");
   const [user, setUser] = useState<User | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -71,8 +86,10 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
   const [apiReady, setApiReady] = useState<boolean | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
-  const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
+    const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
+  const [attemptRefreshKey, setAttemptRefreshKey] = useState(0);
   const [activeTab, setActiveTab] = useState<"precheck" | "reviewer" | "dashboard">("precheck");
+
 
   useEffect(() => {
     void fetch("/api/health")
@@ -135,10 +152,11 @@ function App() {
     setNotificationStatus(null);
 
     const formData = new FormData();
-    formData.append("ecn", ecnFile);
+        formData.append("ecn", ecnFile);
     if (bomFile) {
       formData.append("bom", bomFile);
     }
+    formData.append("source_status", sourceStatus);
 
     try {
       const response = await fetch("/api/precheck", { method: "POST", body: formData });
@@ -146,8 +164,10 @@ function App() {
       if (!response.ok || payload.error) {
         throw new Error(payload.error ?? "The pre-check could not be completed.");
       }
-      setResult(payload);
+            setResult(payload);
       setSelectedFinding(payload.findings[0] ?? null);
+      setAttemptRefreshKey((current) => current + 1);
+
     } catch (error) {
       setRequestError(
         error instanceof Error ? error.message : "The pre-check could not be completed.",
@@ -288,6 +308,11 @@ function App() {
                 onChange={setBomFile}
               />
             </div>
+            <label htmlFor="source-status">Source status</label>
+            <select id="source-status" value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value as "DRAFT" | "COMPLETED")}>
+              <option value="DRAFT">DRAFT — still being prepared</option>
+              <option value="COMPLETED">COMPLETED — ready for review</option>
+            </select>
             {requestError && <p className="form-error" role="alert">{requestError}</p>}
             <button className="primary-button" type="submit" disabled={submitting || apiReady === false}>
               {submitting ? "Running pre-check…" : "Run pre-check"}
@@ -378,14 +403,70 @@ function App() {
               </section>
             </div>
           </section>
-        )}
+                )}
+        <TesterAttempts refreshKey={attemptRefreshKey} />
         </>}
+
       </section>
     </main>
   );
 }
 
+function TesterAttempts({ refreshKey }: { refreshKey: number }) {
+  const [ecnNumber, setEcnNumber] = useState("");
+  const [sourceStatus, setSourceStatus] = useState("ALL");
+  const [decision, setDecision] = useState("ALL");
+  const [attempts, setAttempts] = useState<EvaluationAttempt[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const params = buildAttemptFilterParams({
+      ecn_number: ecnNumber,
+      source_status: sourceStatus,
+      decision,
+    });
+    setLoading(true);
+    setError(null);
+    void fetch(`/api/tester/evaluation-attempts?${params}`)
+      .then(async (response) => {
+        const payload = await readJson<{ attempts?: EvaluationAttempt[]; error?: string }>(response);
+        if (!response.ok) throw new Error(payload.error ?? "Your evaluation attempts could not be loaded.");
+        if (active) setAttempts(payload.attempts ?? []);
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : "Your evaluation attempts could not be loaded.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [ecnNumber, sourceStatus, decision, refreshKey]);
+
+  return (
+    <section className="dashboard-card evaluation-attempts" aria-labelledby="tester-attempts-heading">
+      <div className="section-heading compact">
+        <div><p className="step">Evaluation records</p><h2 id="tester-attempts-heading">Your pre-check attempts</h2></div>
+        <p>{attempts.length} matching attempts</p>
+      </div>
+      <div className="dashboard-filters" aria-label="Your attempt filters">
+        <label>Source status<select value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value)}><option value="ALL">All source statuses</option><option value="DRAFT">DRAFT</option><option value="COMPLETED">COMPLETED</option></select></label>
+        <label>Decision<select value={decision} onChange={(event) => setDecision(event.target.value)}><option value="ALL">All decisions</option><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select></label>
+        <label>ECN number<input value={ecnNumber} onChange={(event) => setEcnNumber(event.target.value)} placeholder="Search ECN number" /></label>
+      </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {loading ? <p className="empty-state">Loading attempts…</p> : attempts.length === 0 ? <p className="empty-state">No attempts match these filters.</p> : (
+        <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Source Status</th><th>Decision</th><th>Checking time</th><th>Started</th><th>Attempt ID</th></tr></thead><tbody>
+          {attempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision || "—"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td><td>{attempt.attempt_id}</td></tr>)}
+        </tbody></table></div>
+      )}
+    </section>
+  );
+}
+
 type FileInputProps = {
+
   id: string;
   label: string;
   required?: boolean;

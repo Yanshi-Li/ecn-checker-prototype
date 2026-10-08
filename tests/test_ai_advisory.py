@@ -200,6 +200,23 @@ def test_prompt_contains_catalogue_semantic_rules():
     assert "A05" not in prompt
 
 
+def test_prompt_includes_all_bom_rows_for_ai_review():
+    bom = [
+        {"line_number": str(line_number), "part_number": f"AB-{line_number:04d}"}
+        for line_number in range(1, 22)
+    ]
+
+    prompt = _build_prompt(_packet(description="Review every BOM line.", bom=bom))
+
+    assert "Line 1:" in prompt
+    assert "Line 20:" in prompt
+    assert "Line 21:" in prompt
+    assert "additional lines truncated" not in prompt
+
+
+
+
+
 
 def test_semantic_S02_description_parts_must_exist_in_bom():
     packet = _packet(
@@ -293,8 +310,7 @@ def test_llm_config_prefers_openai_key(monkeypatch):
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     config = _resolve_llm_config()
     assert config["provider"] == "openai"
-    assert config["model"] == "gpt-4o-mini"
-
+    assert config["model"] == "gpt-codex"
 
 def test_llm_config_uses_gemini_when_openai_missing(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

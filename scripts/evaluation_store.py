@@ -16,6 +16,45 @@ import re
 
 NOTIFICATION_STATUSES = frozenset({"requested", "sent", "failed"})
 NOTIFICATION_KINDS = frozenset({"validation_report", "gate_notification", "other"})
+SOURCE_STATUSES = frozenset({"DRAFT", "COMPLETED"})
+
+
+def _normalise_source_status(value: object) -> str:
+    status = str(value or "DRAFT").strip().upper()
+    if status not in SOURCE_STATUSES:
+        raise ValueError("source_status must be DRAFT or COMPLETED")
+    return status
+
+
+def _attempt_name(snapshot: Mapping[str, object], source_status: str, files) -> str:
+    explicit = str(snapshot.get("attempt_name") or "").strip()
+    if explicit:
+        return explicit
+    case_id = str(snapshot.get("case_id") or "").strip()
+    ecn_number = case_id.split(":", 1)[0] or "UNKNOWN_ECN"
+    bom_type = "ONLY"
+    for file in files or ():
+        if str(file.get("role", "")).lower() != "bom":
+            continue
+        match = re.search(r"(?i)(MBOM|EBOM)", str(file.get("filename", "")))
+        bom_type = match.group(1).upper() if match else "BOM"
+        break
+    return f"{ecn_number}_{bom_type}_{source_status}"
+
+
+def _idempotency_key(snapshot: Mapping[str, object], source_status: str, files) -> str:
+    explicit = str(snapshot.get("idempotency_key") or "").strip()
+    if explicit:
+        return f"{explicit}|{source_status}"
+    file_hashes = []
+    for file in files or ():
+        raw = file.get("bytes", b"")
+        if isinstance(raw, str):
+            raw = raw.encode()
+        file_hashes.append(sha256(bytes(raw)).hexdigest())
+    identity = str(snapshot.get("case_id") or snapshot.get("attempt_name") or "evaluation")
+    return sha256("|".join([identity, source_status, *sorted(file_hashes)]).encode("utf-8")).hexdigest()
+
 
 
 def _safe_error_message(error: object) -> str | None:
@@ -69,7 +108,9 @@ _SCHEMA_PATH = Path(__file__).with_name("evaluation_schema.sql")
 
 
 def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[str, object], files=()) -> int:
-    """Persist a complete result, including ERROR cases, files, and notifications."""
+    """Persist or update one evaluation identified by files and source status."""
+    files = tuple(files or ())
+    source_status = _normalise_source_status(snapshot.get("source_status"))
     decision = str(snapshot.get("decision") or "").strip().upper() or None
     status = str(snapshot.get("status") or decision or "ERROR").strip().upper()
     if decision not in {None, "PASS", "FAIL"}:
@@ -78,6 +119,9 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
         raise ValueError("snapshot status must be PASS, FAIL, ERROR, or NOT_RUN")
 
     payload = {key: value for key, value in snapshot.items() if key != "files"}
+    payload["source_status"] = source_status
+    attempt_name = _attempt_name(snapshot, source_status, files)
+    idempotency_key = _idempotency_key(snapshot, source_status, files)
     event_type = "precheck_completed" if decision else "precheck_failed"
     event_metadata = {
         "system_decision": decision,
@@ -86,9 +130,16 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
     }
     with connection.transaction():
         cursor = connection.execute(
-            """INSERT INTO precheck_attempts
-               (session_id, case_id, system_decision, started_at, completed_at, result_payload)
-               VALUES (%s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP), %s)
+                        """INSERT INTO precheck_attempts
+               (session_id, case_id, system_decision, started_at, completed_at, result_payload,
+                source_status, attempt_name, idempotency_key)
+               VALUES (%s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP), COALESCE(%s, CURRENT_TIMESTAMP), %s, %s, %s, %s)
+                              ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET
+
+                 session_id = EXCLUDED.session_id, case_id = EXCLUDED.case_id,
+                 system_decision = EXCLUDED.system_decision, started_at = EXCLUDED.started_at,
+                 completed_at = EXCLUDED.completed_at, result_payload = EXCLUDED.result_payload,
+                 source_status = EXCLUDED.source_status, attempt_name = EXCLUDED.attempt_name
                RETURNING id""",
             (
                 session_id,
@@ -97,6 +148,9 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
                 snapshot.get("started_at"),
                 snapshot.get("completed_at"),
                 Jsonb(payload),
+                source_status,
+                attempt_name,
+                idempotency_key,
             ),
         )
         attempt_id = int(cursor.fetchone()[0])
@@ -105,7 +159,7 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
                VALUES (%s, %s, %s, %s)""",
             (session_id, attempt_id, event_type, Jsonb(event_metadata)),
         )
-        store_evaluation_files(connection, attempt_id, files, _in_transaction=True)
+        store_evaluation_files(connection, attempt_id, files, _in_transaction=True, replace_existing=True)
         for notification in snapshot.get("notifications", ()) or ():
             _insert_notification(connection, attempt_id, notification)
     return attempt_id
@@ -116,7 +170,7 @@ def persist_evaluation_snapshot(connection, session_id: int, snapshot: Mapping[s
 save_evaluation_snapshot = persist_evaluation_snapshot
 
 
-def store_evaluation_files(connection, attempt_id: int, files=(), _in_transaction: bool = False) -> None:
+def store_evaluation_files(connection, attempt_id: int, files=(), _in_transaction: bool = False, replace_existing: bool = False) -> None:
     """Attach original uploaded bytes to an existing pre-check attempt."""
     def insert_files() -> None:
         for file in files:
@@ -381,17 +435,26 @@ def fail_precheck(
         )
 
 
-def start_precheck(connection, session_id: int, case_id: int | None = None) -> int:
-    """Create a pre-check attempt and its start event."""
+def start_precheck(
+    connection,
+    session_id: int,
+    case_id: int | None = None,
+    source_status: str = "DRAFT",
+    attempt_name: str = "legacy",
+    idempotency_key: str | None = None,
+) -> int:
+    """Create or reuse a pre-check attempt and its start event."""
+    source_status = _normalise_source_status(source_status)
 
     with connection.transaction():
         cursor = connection.execute(
-            """
-            INSERT INTO precheck_attempts (session_id, case_id, started_at)
-            VALUES (%s, %s, CURRENT_TIMESTAMP)
+                        """
+            INSERT INTO precheck_attempts
+                (session_id, case_id, source_status, attempt_name, idempotency_key, started_at)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             RETURNING id
             """,
-            (session_id, case_id),
+            (session_id, case_id, source_status, attempt_name, idempotency_key),
         )
         attempt_id = int(cursor.fetchone()[0])
         connection.execute(

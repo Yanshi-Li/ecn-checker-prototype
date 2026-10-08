@@ -16,7 +16,9 @@ if str(ROOT) not in sys.path:
 
 from scripts.batch_intake import build_batch_from_paths
 from scripts.batch_orchestration import BatchCase, run_batch
+
 from scripts.evaluation_bundle import export_evaluation_bundle
+
 
 
 def _paths(values: list[str], directories: list[str]) -> list[Path]:
@@ -60,7 +62,9 @@ def _executor_factory(args: argparse.Namespace):
 
 def _snapshot(case: BatchCase) -> dict[str, object]:
     files = []
+    result = dict(case.result or {})
     for role, value in (("ecn", case.logical_ecn.metadata.get("source_file")), ("bom", case.bom.metadata.get("source_file") if case.bom else None)):
+
         if not value:
             continue
         path = Path(str(value))
@@ -70,11 +74,19 @@ def _snapshot(case: BatchCase) -> dict[str, object]:
                 "filename": path.name,
                 "mime_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
                 "captured_at": datetime.now(timezone.utc).isoformat(),
-                "bytes": path.read_bytes(),
+                                "bytes": path.read_bytes(),
             })
-    result = dict(case.result or {})
+    source_status = str(case.logical_ecn.metadata.get("source_status", "")).strip().upper()
+    if source_status not in {"DRAFT", "COMPLETED"}:
+        raise ValueError("ECN source_status must be derived from an ecn_draft or ecn_completed folder")
+    ecn_number = str(case.logical_ecn.key).strip()
+
+    attempt_name = f"{ecn_number}_MBOM_{source_status}" if ecn_number.isdigit() else "legacy"
     return {
         "case_id": case.case_id,
+        "attempt_name": attempt_name,
+        "source_status": source_status,
+
         "decision": case.status if case.status in {"PASS", "FAIL"} else None,
         "status": case.status,
         "error": case.error,

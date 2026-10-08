@@ -52,21 +52,20 @@ def write_ai_summary(packet: dict, out_dir: Path) -> None:
     ai_flags = packet["validation"].get("ai_flags", {})
 
     rule_violations = packet["validation"].get("rule_violations", [])
-
     context_flags = packet["validation"].get("context_flags", [])
 
     # Guard: wrap bare list into expected dict shape.
-
     if isinstance(ai_flags, list):
         ai_flags = {
             "overall_risk": "UNKNOWN",
             "description_quality": "UNKNOWN",
             "flags": ai_flags,
-            "recommendation": "ai_flags was stored as a raw list â€” check ai_advisory.py.",
+            "recommendation": "ai_flags was stored as a raw list — check ai_advisory.py.",
             "ai_available": False,
         }
+
     lines = [
-        f"# ECN AI Summary â€” {header.get('change_notice_number', 'N/A')}",
+        f"# ECN AI Summary — {header.get('change_notice_number', 'N/A')}",
         f"**Title:** {header.get('title', '')}  ",
         f"**Author:** {header.get('author', '')}  ",
         f"**Date:** {header.get('date', '')}  ",
@@ -82,20 +81,22 @@ def write_ai_summary(packet: dict, out_dir: Path) -> None:
         "",
         "### AI Flags",
     ]
+
     for flag in ai_flags.get("flags", []):
         lines.append(f"- **{flag.get('type')}**: {flag.get('detail')}")
 
     lines += ["", "---", "", "## Rule Engine Violations"]
     for v in rule_violations:
         lines.append(
-            f"- [{v.get('severity')}] **{v.get('rule_id')}** â€” {v.get('message')}"
+            f"- [{v.get('severity')}] **{v.get('rule_id')}** — {v.get('message')}"
         )
 
     lines += ["", "---", "", "## Context Engine Flags"]
-    for f in context_flags:
+    for ctx_flag in context_flags:
         lines.append(
-            f"- [{f.get('severity')}] **{f.get('flag_type')}** "
-            f"({f.get('part_number')}) â€” {f.get('message')}"
+            f"- [{ctx_flag.get('severity')}] **{ctx_flag.get('rule_id', '—')}** "
+            f"{ctx_flag.get('flag_type')} ({ctx_flag.get('part_number')}) — "
+            f"{ctx_flag.get('message')}"
         )
 
     summary_path = out_dir / "ai_summary.md"
