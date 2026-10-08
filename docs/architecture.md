@@ -112,9 +112,13 @@ files or directories, recursively discovers supported ECN/BOM files, and
 extracts exactly one seven-digit identifier from each filename. A BOM is matched
 to an ECN only when those filename identifiers are equal. Missing identifiers,
 ambiguous filenames, unsupported formats, and duplicate ECN identifiers are
-reported as intake errors before execution. BOMs with no matching ECN are
-skipped because they cannot form a validation case; matched ECNs continue and
-ECNs without a BOM become ECN-only cases.
+reported as intake errors before execution. Each ECN must also come from a
+folder named `ecn_draft` or `ecn_completed`; its `DRAFT`/`COMPLETED` source
+status is copied into batch metadata, and unknown source folders stop the batch
+before validation. BOMs with no matching ECN are skipped because they cannot
+form a validation case; matched ECNs continue and ECNs without a BOM become
+ECN-only cases.
+
 
 
 A matched BOM with no normalized rows is represented as `EMPTY`; a matched BOM
@@ -165,7 +169,12 @@ this store when `ECN_DB_PASSWORD` is configured and otherwise continues in memor
 contains a manifest, one complete JSON result per case, and the original files.
 Import verifies every file's hash and size before calling the destination store;
 re-importing the same verified bundle is idempotent. The CLI writes one with
-`py scripts/run_batch.py ... --export-bundle out/evaluation.zip`.
+`py scripts/run_batch.py ... --export-bundle out/evaluation.zip`. With PostgreSQL
+configured, the same CLI run also persists each completed case with its source
+status, canonical `{ecn_number}_MBOM_{DRAFT|COMPLETED}` attempt name, full result,
+and original input bytes. A database outage is reported as a persistence warning
+and does not change validation outcomes.
+
 
 `scripts/evaluation_queries.py` is the query seam for the Streamlit Reviewer
 Dashboard. It lists persisted attempts, calculates PASS/FAIL and tester-system

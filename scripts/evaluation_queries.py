@@ -9,9 +9,13 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Mapping
 
+from scripts.evaluation_attempts import parse_attempt_name
+
+
 from psycopg.types.json import Jsonb
 
 from scripts.evaluation_auth import can_administer, can_review, hash_password, normalise_role, verify_password
+
 
 
 DECISIONS = ("ALL", "PASS", "FAIL")
@@ -35,19 +39,39 @@ def _where(filters: Mapping[str, object] | None = None, alias: str = "a"):
     filters = filters or {}
     clauses = [f"{alias}.system_decision IS NOT NULL"]
     params: list[object] = []
-    decision = str(filters.get("system_decision", "ALL")).upper()
+    decision = str(filters.get("decision", filters.get("system_decision", "ALL"))).strip().upper()
+    if decision not in DECISIONS:
+        raise ValueError("decision must be ALL, PASS, or FAIL")
+    source_status = str(filters.get("source_status", "ALL")).strip().upper()
+    if source_status not in SOURCE_STATUSES:
+        raise ValueError("source_status must be ALL, DRAFT, or COMPLETED")
     if decision in {"PASS", "FAIL"}:
         clauses.append(f"{alias}.system_decision = %s")
         params.append(decision)
-    source_status = str(filters.get("source_status", "ALL")).upper()
     if source_status in {"DRAFT", "COMPLETED"}:
-        clauses.append(f"{alias}.source_status = %s")
+        source_status_expression = (
+            f"COALESCE(NULLIF({alias}.source_status, ''), CASE "
+
+            f"WHEN {alias}.attempt_name ~ '^[0-9]+_MBOM_(DRAFT|COMPLETED)$' "
+            f"THEN upper(split_part({alias}.attempt_name, '_MBOM_', 2)) END)"
+        )
+        clauses.append(f"{source_status_expression} = %s")
         params.append(source_status)
 
-    case_identifier = str(filters.get("case_identifier", "")).strip()
-    if case_identifier:
-        clauses.append("le.logical_ecn_key ILIKE %s")
-        params.append(f"%{case_identifier}%")
+
+
+
+    ecn_number = str(filters.get("ecn_number", filters.get("case_identifier", ""))).strip()
+    if ecn_number:
+
+        ecn_expression = "COALESCE(NULLIF(le.logical_ecn_key, ''), NULLIF(a.result_payload->>'case_id', ''), CASE WHEN a.attempt_name ~ '^[0-9]+_MBOM_(DRAFT|COMPLETED)$' THEN split_part(a.attempt_name, '_MBOM_', 1) END)"
+        clauses.append(f"{ecn_expression} ILIKE %s")
+        params.append(f"%{ecn_number}%")
+    tester_email = str(filters.get("tester_email", "")).strip()
+    if tester_email:
+        clauses.append("lower(s.tester_email) = lower(%s)")
+        params.append(tester_email)
+
     tester = str(filters.get("tester", "")).strip()
     if tester:
         clauses.append("(s.tester_email ILIKE %s OR COALESCE(s.tester_name, '') ILIKE %s)")
@@ -80,20 +104,39 @@ LEFT JOIN tester_judgements j ON j.precheck_attempt_id = a.id
 
 
 def list_attempts(connection, filters: Mapping[str, object] | None = None) -> list[dict[str, object]]:
-    """List completed attempts, with optional reviewer filters."""
+    """List completed attempts using the shared, validated evaluation filters."""
     where, params = _where(filters)
     cursor = connection.execute(
-                """SELECT a.id AS attempt_id, a.attempt_name, a.source_status, a.attempt_number,
-                  a.system_decision, a.started_at, a.completed_at,
-                  EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
+        """SELECT a.id AS attempt_id, a.attempt_name,
+                  COALESCE(NULLIF(a.source_status, ''), CASE
 
+                    WHEN a.attempt_name ~ '^[0-9]+_MBOM_(DRAFT|COMPLETED)$'
+                    THEN upper(split_part(a.attempt_name, '_MBOM_', 2)) END) AS source_status,
+                  a.attempt_number, a.system_decision, a.system_decision AS decision,
+                  a.started_at, a.completed_at,
+                  EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
+                  COALESCE(NULLIF(le.logical_ecn_key, ''), NULLIF(a.result_payload->>'case_id', ''),
+
+                    CASE WHEN a.attempt_name ~ '^[0-9]+_MBOM_(DRAFT|COMPLETED)$'
+                    THEN split_part(a.attempt_name, '_MBOM_', 1) END) AS ecn_number,
                   COALESCE(le.logical_ecn_key, a.result_payload->>'case_id') AS case_identifier,
                   s.tester_email, s.tester_name, j.judgement AS tester_judgement,
                   (j.judgement IS NOT NULL AND j.judgement = a.system_decision) AS agreement
            """ + _BASE_FROM + " WHERE " + where + " ORDER BY a.started_at DESC, a.id DESC",
-        params,
+                params,
     )
-    return _rows(cursor)
+    rows = _rows(cursor)
+    for row in rows:
+
+        parsed_ecn, parsed_status = parse_attempt_name(row.get("attempt_name", ""))
+        if not row.get("ecn_number"):
+            row["ecn_number"] = parsed_ecn or row.get("case_identifier")
+        if not row.get("source_status"):
+            row["source_status"] = parsed_status
+        row["decision"] = row.get("decision") or row.get("system_decision")
+    return rows
+
+
 
 
 def get_evaluation_summary(connection, filters: Mapping[str, object] | None = None) -> dict[str, object]:

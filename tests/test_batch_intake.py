@@ -47,9 +47,30 @@ def test_builds_folder_batch_and_matches_boms_by_filename_identifier(tmp_path):
     assert {bom.suggested_ecn_key for bom in prepared.batch.bom_inputs} == {"4002659", "4078575"}
     assert len(prepared.batch.bom_inputs) == 3
     assert prepared.batch.mapping_confirmed is True
+    assert {ecn.metadata["source_status"] for ecn in prepared.batch.logical_ecns} == {"DRAFT"}
+
+
+def test_derives_completed_source_status_and_rejects_unknown_source_folder(tmp_path):
+    completed_dir = tmp_path / "ecn_completed"
+    unknown_dir = tmp_path / "ecns"
+    completed_dir.mkdir()
+    unknown_dir.mkdir()
+    completed = completed_dir / "ECN-4078575.csv"
+    unknown = unknown_dir / "ECN-4078576.csv"
+    _ecn(completed, "4078575")
+    _ecn(unknown, "4078576")
+
+    prepared = build_batch_from_paths([completed], [])
+    rejected = build_batch_from_paths([unknown], [])
+
+    assert prepared.errors == ()
+    assert prepared.batch.logical_ecns[0].metadata["source_status"] == "COMPLETED"
+    assert rejected.errors[0].path == unknown
+    assert "unable to derive source status" in rejected.errors[0].message
 
 
 def test_preserves_empty_bom_skips_unmatched_bom_and_reports_invalid_files(tmp_path):
+
 
     ecn_dir = tmp_path / "ecn_draft"
     ecn_dir.mkdir()
@@ -114,8 +135,13 @@ def test_derive_source_status_from_path_supports_draft_completed_and_rejects_unk
         derive_source_status_from_path("/repo/data/ecns/ECN-1.csv")
 
 
-def test_parse_attempt_name_supports_canonical_names_and_rejects_invalid():
+def test_parse_attempt_name_supports_only_exact_canonical_names():
     assert parse_attempt_name("4079118_MBOM_DRAFT") == ("4079118", "DRAFT")
     assert parse_attempt_name("4079118_MBOM_COMPLETED") == ("4079118", "COMPLETED")
     assert parse_attempt_name("invalid-name") == (None, None)
+    assert parse_attempt_name("4079118_mbom_draft") == (None, None)
+    assert parse_attempt_name("4079118_MBOM_ARCHIVED") == (None, None)
+
+
+
 

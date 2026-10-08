@@ -58,12 +58,15 @@ def test_load_excel_mbom_template(tmp_path):
 
 
 def test_load_sample_4079755_part_master_carries_forward_database_and_action():
-    rows = load_file(str(DATA_DIR / "bom_draft" / "4079755-MBOM.xlsx"), role="bom")
+        rows = load_file(str(DATA_DIR / "bom_draft" / "4079755-MBOM.xlsx"), role="bom")
+        assert len(rows) == 12
+        assert all(row["source"] == "Thailand" for row in rows)
+        assert sum(row["action"] == "UPDATE" for row in rows) == 4
+        assert sum(row["action"] == "ADD" for row in rows) == 8
+        assert [row["part_number"] for row in rows[:4]] == ["433540", "433767", "433780", "433898"]
 
-    assert len(rows) == 12
-    assert all(row["source"] == "Thailand" for row in rows)
-    assert all(row["action"] == "UPDATE" for row in rows)
-    assert [row["part_number"] for row in rows[:4]] == ["433540", "433767", "433780", "433898"]
+
+
 
 
 def test_load_excel_mbom_structure_parent_part_headers(tmp_path):

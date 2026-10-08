@@ -310,8 +310,7 @@ def test_llm_config_prefers_openai_key(monkeypatch):
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     config = _resolve_llm_config()
     assert config["provider"] == "openai"
-    assert config["model"] == "gpt-4o-mini"
-
+    assert config["model"] == "gpt-codex"
 
 def test_llm_config_uses_gemini_when_openai_missing(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)

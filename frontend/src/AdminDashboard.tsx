@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
+import { buildAttemptFilterParams } from "./evaluationAttemptFilters";
+
 
 type Reviewer = { id: number; email: string; display_name: string };
-type Attempt = { attempt_id: number; system_decision: string; tester_email?: string; tester_name?: string; review_status?: string };
+type Attempt = { attempt_id: number; attempt_name?: string; ecn_number?: string; source_status?: string; system_decision: string; decision?: string; started_at?: string; completed_at?: string; duration_seconds?: number; tester_judgement?: string | null; agreement?: boolean; tester_email?: string; tester_name?: string; review_status?: string };
+
 type Dispute = Attempt;
 type Comparison = { attempt: Attempt; submissions: Array<{ submission_id: number; display_name: string; email: string; overall_judgement: string; comment?: string; rule_judgements?: Array<{ rule_id: string; judgement: string; comment?: string }> }> };
 
@@ -33,6 +36,8 @@ export default function AdminDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [reviewers, setReviewers] = useState<Reviewer[]>([]);
   const [assignable, setAssignable] = useState<Attempt[]>([]);
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+
   const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [selectedAttempt, setSelectedAttempt] = useState("");
   const [selectedReviewer, setSelectedReviewer] = useState("");
@@ -44,12 +49,26 @@ export default function AdminDashboard() {
   async function loadSummary() {
     setLoading(true);
     setError(null);
-    try {
-      const params = new URLSearchParams({ decision, source_status: sourceStatus, tester, ecn });
-      const response = await fetch(`/api/admin/evaluation-summary?${params}`);
-      const payload = await readJson<Summary & { error?: string }>(response);
-      if (!response.ok) throw new Error(payload.error ?? "The dashboard could not be loaded.");
+        try {
+      const params = buildAttemptFilterParams({
+        decision,
+        source_status: sourceStatus,
+        ecn_number: ecn,
+      });
+      params.set("tester", tester);
+
+      const [summaryResponse, attemptsResponse] = await Promise.all([
+
+        fetch(`/api/admin/evaluation-summary?${params}`),
+        fetch(`/api/admin/evaluation-attempts?${params}`),
+      ]);
+      const payload = await readJson<Summary & { error?: string }>(summaryResponse);
+      const attemptPayload = await readJson<{ attempts?: Attempt[]; error?: string }>(attemptsResponse);
+      if (!summaryResponse.ok) throw new Error(payload.error ?? "The dashboard could not be loaded.");
+      if (!attemptsResponse.ok) throw new Error(attemptPayload.error ?? "Evaluation attempts could not be loaded.");
       setSummary(payload);
+      setAttempts(attemptPayload.attempts ?? []);
+
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The dashboard could not be loaded.");
     } finally {
@@ -71,7 +90,8 @@ export default function AdminDashboard() {
     } catch { setToolStatus("Administrator tools could not be loaded."); }
   }
 
-  useEffect(() => { void loadSummary(); void loadAdminTools(); }, [decision, tester, ecn]);
+    useEffect(() => { void loadSummary(); void loadAdminTools(); }, [decision, sourceStatus, tester, ecn]);
+
 
   async function assignReviewer() {
     if (!selectedAttempt || !selectedReviewer) return;
@@ -95,10 +115,16 @@ export default function AdminDashboard() {
     if (response.ok) { setResolutionComment(""); void loadAdminTools(); }
   }
 
-  function exportEvaluation() {
-    const params = new URLSearchParams({ decision, source_status: sourceStatus, tester, ecn });
+    function exportEvaluation() {
+    const params = buildAttemptFilterParams({
+      decision,
+      source_status: sourceStatus,
+      ecn_number: ecn,
+    });
+    params.set("tester", tester);
     window.location.href = `/api/admin/evaluation-export?${params.toString()}`;
   }
+
 
   return (
     <section className="dashboard-section" aria-labelledby="dashboard-heading">
@@ -136,8 +162,18 @@ export default function AdminDashboard() {
         </section>
         <p className="dashboard-note">PASS and FAIL percentages use all completed attempts. Agreement uses only attempts where a tester judgement was submitted; {summary.total_attempts - summary.judged_count} judgement{summary.total_attempts - summary.judged_count === 1 ? " is" : "s are"} pending.</p>
       </>}
+                  <section className="dashboard-card evaluation-attempts" aria-labelledby="attempts-heading">
+
+        <div className="section-heading compact"><div><p className="step">Evaluation records</p><h2 id="attempts-heading">Pre-check attempts</h2></div><p>{attempts.length} matching attempts</p></div>
+        {attempts.length === 0 ? <p className="empty-state">No completed attempts match these filters.</p> : (
+          <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Attempt ID</th><th>Source Status</th><th>Decision</th><th>Tester judgement</th><th>Agreement</th><th>Checking time</th><th>Started</th></tr></thead><tbody>
+            {attempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.attempt_id}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision}</td><td>{attempt.tester_judgement || "Pending"}</td><td>{attempt.tester_judgement ? (attempt.agreement ? "Agreed" : "Disagreed") : "Pending"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td></tr>)}
+          </tbody></table></div>
+        )}
+      </section>
       <section className="admin-tools" aria-label="Administrator tools">
         <div className="section-heading compact"><div><p className="step">Administration</p><h2>Assignments and reviews</h2></div><button className="secondary-button" type="button" onClick={exportEvaluation}>Export evaluation CSV</button></div>
+
         {reviewReport && <div className="dashboard-metrics review-report"><Metric label="Rule groups reviewed" value={String(reviewReport.rule_group_count)} /><Metric label="Rule disagreements" value={`${reviewReport.rule_disagreement_percentage}%`} detail={`${reviewReport.rule_disagreement_count} groups`} tone="danger" /><Metric label="Disputed attempts" value={String(reviewReport.disputed_attempt_count)} tone="danger" /></div>}
         <div className="admin-tool-grid">
           <div className="dashboard-card"><h3>Assign reviewers</h3><label>Attempt<select value={selectedAttempt} onChange={(event) => setSelectedAttempt(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>Attempt {attempt.attempt_id} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label><label>Reviewer<select value={selectedReviewer} onChange={(event) => setSelectedReviewer(event.target.value)}><option value="">Choose a reviewer</option>{reviewers.map((reviewer) => <option key={reviewer.id} value={reviewer.id}>{reviewer.display_name} ({reviewer.email})</option>)}</select></label><button className="primary-button" type="button" onClick={() => void assignReviewer()}>Assign reviewer</button></div>

@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import csv
 import io
+
+
+
 import os
+import re
 import sys
 import tempfile
+
 from pathlib import Path
 
 
@@ -239,13 +244,25 @@ def _persist_precheck(
     if not os.environ.get("ECN_DB_PASSWORD"):
         return {"saved": False, "message": "Evaluation database is not configured."}
 
+
+
+
+
+
+
+
+    filename = next((str(file.get("filename", "")) for file in uploaded_files if file.get("role") == "ecn"), "")
+
+    match = re.search(r"(?<!\d)(\d{7})(?!\d)", Path(filename).name)
+    attempt_name = f"{match.group(1)}_MBOM_{source_status}" if match else "legacy"
+
     with connect_evaluation_db() as connection:
         initialise_schema(connection)
         session_id = create_session(connection, tester_email, tester_name)
-        if source_status == "DRAFT":
-            attempt_id = start_precheck(connection, session_id)
-        else:
-            attempt_id = start_precheck(connection, session_id, source_status=source_status)
+        attempt_id = start_precheck(
+            connection, session_id, source_status=source_status, attempt_name=attempt_name
+        )
+
         store_evaluation_files(connection, attempt_id, uploaded_files)
         duration = complete_precheck(
             connection,
@@ -254,7 +271,17 @@ def _persist_precheck(
             packet["gate"]["decision"],
             {"packet": packet},
         )
-    return {"saved": True, "attempt_id": attempt_id, "duration_seconds": duration}
+
+        return {
+            "saved": True,
+            "attempt_id": attempt_id,
+            "attempt_name": attempt_name,
+            "ecn_number": match.group(1) if match else None,
+            "source_status": source_status,
+            "duration_seconds": duration,
+        }
+
+
 
 
 def _precheck_response(packet: dict, file_count: int, persistence: dict | None = None) -> dict:
@@ -375,9 +402,13 @@ def _administrator_user() -> tuple[dict | None, tuple[object, int] | None]:
 @app.route("/api/admin/reviewers")
 def api_admin_reviewers():
     user, error = _administrator_user()
+
+
     if error:
         return error
+
     try:
+
         with connect_evaluation_db() as connection:
             return jsonify({"reviewers": evaluation_queries.list_users(connection, "REVIEWER")})
     except Exception:
@@ -387,9 +418,13 @@ def api_admin_reviewers():
 @app.route("/api/admin/assignable-attempts")
 def api_admin_assignable_attempts():
     user, error = _administrator_user()
+
+
     if error:
         return error
+
     try:
+
         with connect_evaluation_db() as connection:
             return jsonify({"attempts": evaluation_queries.list_assignable_attempts(connection)})
     except Exception:
@@ -399,8 +434,11 @@ def api_admin_assignable_attempts():
 @app.route("/api/admin/assignments", methods=["POST"])
 def api_admin_assign_reviewer():
     user, error = _administrator_user()
+
+
     if error:
         return error
+
     body = request.get_json(silent=True) or {}
     try:
         attempt_id = int(body.get("attempt_id"))
@@ -418,9 +456,13 @@ def api_admin_assign_reviewer():
 @app.route("/api/admin/disputes")
 def api_admin_disputes():
     user, error = _administrator_user()
+
+
     if error:
         return error
+
     try:
+
         with connect_evaluation_db() as connection:
             return jsonify({"attempts": evaluation_queries.list_disputed_attempts(connection)})
     except Exception:
@@ -430,9 +472,13 @@ def api_admin_disputes():
 @app.route("/api/admin/attempts/<int:attempt_id>/comparison")
 def api_admin_comparison(attempt_id: int):
     user, error = _administrator_user()
+
+
     if error:
         return error
+
     try:
+
         with connect_evaluation_db() as connection:
             comparison = evaluation_queries.get_reviewer_comparison(connection, attempt_id)
         if comparison is None:
@@ -445,8 +491,11 @@ def api_admin_comparison(attempt_id: int):
 @app.route("/api/admin/attempts/<int:attempt_id>/resolve", methods=["POST"])
 def api_admin_resolve_dispute(attempt_id: int):
     user, error = _administrator_user()
+
+
     if error:
         return error
+
     body = request.get_json(silent=True) or {}
     try:
         with connect_evaluation_db() as connection:
@@ -462,9 +511,13 @@ def api_admin_resolve_dispute(attempt_id: int):
 @app.route("/api/admin/review-report")
 def api_admin_review_report():
     user, error = _administrator_user()
+
+
     if error:
         return error
+
     try:
+
         with connect_evaluation_db() as connection:
             return jsonify(evaluation_queries.get_cross_attempt_review_report(connection))
     except Exception:
@@ -476,14 +529,16 @@ def api_admin_evaluation_export():
     user, error = _administrator_user()
     if error:
         return error
+
     try:
         with connect_evaluation_db() as connection:
             rows = evaluation_queries.list_attempts(connection, {
-                "system_decision": request.args.get("decision", "ALL"),
+                "decision": request.args.get("decision", "ALL"),
                 "source_status": request.args.get("source_status", "ALL"),
                 "tester": request.args.get("tester", ""),
-                "case_identifier": request.args.get("ecn", ""),
+                "ecn_number": request.args.get("ecn_number", ""),
             })
+
         if not rows:
             csv_text = "attempt_id,system_decision,started_at,completed_at,duration_seconds,case_identifier,tester_email,tester_name,tester_judgement,agreement\n"
         else:
@@ -494,9 +549,75 @@ def api_admin_evaluation_export():
             writer.writeheader()
             writer.writerows(rows)
             csv_text = output.getvalue()
-        return Response(csv_text, mimetype="text/csv", headers={"Content-Disposition": "attachment; filename=evaluation-export.csv"})
+
+        return Response(
+            csv_text,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=evaluation-export.csv"},
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception:
         return jsonify({"error": "The evaluation export is unavailable."}), 503
+
+
+
+
+
+
+@app.route("/api/admin/evaluation-attempts")
+def api_admin_evaluation_attempts():
+    """List evaluation attempts using the shared dashboard filters."""
+    user, error = _administrator_user()
+    if error:
+        return error
+
+    try:
+        with connect_evaluation_db() as connection:
+            initialise_schema(connection)
+            attempts = evaluation_queries.list_attempts(connection, {
+
+
+
+
+                "ecn_number": request.args.get("ecn_number", ""),
+                "source_status": request.args.get("source_status", "ALL"),
+                "decision": request.args.get("decision", "ALL"),
+                "tester": request.args.get("tester", ""),
+            })
+
+        return jsonify({"attempts": attempts})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        return jsonify({"error": "Evaluation attempts are unavailable."}), 503
+
+
+@app.route("/api/tester/evaluation-attempts")
+def api_tester_evaluation_attempts():
+    """List only the signed-in tester's attempts with dashboard-compatible filters."""
+    user = _current_user()
+    if user is None:
+        return jsonify({"error": "Sign in before viewing evaluation attempts."}), 401
+    if not can_test(user.get("role")):
+        return jsonify({"error": "Tester access is required."}), 403
+    try:
+        with connect_evaluation_db() as connection:
+            initialise_schema(connection)
+            attempts = evaluation_queries.list_attempts(connection, {
+
+
+
+                "ecn_number": request.args.get("ecn_number", ""),
+                "source_status": request.args.get("source_status", "ALL"),
+                "decision": request.args.get("decision", "ALL"),
+                "tester_email": str(user.get("email", "")),
+            })
+        return jsonify({"attempts": attempts})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        return jsonify({"error": "Evaluation attempts are unavailable."}), 503
 
 
 @app.route("/api/admin/evaluation-summary")
@@ -511,23 +632,36 @@ def api_admin_evaluation_summary():
         with connect_evaluation_db() as connection:
             initialise_schema(connection)
             summary = evaluation_queries.get_evaluation_summary(connection, {
-                "system_decision": request.args.get("decision", "ALL"),
+
+
+
+
+                "decision": request.args.get("decision", "ALL"),
                 "source_status": request.args.get("source_status", "ALL"),
+                "ecn_number": request.args.get("ecn_number", ""),
                 "tester": request.args.get("tester", ""),
-                "case_identifier": request.args.get("ecn", ""),
             })
+
+
         return jsonify(summary)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception:
         return jsonify({"error": "The evaluation summary is unavailable."}), 503
+
 
 
 @app.route("/api/reviewer/queue")
 def api_reviewer_queue():
     """Return a filtered, paginated review queue."""
     user, error = _reviewer_user()
+
+
     if error:
         return error
+
     try:
+
         with connect_evaluation_db() as connection:
             initialise_schema(connection)
             if not request.args:
@@ -558,9 +692,13 @@ def api_reviewer_queue():
 def api_reviewer_attempt_detail(attempt_id: int):
     """Return one authorized review attempt and its findings."""
     user, error = _reviewer_user()
+
+
     if error:
         return error
+
     try:
+
         with connect_evaluation_db() as connection:
             detail = evaluation_queries.get_attempt_detail(connection, attempt_id, user)
             if detail is not None:
@@ -583,9 +721,13 @@ def api_reviewer_attempt_detail(attempt_id: int):
 def api_reviewer_file(attempt_id: int, role: str):
     """Download an original ECN or BOM after authorization."""
     user, error = _reviewer_user()
+
+
     if error:
         return error
+
     try:
+
         with connect_evaluation_db() as connection:
             original = evaluation_queries.get_original_file(connection, attempt_id, role, user)
         if original is None:
@@ -608,8 +750,11 @@ def api_reviewer_file(attempt_id: int, role: str):
 def api_reviewer_judgement(attempt_id: int):
     """Store an independent reviewer judgement for an assigned attempt."""
     user, error = _reviewer_user()
+
+
     if error:
         return error
+
     body = request.get_json(silent=True) or {}
     raw_rules = body.get("rule_judgements", {})
     if not isinstance(raw_rules, dict):

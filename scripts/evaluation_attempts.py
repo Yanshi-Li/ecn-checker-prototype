@@ -9,7 +9,6 @@ from typing import Optional
 
 _ATTEMPT_NAME_PATTERN = re.compile(
     r"^(?P<ecn>\d+)_MBOM_(?P<status>DRAFT|COMPLETED)$",
-    re.IGNORECASE,
 )
 
 

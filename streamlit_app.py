@@ -29,7 +29,9 @@ if str(ROOT) not in sys.path:
 from scripts.batch_intake import BatchPreparation, build_batch_from_paths  # noqa: E402
 from scripts.batch_orchestration import BatchCase, BatchResult, run_batch  # noqa: E402
 from scripts import evaluation_queries  # noqa: E402
+from scripts.evaluation_attempts import derive_source_status_from_path  # noqa: E402
 from scripts.precheck_pipeline import run_precheck  # noqa: E402
+
 
 
 from scripts.evaluation_store import (  # noqa: E402
@@ -410,8 +412,21 @@ def _execute_persisted_batch_case(
     case_id = persistence["case_ids"][case.case_id]
     session_id = persistence["session_id"]
 
+    source_status = str(
+        case.logical_ecn.metadata.get("source_status")
+        or derive_source_status_from_path(str(case.logical_ecn.metadata.get("source_file", "")))
+    ).strip().upper()
+
+
+    ecn_key = str(case.logical_ecn.key).strip()
+    attempt_name = f"{ecn_key}_MBOM_{source_status}" if ecn_key.isdigit() else "legacy"
     with connect_evaluation_db(db_config) as connection:
-        attempt_id = start_precheck(connection, session_id, case_id)
+        attempt_id = start_precheck(
+            connection, session_id, case_id,
+            source_status=source_status,
+            attempt_name=attempt_name,
+        )
+
 
     try:
         result = _execute_batch_case(case)
