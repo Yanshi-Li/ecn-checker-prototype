@@ -1,0 +1,32 @@
+# Terraform files
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform/
+.terraform.lock.hcl
+
+# Ansible files
+*.retry
+*.vault
+
+# CloudFormation files
+*.stack-output.json
+
+# General sensitive files
+.env
+*.key
+*.pem
+*.p12
+*.cer
+*.crt
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db

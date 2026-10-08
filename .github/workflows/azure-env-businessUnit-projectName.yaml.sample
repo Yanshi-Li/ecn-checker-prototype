@@ -1,0 +1,295 @@
+name: 'Terraform - <replace with your subscription name>'
+on:
+    push:
+      branches:
+        - main
+      paths: 
+        - <replace with your subscription name>/**
+    pull_request:
+        branches:
+            - main
+        paths: 
+            - <replace with your subscription name>/**
+
+    workflow_dispatch:
+      inputs:
+        destroy:
+          description: 'Trigger Terraform Destroy'
+          required: true
+          default: 'false'
+
+env:
+  TF_LOG: INFO
+  TF_INPUT: false
+
+jobs:
+
+  precommit:
+      uses: fisherpaykel/cit-reusable-workflows/.github/workflows/pre-commit.yaml@main
+      with:
+          python_version: "3.11"
+          working_directory: '.'
+          install_shellcheck: true
+  terraform-prechecks:
+      needs: precommit
+      uses: fisherpaykel/cit-reusable-workflows/.github/workflows/terraform-prechecks.yaml@main
+      with:
+          # Add required inputs for your shared workflow here
+          working_directory: '.'
+          tflint_enabled: true
+
+  trivy:
+    needs: terraform-prechecks
+    uses: fisherpaykel/cit-reusable-workflows/.github/workflows/iac-security-scan-trivy.yaml@main
+    with:
+      run-trivy: true
+
+
+  infracost:
+    needs: terraform-prechecks
+    uses: fisherpaykel/cit-reusable-workflows/.github/workflows/iac-cost-estimate-infracost.yaml@main
+    with:
+      run-infracost: true
+    secrets:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}    
+
+
+
+  # Job to validate, plan, and apply Terraform configurations
+  Validate-Plan-Apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # This is required for actions/checkout
+      id-token: write # This is required for requesting the token from Azure
+      actions: read
+      checks: write
+      issues: write
+      pull-requests: write
+    environment: <replace with your subscription name>
+
+    defaults:
+        run:
+          shell: bash
+          working-directory: "./<replace with your subscription name>"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+
+      - name: 'Setup Terraform'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.5
+          terraform_wrapper: false
+
+      - name: 'Terraform init and Validate'
+        id: init-plan
+        env:
+          #Use this repo variable if deploying to NONPROD
+          #Uncomment the next line if deploying to NONPROD
+          #ARM_BACKEND_CLIENT_ID: ${{ vars.AZURE_TF_BACKEND_NONPROD_CLIENT_ID }}
+            
+          #Use this repo variable if deploying to PROD
+          #Uncomment the next line if deploying to PROD
+          #ARM_BACKEND_CLIENT_ID: ${{ vars.AZURE_TF_BACKEND_PROD_CLIENT_ID }}
+
+
+          #Use this repo variable if deploying to PREPROD
+          #Uncomment the next line if deploying to PREPROD
+          #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.vars.AZURE_TF_DEPLOYMENT_PREPROD_CLIENT_ID }}
+
+          #Use this repo variable if deploying to PROD
+          #Uncomment the next line if deploying to PROD
+          #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.vars.AZURE_TF_DEPLOYMENT_PROD_CLIENT_ID }}
+
+        
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_TF_BACKEND_SUBSCRIPTION_ID }}
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD_AUTH: true
+          ARM_TENANT_ID: ${{ vars.TENANT_ID }}
+        run: |
+          terraform init \
+          -backend-config="resource_group_name=${{ vars.AZURE_TF_BACKEND_RESOURCE_GROUP }}" \
+          -backend-config="storage_account_name=${{ vars.AZURE_TF_BACKEND_STORAGEACCOUNT_NAME }}" \
+          -backend-config="container_name=${{ vars.AZURE_TF_BACKEND_NONPROD_CONTAINER_NAME }}" \
+          -backend-config="client_id=${{ vars.AZURE_TF_BACKEND_NONPROD_CLIENT_ID}}" \
+          -backend-config="key=azure/${{ github.repository}}/${{ github.pipeline }}/terraform.tfstate" \
+          -backend-config="subscription_id=${{ vars.AZURE_TF_BACKEND_SUBSCRIPTION_ID }}" && \
+          terraform validate -no-color
+
+
+      # Deployment Authentication for Resource Creation
+      - name: Azure Login for Deployment
+        env:
+          #Use this repo variable if deploying to NONPROD
+          #Uncomment the next line if deploying to NONPROD
+          #ARM_BACKEND_CLIENT_ID: ${{ vars.AZURE_TF_BACKEND_NONPROD_CLIENT_ID }}
+            
+          #Use this repo variable if deploying to PROD
+          #Uncomment the next line if deploying to PROD
+          #ARM_BACKEND_CLIENT_ID: ${{ vars.AZURE_TF_BACKEND_PROD_CLIENT_ID }}
+
+
+          #Use this repo variable if deploying to PREPROD
+          #Uncomment the next line if deploying to PREPROD
+          #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.vars.AZURE_TF_DEPLOYMENT_PREPROD_CLIENT_ID }}
+
+          #Use this repo variable if deploying to PROD
+          #Uncomment the next line if deploying to PROD
+          #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.vars.AZURE_TF_DEPLOYMENT_PROD_CLIENT_ID }}
+
+          #Subscription ID for the deployment
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_TF_DEPLOYMENT_SUBSCRIPTION_ID }}
+
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD_AUTH: true
+          ARM_TENANT_ID: ${{ vars.TENANT_ID }}
+        uses: azure/login@v1
+        with:
+          client-id: ${{ env.ARM_DEPLOYMENT_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_TF_DEPLOYMENT_PREPROD_SUBSCRIPTION_ID }}
+
+      
+      - name: 'Terraform Plan'
+        id: plan
+        working-directory: "./<replace with your subscription name>"
+        env:
+            #Use this repo variable if deploying to PREPROD
+            #Uncomment the next line if deploying to PREPROD
+            #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.AZURE_TF_DEPLOYMENT_PREPROD_CLIENT_ID }}
+
+            #Use this repo variable if deploying to PROD
+            #Uncomment the next line if deploying to PROD
+            #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.AZURE_TF_DEPLOYMENT_PROD_CLIENT_ID }}
+
+            ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_TF_DEPLOYMENT_SUBSCRIPTION_ID }} 
+            ARM_TENANT_ID: ${{ vars.TENANT_ID }}
+            ARM_USE_OIDC: true
+            ARM_USE_AZUREAD_AUTH: true
+        run: |
+          terraform plan -no-color -out=tfplan &&
+          terraform show -no-color tfplan 2>&1 > /tmp/plan.txt
+
+
+      - name: Save Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: /tmp/plan.txt
+
+    
+      - name: 'Add Plan Comment'
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        id: comment
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+            const plan = fs.readFileSync("/tmp/plan.txt", "utf8");
+            const maxGitHubBodyCharacters = 65536;
+      
+            function chunkSubstr(str, size) {
+              const numChunks = Math.ceil(str.length / size)
+              const chunks = new Array(numChunks)
+              for (let i = 0, o = 0; i < numChunks; ++i, o += size) {
+                chunks[i] = str.substr(o, size)
+              }
+              return chunks
+            }
+      
+            // Split the Terraform plan into chunks if it's too big and can't fit into the GitHub Action
+            var plans = chunkSubstr(plan, maxGitHubBodyCharacters); 
+            for (let i = 0; i < plans.length; i++) {
+              const output = `### ${{ inputs.plan-title }} Part # ${i + 1}
+              #### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+              #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+              #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+              <details><summary>Show Plan</summary>
+              \`\`\`\n
+              ${plans[i]}
+              \`\`\`
+              </details>
+              *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Working Directory: \`${{ inputs.working-directory }}\`, Workflow: \`${{ github.workflow }}\`*`;   
+      
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+              })
+            }
+            
+
+      - name: Azure Login for Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          #Use this repo variable if deploying to NONPROD
+          #Uncomment the next line if deploying to NONPROD
+          #ARM_BACKEND_CLIENT_ID: ${{ vars.AZURE_TF_BACKEND_NONPROD_CLIENT_ID }}
+            
+          #Use this repo variable if deploying to PROD
+          #Uncomment the next line if deploying to PROD
+          #ARM_BACKEND_CLIENT_ID: ${{ vars.AZURE_TF_BACKEND_PROD_CLIENT_ID }}
+
+
+          #Use this repo variable if deploying to PREPROD
+          #Uncomment the next line if deploying to PREPROD
+          #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.vars.AZURE_TF_DEPLOYMENT_PREPROD_CLIENT_ID }}
+
+          #Use this repo variable if deploying to PROD
+          #Uncomment the next line if deploying to PROD
+          #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.vars.AZURE_TF_DEPLOYMENT_PROD_CLIENT_ID }}
+
+          #Subscription ID for the deployment
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_TF_DEPLOYMENT_SUBSCRIPTION_ID }}
+
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD_AUTH: true
+          ARM_TENANT_ID: ${{ vars.TENANT_ID }}
+        uses: azure/login@v1
+        with:
+          client-id: ${{ env.ARM_DEPLOYMENT_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_TF_DEPLOYMENT_SUBSCRIPTION_ID }}
+
+      - name: Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: "./<replace with your subscription name>"
+        id: apply
+        env:
+        #Use this repo variable if deploying to PREPROD
+        #Uncomment the next line if deploying to PREPROD
+        #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.AZURE_TF_DEPLOYMENT_PREPROD_CLIENT_ID }}
+
+        #Use this repo variable if deploying to PROD
+        #Uncomment the next line if deploying to PROD
+        #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.AZURE_TF_DEPLOYMENT_PROD_CLIENT_ID }}
+
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_TF_DEPLOYMENT_SUBSCRIPTION_ID }} 
+          ARM_TENANT_ID: ${{ vars.TENANT_ID }}
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD_AUTH: true
+        run: terraform apply -auto-approve tfplan
+
+      - name: 'Terraform Destroy'
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.destroy == 'true'
+        working-directory: "./<replace with your subscription name>"
+        id: destroy
+        env:
+        #Use this repo variable if deploying to PREPROD
+        #Uncomment the next line if deploying to PREPROD
+        #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.AZURE_TF_DEPLOYMENT_PREPROD_CLIENT_ID }}
+
+        #Use this repo variable if deploying to PROD
+        #Uncomment the next line if deploying to PROD
+        #ARM_DEPLOYMENT_CLIENT_ID: ${{ vars.AZURE_TF_DEPLOYMENT_PROD_CLIENT_ID }}
+
+          ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_TF_DEPLOYMENT_SUBSCRIPTION_ID }} 
+          ARM_TENANT_ID: ${{ vars.TENANT_ID }}
+          ARM_USE_OIDC: true
+          ARM_USE_AZUREAD_AUTH: true
+        run: terraform destroy -auto-approve
+
