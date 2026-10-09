@@ -1,0 +1,68 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import App from "./App";
+
+const tester = {
+  id: 4,
+  email: "tester@example.com",
+  display_name: "Evaluation Tester",
+  role: "TESTER" as const,
+};
+
+function jsonResponse(body: unknown, ok = true): Response {
+  return {
+    ok,
+    text: async () => JSON.stringify(body),
+  } as Response;
+}
+
+describe("tester pre-check workflow", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        switch (String(input)) {
+          case "/api/health":
+            return jsonResponse({ status: "ok" });
+          case "/api/auth/session":
+            return jsonResponse({ user: tester });
+          case "/api/precheck":
+            return jsonResponse({
+              decision: "FAIL",
+              summary: { total_files: 2, total_issues: 1, errors: 1, warnings: 0 },
+              findings: [{ rule: "ECN-H-001", severity: "error", message: "Missing reason for change." }],
+              persistence: { saved: true, attempt_id: 82, duration_seconds: 3.2 },
+            });
+          default:
+            return jsonResponse({ attempts: [] });
+        }
+      }),
+    );
+  });
+
+  it("uploads ECN and BOM files, then shows the returned decision and explanation", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
+    await user.upload(screen.getByLabelText(/ECN file/), new File(["ecn data"], "change.csv", { type: "text/csv" }));
+    await user.upload(screen.getByLabelText(/BOM file/), new File(["bom data"], "parts.csv", { type: "text/csv" }));
+    const runButton = screen.getByRole("button", { name: "Run pre-check" });
+    expect(runButton).toBeEnabled();
+    fireEvent.submit(runButton.closest("form")!);
+
+    expect(fetch).toHaveBeenCalledWith("/api/precheck", expect.objectContaining({ method: "POST" }));
+    expect(await screen.findByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
+    expect(screen.getAllByText("Missing reason for change.")).toHaveLength(2);
+    expect(screen.getByText("Add the required fields to the ECN header.")).toBeInTheDocument();
+    expect(screen.getByText("Evaluation saved for reviewer follow-up.")).toBeInTheDocument();
+
+    const precheckRequest = vi.mocked(fetch).mock.calls.find(([input]) => input === "/api/precheck");
+    expect(precheckRequest?.[1]?.method).toBe("POST");
+    expect(precheckRequest?.[1]?.body).toBeInstanceOf(FormData);
+    const submittedFiles = precheckRequest?.[1]?.body as FormData;
+    expect((submittedFiles.get("ecn") as File).name).toBe("change.csv");
+    expect((submittedFiles.get("bom") as File).name).toBe("parts.csv");
+  });
+});
