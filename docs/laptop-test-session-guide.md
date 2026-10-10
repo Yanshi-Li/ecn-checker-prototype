@@ -1,6 +1,6 @@
 # One-Hour Laptop Test Session Guide
 
-This guide is for testing ECN Checker on a laptop that will be temporarily handed to a colleague. It is designed for a short, controlled session without exposing the application or PostgreSQL database to the internet.
+This guide is for testing AI ECN Checker on a laptop that will be temporarily handed to a colleague. It is designed for a short, controlled session without exposing the application or PostgreSQL database to the internet.
 
 The colleague uses the React frontend locally at `http://localhost:5173`. The React frontend calls the Flask backend at `http://127.0.0.1:5000`, and the backend connects to local PostgreSQL. The laptop owner prepares the application before the session and removes test credentials and data afterwards.
 
@@ -371,4 +371,4 @@ The one-hour test is successful when the colleague can:
 - complete at least one valid and one failing scenario; and
 - provide concrete usability feedback.
 
-A successful session does not require every system result to be correct. Disagreements and unclear explanations are valuable findings for improving ECN Checker.
+A successful session does not require every system result to be correct. Disagreements and unclear explanations are valuable findings for improving AI ECN Checker.

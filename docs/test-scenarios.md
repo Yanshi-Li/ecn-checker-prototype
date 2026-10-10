@@ -1,4 +1,4 @@
-# ECN Checker Test Scenarios — Version 1
+# AI ECN Checker Test Scenarios — Version 1
 
 ## Prototype validation workflow
 

@@ -1,8 +1,8 @@
-# ECN Checker Tester Guide
+# AI ECN Checker Tester Guide
 
 ## 1. Purpose
 
-ECN Checker helps users review an Engineering Change Notice (ECN) and its Bill of Materials (BOM) before the change is sent to the next reviewer.
+AI ECN Checker helps users review an Engineering Change Notice (ECN) and its Bill of Materials (BOM) before the change is sent to the next reviewer.
 
 The system:
 
@@ -60,7 +60,7 @@ One completed ECN/BOM check inside an evaluation session. Each attempt has its o
 
 ### System decision
 
-The result produced by ECN Checker: `PASS` or `FAIL`.
+The result produced by AI ECN Checker: `PASS` or `FAIL`.
 
 ### Tester judgement
 

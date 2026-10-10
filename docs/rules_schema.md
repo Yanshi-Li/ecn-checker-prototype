@@ -1,4 +1,4 @@
-# ECN Checker Rule System Schema
+# AI ECN Checker Rule System Schema
 
 ## Purpose
 
@@ -55,7 +55,7 @@ The active catalogue is `docs/rules_list.json`. Every rule definition in that fi
 ```json docs/rules_list.json
 {
   "schema_version": "1.0.0",
-  "catalogue_name": "ECN Checker Rules",
+  "catalogue_name": "AI ECN Checker Rules",
   "source": "docs/rules_origin.txt",
   "rules": [
     {

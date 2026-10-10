@@ -1,4 +1,4 @@
-# ECN Checker Rules
+# AI ECN Checker Rules
 
 ## 🔴 Hard Rules
 

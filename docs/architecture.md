@@ -1,4 +1,4 @@
-# ECN Checker — Architecture
+# AI ECN Checker — Architecture
 
 ## Prototype workflow scope
 

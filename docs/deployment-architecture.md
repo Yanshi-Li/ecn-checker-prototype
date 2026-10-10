@@ -1,15 +1,15 @@
-# ECN Checker — Internal Deployment Architecture
+# AI ECN Checker — Internal Deployment Architecture
 
 ## Purpose
 
-This document describes the proposed deployment for an internal ECN Checker evaluation website. Employees use a browser from a company laptop; they do not install the application or connect directly to PostgreSQL. React is the supported browser interface for all roles and workflows. Batch testing remains a separate command-line workflow.
+This document describes the proposed deployment for an internal AI ECN Checker evaluation website. Employees use a browser from a company laptop; they do not install the application or connect directly to PostgreSQL. React is the supported browser interface for all roles and workflows. Batch testing remains a separate command-line workflow.
 
 ## Proposed architecture
 
 ```mermaid
 graph TD
     U[Internal employee browser\ncompany laptop] -->|HTTPS| WAF[Internal reverse proxy /\nload balancer]
-    WAF --> WEB[ECN Checker web application\nReact static files + Flask backend]
+    WAF --> WEB[AI ECN Checker web application\nReact static files + Flask backend]
     WEB --> DB[(PostgreSQL\nevaluation database)]
     WEB --> REF[Versioned reference data\nPart_Master.csv + rule catalogue]
     WEB -. optional .-> AI[Approved AI HTTPS endpoint]

@@ -1,4 +1,4 @@
-# ECN Checker React frontend
+# AI ECN Checker React frontend
 
 This Vite + React + TypeScript application is the supported browser interface for tester pre-checks, reviewer queues and judgements, and administrator management and reporting. It calls the Flask backend, which remains responsible for authentication and authorization, intake, validation, PostgreSQL evaluation persistence, and audited email reports.
 

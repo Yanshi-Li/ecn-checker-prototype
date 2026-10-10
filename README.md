@@ -1,8 +1,8 @@
-# ECN Checker
+# AI ECN Checker
 
 ## Overview
 
-ECN Checker is a prototype for ECN creators, BOM coordinators, reviewers, and administrators. It ingests an Engineering Change Notice (ECN) and a Bill of Materials (BOM), validates them with deterministic rules and part-master context, adds an AI-assisted (or rule-based fallback) review, makes a gate decision, presents the findings, and records evaluation data.
+AI ECN Checker is a prototype for ECN creators, BOM coordinators, reviewers, and administrators. It ingests an Engineering Change Notice (ECN) and a Bill of Materials (BOM), validates them with deterministic rules and part-master context, adds an AI-assisted (or rule-based fallback) review, makes a gate decision, presents the findings, and records evaluation data.
 
 The **React frontend is the supported browser interface for every role and workflow**. Flask provides the backend for authentication, intake, validation, persistence, and notifications. Batch testing remains available through the command-line runner; it is not a browser workflow.
 

@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "catalogue_name": "ECN Checker Rules",
+  "catalogue_name": "AI ECN Checker Rules",
   "source": "docs/rules_origin.txt",
   "finding_contract": {
     "required": ["rule_id", "evaluation_status", "severity", "gate_effect", "source_engine", "message", "evidence"],
