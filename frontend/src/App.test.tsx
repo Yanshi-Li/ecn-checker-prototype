@@ -48,6 +48,7 @@ describe("tester pre-check workflow", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
+    expect(screen.getByText("AI ECN Checker")).toBeInTheDocument();
     await user.upload(screen.getByLabelText(/ECN file/), new File(["ecn data"], "change.csv", { type: "text/csv" }));
     await user.upload(screen.getByLabelText(/BOM file/), new File(["bom data"], "parts.csv", { type: "text/csv" }));
     const runButton = screen.getByRole("button", { name: "Run pre-check" });

@@ -295,7 +295,7 @@ function App() {
       <main className="login-shell">
         <form className="login-card" onSubmit={login}>
           <div className="brand-mark">ECN</div>
-          <p className="eyebrow">ECN Checker</p>
+          <p className="eyebrow">AI ECN Checker</p>
           <h1>Sign in to pre-check</h1>
           <p className="lede">Use the account created for your evaluation role.</p>
           <label htmlFor="login-email">Email</label>
@@ -314,7 +314,7 @@ function App() {
       <aside className="sidebar" aria-label="Main navigation">
         <div className="brand-mark">ECN</div>
         <div className="brand">
-          <strong>ECN Checker</strong>
+          <strong>AI ECN Checker</strong>
           <span>Pre-check workspace</span>
         </div>
         <nav>
