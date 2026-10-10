@@ -2,7 +2,10 @@
 
 ## Overview
 
-ECN Checker is a Python prototype for ECN creators, BOM coordinators, and Chief Engineers. It ingests an Engineering Change Notice (ECN) and a Bill of Materials (BOM), validates them with deterministic rules and part-master context, adds an AI-assisted (or rule-based fallback) review, makes a gate decision, presents the findings, and notifies the appropriate reviewers by email.
+ECN Checker is a prototype for ECN creators, BOM coordinators, reviewers, and administrators. It ingests an Engineering Change Notice (ECN) and a Bill of Materials (BOM), validates them with deterministic rules and part-master context, adds an AI-assisted (or rule-based fallback) review, makes a gate decision, presents the findings, and records evaluation data.
+
+The **React frontend is the supported browser interface for every role and workflow**. Flask provides the backend for authentication, intake, validation, persistence, and notifications. Batch testing remains available through the command-line runner; it is not a browser workflow.
+
 
 ## Architecture
 
@@ -13,7 +16,8 @@ The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the curre
 3. **AI Advisory** — reviews catalogue-defined semantic rules S01–S05 using OpenAI first, retries with Gemini when OpenAI fails and Gemini is configured, and otherwise evaluates S02–S04 heuristically while reporting LLM-owned S01/S05 as `NOT_EVALUATED`. Legacy A rule IDs are not emitted.
 4. **Context Engine** — checks BOM parts directly against `data/Part_Master.csv` and writes audit artifacts under `out/context_engine/`; it does not generate a parts-master copy.
 5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors and selected part issues close the gate, while warnings and AI notes remain advisory.
-6. **Dashboard** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; the Streamlit app renders the gate findings directly.
+6. **Results and user interface** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; React provides the interactive browser interface for testers, reviewers, and administrators.
+
 7. **Email Notification** — sends or dry-runs a gate-specific notification through SendGrid.
 
 ### Rule policy catalogue
@@ -34,27 +38,21 @@ See [docs/architecture.md](docs/architecture.md) for the workflow, [docs/rules_s
 
 Legacy `.xls` intake requires an approved local converter: LibreOffice (`soffice`) or Microsoft Excel on Windows. The converted file is temporary and is removed after loading; the submitted source file is not modified.
 
-## Streamlit intake and validation reports
+## Primary interface: React
 
-Run the public Streamlit interface with:
+The React + TypeScript frontend is the supported interface for testers, reviewers, and administrators. It uses the Flask backend for authentication, pre-checks, evaluation records, reviewer workflows, and notifications. See the [React frontend README](frontend/README.md) for current local setup instructions.
 
-```powershell
-streamlit run streamlit_app.py
-```
+React supports tester sign-in and pre-checks, reviewer queues and judgements, administrator management and reporting, and evaluation records. Testers can upload files or enter ECN details and BOM rows manually; both modes use the same Flask validation and persistence workflow. Run batch testing through `scripts/run_batch.py`; batch testing is intentionally not part of the browser UI.
 
-The app supports both uploaded files and manual intake. Manual intake uses the
-canonical staged intake fields: `change_notice_number`, `name_of_change`,
-`reason_for_change`, `description_of_change`, `products_affected`,
-`change_actions`, and `date`, plus optional intake fields and canonical BOM
-rows.
 
-After validation, the user can enter a recipient and explicitly send a validation report. The email is a report only; it does not approve or reject an ECN. SMTP configuration is required before the button can send.
 
-See [docs/streamlit-deploy.md](docs/streamlit-deploy.md) for deployment
-configuration.
+
+
 
 ## Command-line workflow
 PDF routing is role-aware: an ECN PDF is parsed as fields, while a BOM PDF is parsed as MBOM tables. PDF BOM extraction looks for a table header containing **Part Number** and **Action**, then maps recognized columns such as description, quantity, unit, action, and source. The checked-in HTML ECN and MBOM PDF examples in `data/` have regression coverage.
+
+Batch testing is command-line only. Run `py scripts/run_batch.py --help` for options; for example, use `py scripts/run_batch.py --ecn-dir "path/to/ecn_completed" --bom-dir "path/to/boms"` to match and execute cases from directories.
 
 ## Setup — local
 
@@ -106,52 +104,44 @@ PDF routing is role-aware: an ECN PDF is parsed as fields, while a BOM PDF is pa
    py scripts/initialise_evaluation_db.py
    ```
 
-7. Run the Streamlit interface locally.
+7. Run the React interface locally. Follow the two-process instructions in the [React frontend README](frontend/README.md): start Flask from the repository root, then start the Vite development server from `frontend/`. Open the Vite URL (normally `http://localhost:5173`).
 
-   ```bash
-   streamlit run streamlit_app.py
-   # Windows, if `streamlit` is not on PATH: py -m streamlit run streamlit_app.py
-   ```
-
-   Upload one required ECN and optionally one BOM, select **Run Checks**, then use the separate notification control if appropriate. To check multiple BOMs, run each ECN/BOM pair separately. The Streamlit page does not generate the CLI HTML dashboard or summary file.
 
 ### Dependencies
 
-`requirements.txt` currently installs: `streamlit`, `pandas`, `openpyxl`, `pdfplumber`, `httpx`, `openai`, `sendgrid`, `psycopg[binary]`, and `pytest` (for the test suite).
+`requirements.txt` currently installs the backend and CLI dependencies: `pandas`, `openpyxl`, `pdfplumber`, `httpx`, `openai`, `sendgrid`, `psycopg[binary]`, and `pytest` (for the test suite).
 
-## Setup — Streamlit Cloud deployment
+## Deployment direction
 
-Push the repository to GitHub, create an app at [Streamlit Community Cloud](https://share.streamlit.io/), select the repository and branch, and set `streamlit_app.py` as the entry point. Add the real secrets in the app dashboard under **Settings → Secrets** rather than committing them; Community Cloud installs `requirements.txt` automatically. Keep `DRY_RUN=true` until live delivery is approved. Before enabling SendGrid, verify the sender domain/address used by `EMAIL_FROM_ADDRESS` (domain authentication is the intended production setup; single-sender verification is suitable for limited testing). See [docs/streamlit-deploy.md](docs/streamlit-deploy.md) for the complete deployment steps.
+The deployment should serve the React frontend and Flask backend together (or through an approved web server/reverse proxy), with PostgreSQL accessible only to the backend. See [Internal Deployment Architecture](docs/deployment-architecture.md) for the proposed deployment shape.
+
 
 ## Environment variables / secrets
 
-For local CLI use, the AI advisory reads a repository-root `.env` file; process environment values take precedence. In Streamlit, configured secrets are read first. Do not commit real credentials.
+For local use, the AI advisory and Flask backend read environment variables; the AI advisory also loads a repository-root `.env` file, with process environment values taking precedence. Do not commit real credentials.
+
 
 | Variable | Purpose | Used by | Example/default |
 |---|---|---|---|
-| `GEMINI_API_KEY` | Enables Gemini AI advisory when OpenAI is unavailable or fails. | CLI and Streamlit | `your-gemini-api-key` |
-| `GEMINI_MODEL` | Gemini model override. | CLI and Streamlit | `gemini-2.5-flash` |
-| `GEMINI_BASE_URL` | Gemini OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://generativelanguage.googleapis.com/v1beta/openai/` |
-| `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory; preferred when both AI keys are set. | CLI and Streamlit | `your-openai-api-key` |
-| `OPENAI_MODEL` | OpenAI model override. | CLI and Streamlit | `gpt-4o-mini` |
-| `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. | CLI and Streamlit | `https://gateway.aitools.corp.fisherpaykel.com` |
-| `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Streamlit | `your-sendgrid-api-key` |
-| `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address. Required only when live email is enabled. | CLI and Streamlit | `verified-sender@example.com` |
-| `DRY_RUN` | Controls whether notifications are only logged rather than sent. | CLI and Streamlit | `true` (default); set `false`, `0`, `no`, or `off` to enable delivery |
+| `GEMINI_API_KEY` | Enables Gemini AI advisory when OpenAI is unavailable or fails. | CLI and Flask | `your-gemini-api-key` |
+| `GEMINI_MODEL` | Gemini model override. | CLI and Flask | `gemini-2.5-flash` |
+| `GEMINI_BASE_URL` | Gemini OpenAI-compatible API endpoint override. | CLI and Flask | `https://generativelanguage.googleapis.com/v1beta/openai/` |
+| `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory; preferred when both AI keys are set. | CLI and Flask | `your-openai-api-key` |
+| `OPENAI_MODEL` | OpenAI model override. | CLI and Flask | `gpt-4o-mini` |
+| `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. | CLI and Flask | `https://gateway.aitools.corp.fisherpaykel.com` |
+| `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Flask | `your-sendgrid-api-key` |
+| `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address. Required only when live email is enabled. | CLI and Flask | `verified-sender@example.com` |
+| `DRY_RUN` | Controls whether notifications are only logged rather than sent. | CLI and Flask | `true` (default); set `false`, `0`, `no`, or `off` to enable delivery |
 | `ECN_DB_HOST` | Local evaluation database host. | Evaluation store | `localhost` |
 | `ECN_DB_PORT` | Local evaluation database port. | Evaluation store | `5432` |
 | `ECN_DB_NAME` | Evaluation database name. | Evaluation store | `ecn_prechecker_evaluation` |
 | `ECN_DB_USER` | Restricted evaluation database role. | Evaluation store | `ecn_app` |
 | `ECN_DB_PASSWORD` | Password for the evaluation database role. | Evaluation store | No default; keep it out of source control |
-| `REVIEWER_ADMIN_EMAIL` | Bootstrap administrator email for the protected reviewer area. | Streamlit reviewer authentication | No default |
-| `REVIEWER_ADMIN_PASSWORD` | Bootstrap administrator password; used only to create the first administrator. | Streamlit reviewer authentication | No default; keep it out of source control |
+| `REVIEWER_ADMIN_EMAIL` | Bootstrap administrator email for the reviewer area. | Flask login bootstrap | No default |
+| `REVIEWER_ADMIN_PASSWORD` | Bootstrap administrator password; used only to create the first administrator. | Flask login bootstrap | No default; keep it out of source control |
 
-The **Reviewer dashboard** is separate from tester intake. Configure the two
-`REVIEWER_ADMIN_*` values once, initialise the schema, then sign in with that
-administrator account. Reviewer accounts and assignments should be created
-through the administrator workflow or database administration; never commit
-passwords. Reviewer passwords are stored as salted PBKDF2 hashes, and a
-reviewer can only open assigned attempts.
+Reviewer and administrator workflows are available through React and protected Flask endpoints. Configure bootstrap values as required, initialise the schema, and never commit passwords. Reviewer passwords are stored as salted PBKDF2 hashes, and a reviewer can only open assigned attempts.
+
 
 
 ## Running tests
@@ -161,7 +151,7 @@ python -m pytest -q
 # Windows, if `python` is not on PATH: py -m pytest -q
 ```
 
-The test suite covers intake (including sample HTML ECN and PDF MBOM extraction), the validated rule catalogue and stage ownership mapping, deterministic rules, AI fallback/configuration, part-master checks, merge/gate behavior, Node 6 notification rendering, the hybrid pipeline, and the legacy CSV checker.
+The backend suite covers intake (including sample HTML ECN and PDF MBOM extraction), the validated rule catalogue and stage ownership mapping, deterministic rules, AI fallback/configuration, part-master checks, merge/gate behavior, notification rendering, evaluation persistence, reviewer/admin operations, the hybrid pipeline, and the legacy CSV checker. React behavior tests cover tester pre-check and independent judgement flows; run them from `frontend/` with `npm test`.
 
 ## Email notifications
 
@@ -186,7 +176,8 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers and 
 | `scripts/ecn_checker.py` | Core validation rule engine |
 | `scripts/run_hybrid.py` | End-to-end CLI pipeline |
 | `scripts/stages/validation_notification.py` | Validation report email builder and SMTP sender |
-| `streamlit_app.py` | Streamlit upload/manual intake and report UI |
+| `frontend/` | React browser interface for testers, reviewers, and administrators |
+
 | `data/` | Sample CSV inputs used by the prototype |
 | `out/` | Generated dashboard and AI summary outputs |
 | `docs/` | Architecture, rule, and test documentation |
@@ -210,7 +201,7 @@ pytest -q
 ```
 | `scripts/run_hybrid.py` | CLI orchestration of all stages and notifications |
 | `scripts/stages/` | Intake, rule, AI, context, merge, dashboard, and email stage implementations |
-| `streamlit_app.py` | Streamlit upload, gate-results, and explicit notification interface |
+
 | `data/` | Sample ECN/BOM inputs and parts master |
 | `docs/` | Architecture, rule-policy, deployment, and intake-test documentation |
 | `tests/` | Regression and pipeline tests |
@@ -222,7 +213,9 @@ pytest -q
 - [Rule-system schema and finding contract](docs/rules_schema.md)
 - [Approved rule-policy source table](docs/rules_origin.txt)
 - [Machine-readable rule catalogue](docs/rules_list.json)
-- [Streamlit Cloud deployment](docs/streamlit-deploy.md)
+- [React frontend setup and workflows](frontend/README.md)
+
+
 - [Tester introduction and test procedure](docs/tester-guide.md)
 - [One-hour laptop test session](docs/laptop-test-session-guide.md)
 - [Intake scenarios and regression expectations](docs/test-scenarios.md)

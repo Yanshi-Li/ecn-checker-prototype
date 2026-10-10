@@ -1,8 +1,7 @@
 """Read and review persisted ECN pre-check attempts.
 
-This module is the database seam for the lightweight reviewer dashboard.  It
-returns plain dictionaries so the Streamlit rendering layer does not know SQL
-or PostgreSQL details.
+This module provides evaluation queries and judgement operations to the Flask
+API without exposing SQL or PostgreSQL details to the browser interface.
 """
 from __future__ import annotations
 

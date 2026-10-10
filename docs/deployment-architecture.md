@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document describes the proposed deployment for an internal ECN Checker evaluation website. Employees use a browser from a company laptop; they do not install the application or connect directly to PostgreSQL.
+This document describes the proposed deployment for an internal ECN Checker evaluation website. Employees use a browser from a company laptop; they do not install the application or connect directly to PostgreSQL. React is the supported browser interface for all roles and workflows. Batch testing remains a separate command-line workflow.
 
 ## Proposed architecture
 
@@ -21,7 +21,16 @@ graph TD
 
 ## Workloads
 
+### Current workload
+
+The React frontend supports tester pre-checks, reviewer queues and judgements, and administrator management and reporting. Flask owns authentication, authorization, validation, persistence, and notifications. Batch testing runs through the command-line runner and is not part of the browser interface.
+
+
+
+
+
 ### Prototype / staging
+
 
 The current prototype runs locally during development:
 
@@ -44,6 +53,7 @@ Recommended production arrangement:
 - Reverse proxy or load balancer in front of the application
 - Flask application process managed by the hosting platform
 - Built React assets served by the application or approved web server
+- No Streamlit runtime; deploy the React frontend and Flask backend as the supported application
 - PostgreSQL on an approved managed database service
 - Access restricted to authorised Fisher & Paykel users through the corporate network or VPN
 - Separate production secrets and database credentials
@@ -172,12 +182,15 @@ IT should provide:
 The deployment is ready for internal evaluation when:
 
 1. An authorised employee opens the internal HTTPS URL from a company laptop.
-2. A tester uploads an ECN and BOM and runs a pre-check.
-3. The result shows the system decision, rules checked, findings, and explanations.
-4. The completed evaluation is saved in PostgreSQL.
-5. A reviewer can see an evaluation assigned to them.
-6. A reviewer can submit an independent judgement.
-7. An administrator can view PASS/FAIL, duration, and agreement metrics.
+2. Testers, reviewers, and administrators can complete their assigned workflows through the React interface.
+3. A tester uploads an ECN and BOM and runs a pre-check.
+4. The result shows the system decision, rules checked, findings, and explanations.
+5. The completed evaluation is saved in PostgreSQL.
+6. A reviewer can see an evaluation assigned to them and submit an independent judgement.
+7. An administrator can manage assignments and view PASS/FAIL, duration, and agreement metrics.
 8. Approved email delivery works without exposing uploaded files as attachments.
 9. An unauthorised user cannot access evaluation data.
 10. The application and database recover according to the agreed restart and backup procedures.
+
+
+

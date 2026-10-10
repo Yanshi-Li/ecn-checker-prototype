@@ -57,6 +57,49 @@ const FIX_HINTS: Record<string, string> = {
   "BOM-002": "Use a quantity greater than zero.",
 };
 
+const ECN_MANUAL_FIELDS = [
+  "change_notice_number", "name_of_change", "reason_for_change", "description_of_change",
+  "products_affected", "change_actions", "date", "project", "product_group",
+  "change_category", "associated_a3", "a3_number", "checker", "reviewer",
+  "chief_engineer", "bom_coordinator",
+] as const;
+const BOM_MANUAL_FIELDS = [
+  "line_number", "part_number", "description", "quantity", "unit", "action", "parent_part_no",
+] as const;
+type ManualEcn = Record<(typeof ECN_MANUAL_FIELDS)[number], string>;
+type ManualBomRow = Record<(typeof BOM_MANUAL_FIELDS)[number], string>;
+const REQUIRED_MANUAL_ECN_FIELDS = new Set([
+  "change_notice_number", "name_of_change", "reason_for_change", "description_of_change",
+]);
+const EMPTY_MANUAL_ECN = Object.fromEntries(ECN_MANUAL_FIELDS.map((field) => [field, ""])) as ManualEcn;
+const EMPTY_MANUAL_BOM_ROW: ManualBomRow = {
+  line_number: "", part_number: "", description: "", quantity: "1", unit: "EA", action: "", parent_part_no: "",
+};
+
+function csvCell(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function rowsToCsv<T extends Record<string, string>>(fields: readonly string[], rows: T[]): string {
+  return [fields.join(","), ...rows.map((row) => fields.map((field) => csvCell(row[field] ?? "")).join(","))].join("\r\n") + "\r\n";
+}
+
+function validateManualIntake(ecn: ManualEcn, bomRows: ManualBomRow[]): string[] {
+  const errors = ECN_MANUAL_FIELDS
+    .filter((field) => REQUIRED_MANUAL_ECN_FIELDS.has(field) && !ecn[field].trim())
+    .map((field) => `${field.replaceAll("_", " ").replace(/^\w/, (letter) => letter.toUpperCase())} is required.`);
+  if (bomRows.length === 0) errors.push("At least one BOM row is required.");
+  bomRows.forEach((row, index) => {
+    if (!row.part_number.trim()) errors.push(`BOM row ${index + 1} requires a part number.`);
+    const quantity = Number(row.quantity);
+    if (!row.quantity.trim() || !Number.isFinite(quantity) || quantity <= 0) {
+      errors.push(`BOM row ${index + 1} quantity must be a positive number.`);
+    }
+  });
+  return errors;
+}
+
+
 function formatRule(rule: string): string {
   return rule === "UPLOAD" ? "File upload" : `Rule ${rule}`;
 }
@@ -72,8 +115,11 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 function App() {
+  const [intakeMode, setIntakeMode] = useState<"upload" | "manual">("upload");
   const [ecnFile, setEcnFile] = useState<File | null>(null);
   const [bomFile, setBomFile] = useState<File | null>(null);
+  const [manualEcn, setManualEcn] = useState<ManualEcn>({ ...EMPTY_MANUAL_ECN });
+  const [manualBomRows, setManualBomRows] = useState<ManualBomRow[]>([{ ...EMPTY_MANUAL_BOM_ROW }]);
   const [sourceStatus, setSourceStatus] = useState<"DRAFT" | "COMPLETED">("DRAFT");
   const [user, setUser] = useState<User | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
@@ -134,12 +180,19 @@ function App() {
   }
 
   async function runPrecheck(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!ecnFile) {
+        event.preventDefault();
+    if (intakeMode === "upload" && !ecnFile) {
       setRequestError("Choose an ECN file before running the pre-check.");
       return;
     }
-        if (!user || !["TESTER", "REVIEWER", "ADMINISTRATOR"].includes(user.role)) {
+    if (intakeMode === "manual") {
+      const validationErrors = validateManualIntake(manualEcn, manualBomRows);
+      if (validationErrors.length > 0) {
+        setRequestError(validationErrors.join(" "));
+        return;
+      }
+    }
+    if (!user || !["TESTER", "REVIEWER", "ADMINISTRATOR"].includes(user.role)) {
       setRequestError("Sign in with a tester, reviewer, or administrator account to run a pre-check.");
 
       return;
@@ -151,10 +204,19 @@ function App() {
     setSelectedFinding(null);
     setNotificationStatus(null);
 
-    const formData = new FormData();
-        formData.append("ecn", ecnFile);
-    if (bomFile) {
-      formData.append("bom", bomFile);
+        const formData = new FormData();
+    if (intakeMode === "manual") {
+      const ecnCsv = rowsToCsv(ECN_MANUAL_FIELDS, [manualEcn]);
+      const bomCsv = rowsToCsv(
+        BOM_MANUAL_FIELDS,
+        manualBomRows.map((row, index) => ({ ...row, line_number: row.line_number.trim() || String(index + 1) })),
+      );
+      const identifier = manualEcn.change_notice_number.match(/\d{7}/)?.[0] ?? "manual";
+      formData.append("ecn", new File([ecnCsv], `ECN_${identifier}_manual.csv`, { type: "text/csv" }));
+      formData.append("bom", new File([bomCsv], `BOM_${identifier}_manual.csv`, { type: "text/csv" }));
+    } else {
+      if (ecnFile) formData.append("ecn", ecnFile);
+      if (bomFile) formData.append("bom", bomFile);
     }
     formData.append("source_status", sourceStatus);
 
@@ -233,7 +295,7 @@ function App() {
       <main className="login-shell">
         <form className="login-card" onSubmit={login}>
           <div className="brand-mark">ECN</div>
-          <p className="eyebrow">ECN Checker</p>
+          <p className="eyebrow">AI ECN Checker</p>
           <h1>Sign in to pre-check</h1>
           <p className="lede">Use the account created for your evaluation role.</p>
           <label htmlFor="login-email">Email</label>
@@ -252,7 +314,7 @@ function App() {
       <aside className="sidebar" aria-label="Main navigation">
         <div className="brand-mark">ECN</div>
         <div className="brand">
-          <strong>ECN Checker</strong>
+          <strong>AI ECN Checker</strong>
           <span>Pre-check workspace</span>
         </div>
         <nav>
@@ -271,7 +333,7 @@ function App() {
           <div>
             <p className="eyebrow">ECN creator</p>
             <h1>Check an ECN before submission</h1>
-            <p className="lede">Upload an ECN and optional BOM. We will show the outcome and the next action clearly.</p>
+            <p className="lede">Enter ECN and BOM details manually or upload files. We will show the outcome and next action clearly.</p>
           </div>
           <div className="signed-in-user">
             <span>Signed in as</span>
@@ -283,31 +345,73 @@ function App() {
 
         {activeTab === "dashboard" && user.role === "ADMINISTRATOR" ? <AdminDashboard /> : activeTab === "reviewer" && ["REVIEWER", "ADMINISTRATOR"].includes(user.role) ? <ReviewerArea user={user} /> : <>
         <section className="upload-card" id="new-precheck" aria-labelledby="upload-heading">
-          <div className="section-heading">
+                    <div className="section-heading">
             <div>
               <p className="step">Step 1</p>
-              <h2 id="upload-heading">Choose files</h2>
+              <h2 id="upload-heading">Prepare ECN and BOM</h2>
             </div>
-            <p>ECN is required. BOM is optional.</p>
+            <p>Choose manual entry or upload.</p>
           </div>
           <form onSubmit={runPrecheck}>
-            <div className="file-grid">
-              <FileInput
-                id="ecn-file"
-                label="ECN file"
-                required
-                accept=".csv,.xls,.xlsx,.xlsm,.pdf,.eml,.txt"
-                file={ecnFile}
-                onChange={setEcnFile}
-              />
-              <FileInput
-                id="bom-file"
-                label="BOM file"
-                accept=".csv,.xls,.xlsx,.xlsm,.pdf"
-                file={bomFile}
-                onChange={setBomFile}
-              />
+            <div className="intake-mode" role="group" aria-label="Choose intake method">
+              <button type="button" className={intakeMode === "upload" ? "active" : ""} aria-pressed={intakeMode === "upload"} onClick={() => { setIntakeMode("upload"); setRequestError(null); }}>Upload files</button>
+              <button type="button" className={intakeMode === "manual" ? "active" : ""} aria-pressed={intakeMode === "manual"} onClick={() => { setIntakeMode("manual"); setRequestError(null); }}>Manual entry</button>
             </div>
+            {intakeMode === "upload" ? (
+              <div className="file-grid">
+                <FileInput
+                  id="ecn-file"
+                  label="ECN file"
+                  required
+                  accept=".csv,.xls,.xlsx,.xlsm,.pdf,.eml,.txt"
+                  file={ecnFile}
+                  onChange={setEcnFile}
+                />
+                <FileInput
+                  id="bom-file"
+                  label="BOM file"
+                  accept=".csv,.xls,.xlsx,.xlsm,.pdf"
+                  file={bomFile}
+                  onChange={setBomFile}
+                />
+              </div>
+            ) : (
+              <div className="manual-intake">
+                <fieldset className="manual-fieldset">
+                  <legend>ECN details</legend>
+                  <div className="manual-field-grid">
+                    {ECN_MANUAL_FIELDS.map((field) => (
+                      <label className={field === "description_of_change" || field === "reason_for_change" ? "wide" : ""} htmlFor={`manual-ecn-${field}`} key={field}>
+                        {field.replaceAll("_", " ").replace(/^\w/, (letter) => letter.toUpperCase())}
+                        {REQUIRED_MANUAL_ECN_FIELDS.has(field) && <span className="required-mark">Required</span>}
+                        {field === "description_of_change" || field === "reason_for_change" ? (
+                          <textarea id={`manual-ecn-${field}`} required={REQUIRED_MANUAL_ECN_FIELDS.has(field)} value={manualEcn[field]} onChange={(event) => setManualEcn({ ...manualEcn, [field]: event.target.value })} />
+                        ) : (
+                          <input id={`manual-ecn-${field}`} type={field === "date" ? "date" : "text"} required={REQUIRED_MANUAL_ECN_FIELDS.has(field)} value={manualEcn[field]} onChange={(event) => setManualEcn({ ...manualEcn, [field]: event.target.value })} />
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset className="manual-fieldset">
+                  <legend>BOM rows</legend>
+                  <p className="manual-help">Enter at least one part. Quantity must be greater than zero.</p>
+                  {manualBomRows.map((row, index) => (
+                    <div className="manual-bom-row" key={index}>
+                      <strong>Row {index + 1}</strong>
+                      <label>Part number <span className="required-mark">Required</span><input required value={row.part_number} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, part_number: event.target.value } : item))} /></label>
+                      <label>Description<input value={row.description} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, description: event.target.value } : item))} /></label>
+                      <label>Quantity <span className="required-mark">Required</span><input type="number" min="0.000001" step="any" required value={row.quantity} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, quantity: event.target.value } : item))} /></label>
+                      <label>Unit<input value={row.unit} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, unit: event.target.value } : item))} /></label>
+                      <label>Action<input value={row.action} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, action: event.target.value } : item))} /></label>
+                      <label>Parent part number<input value={row.parent_part_no} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, parent_part_no: event.target.value } : item))} /></label>
+                                            <button className="remove-row-button" type="button" disabled={manualBomRows.length === 1} onClick={() => setManualBomRows(manualBomRows.filter((_, rowIndex) => rowIndex !== index))}>Remove row</button>
+                    </div>
+                  ))}
+                  <button className="secondary-button add-row-button" type="button" onClick={() => setManualBomRows([...manualBomRows, { ...EMPTY_MANUAL_BOM_ROW }])}>Add BOM row</button>
+                </fieldset>
+              </div>
+            )}
             <label htmlFor="source-status">Source status</label>
             <select id="source-status" value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value as "DRAFT" | "COMPLETED")}>
               <option value="DRAFT">DRAFT — still being prepared</option>

@@ -1,4 +1,4 @@
-"""Shared ECN pre-check pipeline used by the Streamlit and Flask interfaces."""
+"""Shared ECN pre-check pipeline used by the Flask API and command-line workflows."""
 
 from __future__ import annotations
 

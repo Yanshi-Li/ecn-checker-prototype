@@ -314,7 +314,7 @@ def _precheck_response(packet: dict, file_count: int, persistence: dict | None =
 
 @app.route("/api/precheck", methods=["POST"])
 def api_precheck():
-    """Run the same staged pipeline used by the Streamlit upload workflow."""
+    """Run the staged validation pipeline for a signed-in tester."""
     ecn_file = request.files.get("ecn")
     bom_file = request.files.get("bom")
     user = _current_user()
