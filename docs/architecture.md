@@ -11,7 +11,13 @@ The prototype is designed to handle a mix of intake sources commonly seen in ECN
 
 The intake layer normalises these inputs into a common ECN packet before the rule engine runs.
 
+## User-interface direction and current status
+
+React is the supported browser interface for tester intake and pre-checks, reviewer queues and judgements, and administrator assignments and evaluation reporting. Flask remains responsible for authentication and authorization, intake, validation, evaluation persistence, and notifications; PostgreSQL credentials and direct database access stay server-side. Batch testing is a separate command-line workflow through `scripts/run_batch.py`, not a browser workflow. No Streamlit application is maintained.
+
+
 ## Pipeline Overview
+
 
 Engineer submits ECN + BOM File from email / form / upload
         │
@@ -126,19 +132,10 @@ with rows is `PRESENT`. Original paths and filename identifiers remain in
 metadata. The adapter delegates parsing to the existing staged `load_file()`
 implementation and does not duplicate file-format logic.
 
-## Streamlit batch workflow
+## Command-line batch testing
 
-The Streamlit interface offers a separate **Batch pre-check** input mode while
-preserving the existing single-case upload and manual-intake modes. Testers
-identify themselves with an email before preparing a batch. Multiple ECN and BOM
-files can be uploaded, parsed through the shared batch intake adapter, and
-previewed as filename-identifier mappings before execution.
+Batch testing is intentionally performed through `scripts/run_batch.py`, not through a browser interface. The CLI accepts files or directories, prepares ECN/BOM mappings, executes independent cases, reports per-case outcomes, and can persist results or export an offline evaluation bundle. The batch parsing and orchestration modules are shared backend logic; no browser batch workflow is required.
 
-Batch preparation is deliberately a safety checkpoint: unsupported files,
-missing or ambiguous seven-digit identifiers, duplicate ECNs, and unmatched BOMs
-are displayed as intake errors and prevent validation from starting. The current
-Streamlit slice provides mapping preview only; batch execution and grouped result
-rendering remain separate follow-up work. No batch email is sent automatically.
 
 ## Batch orchestration
 
@@ -149,7 +146,8 @@ independent case for each ECN/BOM assignment (or one ECN-only case), preserves
 `ABSENT`, `EMPTY`, and `PRESENT` BOM states, and invokes the existing single-case
 validator supplied by the caller. An executor failure becomes an `ERROR` case;
 other cases continue. Progress callbacks expose completed, remaining, current
-case, and outcome counts without coupling the module to Streamlit.
+case, and outcome counts without coupling the module to a frontend.
+
 
 The module does not read files, persist data, send email, or duplicate rule
 logic. Its `BatchResult.rerun()` operation appends a new attempt for an existing
@@ -162,8 +160,8 @@ validation decision.
 `evaluation_store.py` stores the complete result packet in `precheck_attempts.result_payload`
 and stores original uploaded bytes, filename, MIME type, byte size, capture time,
 and SHA-256 in `evaluation_files`. Counts are indexes; they do not replace the
-findings or extracted data shown to the tester. The Streamlit batch path uses
-this store when `ECN_DB_PASSWORD` is configured and otherwise continues in memory.
+findings or extracted data shown to the tester. The command-line batch path uses this store when `ECN_DB_PASSWORD` is configured and otherwise continues in memory; persistence belongs to the shared backend, not to a frontend.
+
 
 `evaluation_bundle.py` provides a versioned ZIP export for offline runs. A bundle
 contains a manifest, one complete JSON result per case, and the original files.
@@ -176,12 +174,11 @@ and original input bytes. A database outage is reported as a persistence warning
 and does not change validation outcomes.
 
 
-`scripts/evaluation_queries.py` is the query seam for the Streamlit Reviewer
-Dashboard. It lists persisted attempts, calculates PASS/FAIL and tester-system
-agreement metrics, returns the complete result payload and rule findings for one
-attempt, downloads original ECN/BOM evidence, and records separate tester and
-reviewer judgements. Testers can submit one overall PASS/FAIL judgement plus
-per-rule CORRECT, INCORRECT, UNCLEAR, or NOT_APPLICABLE comments in
+`scripts/evaluation_queries.py` provides query and judgement operations used by the Flask API. It lists persisted attempts, calculates PASS/FAIL and tester-system agreement metrics, returns the complete result payload and rule findings for one attempt, downloads original ECN/BOM evidence, and records separate tester and reviewer judgements. React consumes these operations through role-protected Flask routes.
+
+Testers can submit one overall PASS/FAIL judgement plus per-rule CORRECT,
+INCORRECT, UNCLEAR, or NOT_APPLICABLE comments in
+
 `tester_rule_judgements`; these records never overwrite the system decision.
 Reviewer access uses `app_users`, salted PBKDF2 password
 
@@ -193,10 +190,8 @@ inspect the full population. The `evaluation_review_status` table derives the li
 `ACTIVE`, `READY_FOR_REVIEW`, `IN_REVIEW`, `REVIEWED`, or `DISPUTED` from
 assignments and independent submissions. Conflicting overall judgements become
 `DISPUTED`; an administrator can record an explanation to resolve the dispute
-without changing the original submissions, and the action is audited. The administrator dashboard reports PASS/FAIL percentages, average checking duration, tester-system agreement, aggregate reviewer agreement, disagreement, disputed attempts, and rule-level disagreement across completed attempts. It also reports UNCLEAR and NOT_APPLICABLE per-rule judgement counts. The dashboard is optional and shows a generic availability message when PostgreSQL
+without changing the original submissions, and the action is audited. The administrator dashboard reports PASS/FAIL percentages, average checking duration, tester-system agreement, aggregate reviewer agreement, disagreement, disputed attempts, and rule-level disagreement across completed attempts. It also reports UNCLEAR and NOT_APPLICABLE per-rule judgement counts. These workflows are exposed through the React interface. Configure `REVIEWER_ADMIN_EMAIL` and `REVIEWER_ADMIN_PASSWORD` to bootstrap the first administrator.
 
-is not configured. Configure `REVIEWER_ADMIN_EMAIL` and
-`REVIEWER_ADMIN_PASSWORD` to bootstrap the first administrator.
 
 
 
@@ -220,11 +215,8 @@ is not configured. Configure `REVIEWER_ADMIN_EMAIL` and
 | `scripts/run_batch.py` | Batch command-line runner and persistence/export entry point |
 | `scripts/evaluation_store.py` | PostgreSQL configuration, schema setup, and snapshot persistence |
 | `scripts/evaluation_bundle.py` | Integrity-checked offline evaluation bundle export/import |
-| `scripts/evaluation_queries.py` | Reviewer dashboard query, judgement, and evidence seam |
-
-| `streamlit_app.py` | Tester intake, batch mapping, and reviewer dashboard workflows |
-
-
+| `scripts/evaluation_queries.py` | Reviewer dashboard query, judgement, and evidence operations |
+| `frontend/` | React browser interface for testers, reviewers, and administrators |
 
 | `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
 | `data/ecn_intake.csv`         | Sample ECN input              |

@@ -7,20 +7,9 @@ logger = logging.getLogger(__name__)
 
 
 def _get_config_value(key: str, default: str = "") -> str:
-    """Read Streamlit secrets first, then fall back to CLI environment values."""
-    try:
-        import streamlit as st
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-        if get_script_run_ctx(suppress_warning=True) is not None:
-            value = st.secrets.get(key)
-            if value is not None:
-                return str(value).strip()
-    except Exception:
-        # No Streamlit runtime/secrets configured: use the CLI environment.
-        pass
-
+    """Read notification settings from the backend process environment."""
     return os.environ.get(key, default).strip()
+
 
 
 def _resolve_email_config() -> dict:

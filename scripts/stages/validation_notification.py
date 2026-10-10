@@ -15,24 +15,18 @@ SMTP_KEYS = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS")
 
 
 
-def _value(source: Mapping[str, object] | None, key: str) -> str:
-    if not source:
-        return ""
-    value = source.get(key, "")
-    return "" if value is None else str(value)
 
 
-def smtp_settings(
-    secrets: Mapping[str, object] | None = None,
-    environ: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    """Return Streamlit-secret values with environment fallback."""
+
+
+
+def smtp_settings(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return SMTP settings from the backend process environment."""
     environment = environ if environ is not None else os.environ
-    settings = {}
-    for key in SMTP_KEYS:
-        settings[key] = _value(secrets, key) or str(environment.get(key, ""))
+    settings = {key: str(environment.get(key, "")) for key in SMTP_KEYS}
     settings["SMTP_PORT"] = settings["SMTP_PORT"] or "587"
     return settings
+
 
 
 def _all_findings(packet: dict) -> list[dict]:
@@ -90,13 +84,13 @@ def build_validation_email(packet: dict) -> tuple[str, str]:
 def send_validation_email(
     packet: dict,
     recipient: str,
-
-    secrets: Mapping[str, object] | None = None,
     environ: Mapping[str, str] | None = None,
     smtp_factory=smtplib.SMTP,
 ) -> dict[str, object]:
-    """Send a validation report and return a UI-safe result."""
-    settings = smtp_settings(secrets=secrets, environ=environ)
+    """Send a validation report and return a safe result."""
+    settings = smtp_settings(environ=environ)
+
+
     if not settings["SMTP_HOST"] or not settings["SMTP_USER"]:
         return {"sent": False, "status": "not_configured", "message": "SMTP is not configured."}
 

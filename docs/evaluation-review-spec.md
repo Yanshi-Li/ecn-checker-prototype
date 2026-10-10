@@ -2,17 +2,21 @@
 
 ## Problem Statement
 
-Single and batch ECN/BOM pre-checks currently persist only partial evaluation data. Reviewers cannot log in to inspect the complete result shown in Streamlit, download the original uploaded files, judge the overall PASS/FAIL decision and individual rules, or compare multiple reviewer judgements. This prevents measuring whether the system is usable and whether its decisions agree with human experts.
+Single and batch ECN/BOM pre-checks currently persist only partial evaluation data. Reviewers cannot log in to inspect the complete result shown in the application, download the original uploaded files, judge the overall PASS/FAIL decision and individual rules, or compare multiple reviewer judgements. This prevents measuring whether the system is usable and whether its decisions agree with human experts. React is the supported browser interface for testers, reviewers, and administrators; batch testing remains command-line only.
+
 
 ## Solution
 
-Persist a complete, reviewable evaluation record for every single and batch pre-check. Store original files, extracted inputs, every displayed rule finding, gate decision, AI advisory, timings, and notification history. Add separate tester and reviewer roles with reviewer authentication, reviewer assignment, independent reviewer submissions, overall and per-rule judgements, comments, disagreement tracking, and reporting.
+Persist a complete, reviewable evaluation record for every single and batch pre-check. Batch testing runs through the command-line runner; it is not a browser workflow. Store original files, extracted inputs, every displayed rule finding, gate decision, AI advisory, timings, and notification history. Add separate tester and reviewer roles with reviewer authentication, reviewer assignment, independent reviewer submissions, overall and per-rule judgements, comments, disagreement tracking, and reporting.
+
 
 ## User Stories
 
 1. As an identified tester, I want every single pre-check saved so it can be reviewed later.
-2. As an identified tester, I want every batch case saved separately so one case does not hide another case's outcome.
-3. As a tester, I want the complete Streamlit result persisted so reviewers see the same evidence I saw.
+2. As an evaluator, I want the command-line batch runner to save each case separately so one case does not hide another case's outcome.
+
+3. As a tester, I want the complete result shown in the primary interface persisted so reviewers see the same evidence I saw.
+
 4. As a tester, I want original ECN and BOM files retained so reviewers can inspect source documents.
 5. As a reviewer, I want normalized ECN and BOM source content displayed in the review screen so I can validate the result without downloading files.
 6. As a reviewer, I want original file metadata retained for traceability and optional authorized retrieval.
@@ -42,7 +46,8 @@ Persist a complete, reviewable evaluation record for every single and batch pre-
 
 - PostgreSQL remains the evaluation data store; the existing CSV-driven validation pipeline remains unchanged.
 - A session represents an identified tester task. A pre-check attempt represents one single check or one independent batch case. A batch groups cases but does not replace them.
-- Store a complete result snapshot containing gate decision, deterministic findings, context findings, AI advisory output, extracted intake data, summary counts, and all evidence displayed by Streamlit.
+- Store a complete result snapshot containing gate decision, deterministic findings, context findings, AI advisory output, extracted intake data, summary counts, and all evidence displayed in the primary interface.
+
 - Store original ECN/BOM bytes in PostgreSQL for the local prototype, plus filename, MIME type, size, SHA-256 hash, upload time, and evaluation relationship. The reviewer screen defaults to normalized ECN fields, BOM rows, and rule evidence rather than download links. Keep the storage interface replaceable by a later object-storage adapter.
 - Keep system decisions, tester judgements, and reviewer judgements separate; none overwrites another.
 - Overall judgements are PASS or FAIL. Per-rule judgements are CORRECT, INCORRECT, UNCLEAR, or NOT_APPLICABLE, each with an optional comment.
@@ -53,7 +58,10 @@ Persist a complete, reviewable evaluation record for every single and batch pre-
 - Testers see reviewer judgements and comments only after review completion.
 - Incorrect rules are flagged for administrator review and are not automatically disabled.
 - Record notification requested, sent, and failed events with recipient, notification kind, timestamps, and safe error details; never store credentials.
-- Use one evaluation persistence interface for Streamlit single-check and batch paths. PostgreSQL is the production adapter and an in-memory adapter is used by tests.
+- Keep evaluation persistence in the shared backend behind one persistence interface, independent of which frontend initiated the workflow. PostgreSQL is the production adapter and an in-memory adapter is used by tests.
+- React is the supported browser interface for tester, reviewer, and administrator workflows. Batch testing remains command-line only through the batch runner; no browser batch workflow is required.
+
+
 - Validation remains available if persistence is unavailable, with a clear unsaved-evaluation warning.
 - Use evaluation statuses such as ACTIVE, READY_FOR_REVIEW, IN_REVIEW, REVIEWED, and DISPUTED, plus reviewer assignment statuses.
 - Protect downloads and review records with role, ownership, and assignment checks; never expose raw files through unauthenticated URLs.
@@ -63,8 +71,10 @@ Persist a complete, reviewable evaluation record for every single and batch pre-
 
 - Test at the highest application workflow seam available and assert persisted records and visible review behaviour, not private implementation details.
 - Use an in-memory persistence adapter for deterministic fast tests and local PostgreSQL integration tests when explicitly configured.
-- Cover complete single results, independent mixed-result batch cases, result snapshots, file bytes and metadata, timings, persistence failure warnings, tester/reviewer separation, multiple reviewers, hidden pre-submission judgements, DISPUTED status, completed-review visibility, per-rule metrics, and notification history.
-- Follow existing evaluation-store, Streamlit, batch-orchestration, staged-pipeline, and notification regression-test patterns.
+- Cover complete single results, independent mixed-result command-line batch cases, result snapshots, file bytes and metadata, timings, persistence failure warnings, tester/reviewer separation, multiple reviewers, hidden pre-submission judgements, DISPUTED status, completed-review visibility, per-rule metrics, and notification history.
+
+- Follow existing evaluation-store, React frontend, batch-orchestration, staged-pipeline, and notification regression-test patterns. Assert role/workflow behavior through the relevant application interface without making the business requirements specific to one browser screen.
+
 
 ## Out of Scope
 

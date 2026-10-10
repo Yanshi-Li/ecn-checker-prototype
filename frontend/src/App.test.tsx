@@ -68,6 +68,61 @@ describe("tester pre-check workflow", () => {
     expect((submittedFiles.get("bom") as File).name).toBe("parts.csv");
   });
 
+  it("serializes manual ECN and BOM entry to the same pre-check upload endpoint", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manual entry" }));
+    await user.type(screen.getByLabelText(/Change notice number/), "ECN-1234567");
+    await user.type(screen.getByLabelText(/Name of change/), "Update pump");
+    await user.type(screen.getByLabelText(/Reason for change/), "Improve reliability");
+    await user.type(screen.getByLabelText(/Description of change/), "Replace the worn pump.");
+    await user.type(screen.getByLabelText(/Part number/), "P-001");
+    fireEvent.submit(screen.getByRole("button", { name: "Run pre-check" }).closest("form")!);
+
+    expect(await screen.findByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
+    const precheckRequest = vi.mocked(fetch).mock.calls.find(([input]) => input === "/api/precheck");
+    expect(precheckRequest?.[1]?.method).toBe("POST");
+    const submittedFiles = precheckRequest?.[1]?.body as FormData;
+    const ecnFile = submittedFiles.get("ecn") as File;
+    const bomFile = submittedFiles.get("bom") as File;
+    expect(ecnFile.name).toBe("ECN_1234567_manual.csv");
+    expect(bomFile.name).toBe("BOM_1234567_manual.csv");
+    expect(await ecnFile.text()).toContain("change_notice_number,name_of_change,reason_for_change");
+    expect(await ecnFile.text()).toContain('"ECN-1234567","Update pump","Improve reliability"');
+    expect(await bomFile.text()).toContain("line_number,part_number,description,quantity,unit,action,parent_part_no");
+    expect(await bomFile.text()).toContain('"1","P-001"');
+  });
+
+  it("shows manual intake validation errors without sending an incomplete pre-check", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manual entry" }));
+    fireEvent.submit(screen.getByRole("button", { name: "Run pre-check" }).closest("form")!);
+
+    const validationMessage = await screen.findByRole("alert");
+    expect(validationMessage).toHaveTextContent("Change notice number is required.");
+    expect(validationMessage).toHaveTextContent("Name of change is required.");
+    expect(validationMessage).toHaveTextContent("Reason for change is required.");
+    expect(validationMessage).toHaveTextContent("Description of change is required.");
+    expect(validationMessage).toHaveTextContent("BOM row 1 requires a part number.");
+
+    await user.type(screen.getByLabelText(/Change notice number/), "ECN-1234567");
+    await user.type(screen.getByLabelText(/Name of change/), "Update pump");
+    await user.type(screen.getByLabelText(/Reason for change/), "Improve reliability");
+    await user.type(screen.getByLabelText(/Description of change/), "Replace the worn pump.");
+    await user.type(screen.getByLabelText(/Part number/), "P-001");
+    await user.clear(screen.getByLabelText(/Quantity/));
+    await user.type(screen.getByLabelText(/Quantity/), "0");
+    fireEvent.submit(screen.getByRole("button", { name: "Run pre-check" }).closest("form")!);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("BOM row 1 quantity must be a positive number.");
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => input === "/api/precheck")).toBe(false);
+  });
+
   it("records a tester judgement that disagrees with the system decision", async () => {
     const user = userEvent.setup();
     render(<App />);

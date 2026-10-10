@@ -1,8 +1,9 @@
 """Pure orchestration for independent, normalized ECN pre-check cases.
 
-This module deliberately knows nothing about Streamlit, PostgreSQL, files, or
-email.  Callers normalize intake first and provide the authoritative single-
-case validator as an executor.
+
+This module deliberately knows nothing about persistence, files, or email.
+Callers normalize intake first and provide the authoritative single-case
+validator as an executor.
 """
 
 from __future__ import annotations
