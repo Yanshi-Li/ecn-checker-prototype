@@ -34,6 +34,8 @@ describe("tester pre-check workflow", () => {
               findings: [{ rule: "ECN-H-001", severity: "error", message: "Missing reason for change." }],
               persistence: { saved: true, attempt_id: 82, duration_seconds: 3.2 },
             });
+          case "/api/tester/attempts/82/judgement":
+            return jsonResponse({ saved: true });
           default:
             return jsonResponse({ attempts: [] });
         }
@@ -64,5 +66,33 @@ describe("tester pre-check workflow", () => {
     const submittedFiles = precheckRequest?.[1]?.body as FormData;
     expect((submittedFiles.get("ecn") as File).name).toBe("change.csv");
     expect((submittedFiles.get("bom") as File).name).toBe("parts.csv");
+  });
+
+  it("records a tester judgement that disagrees with the system decision", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
+    await user.upload(screen.getByLabelText(/ECN file/), new File(["ecn data"], "change.csv", { type: "text/csv" }));
+    fireEvent.submit(screen.getByRole("button", { name: "Run pre-check" }).closest("form")!);
+
+    expect(await screen.findByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Your overall judgement"), "PASS");
+    await user.type(screen.getByLabelText("Explanation"), "The required reason is present in the source document.");
+    fireEvent.submit(screen.getByRole("button", { name: "Submit tester judgement" }).closest("form")!);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Your judgement was saved for evaluation.");
+    expect(screen.getByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Your overall judgement")).toHaveValue("PASS");
+
+    const judgementRequest = vi.mocked(fetch).mock.calls.find(
+      ([input]) => input === "/api/tester/attempts/82/judgement",
+    );
+    expect(judgementRequest?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(judgementRequest?.[1]?.body))).toEqual({
+      judgement: "PASS",
+      explanation: "The required reason is present in the source document.",
+      rule_judgements: {},
+    });
   });
 });
