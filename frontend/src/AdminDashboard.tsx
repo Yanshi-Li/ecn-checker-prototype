@@ -131,16 +131,16 @@ export default function AdminDashboard() {
       <div className="page-header">
         <div>
           <p className="eyebrow">Administrator</p>
-          <h1 id="dashboard-heading">Evaluation dashboard</h1>
+          <h1 id="dashboard-heading">Evaluation Dashboard</h1>
           <p className="lede">Monitor system outcomes, checking time, and agreement with tester judgements.</p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => void loadSummary()}>Refresh dashboard</button>
+        <button className="secondary-button" type="button" onClick={() => void loadSummary()}>Refresh Dashboard</button>
       </div>
       <div className="dashboard-filters" aria-label="Dashboard filters">
         <label>Decision<select value={decision} onChange={(event) => setDecision(event.target.value)}><option value="ALL">All decisions</option><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select></label>
-        <label>Source status<select value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value)}><option value="ALL">All source statuses</option><option value="DRAFT">DRAFT</option><option value="COMPLETED">COMPLETED</option></select></label>
+        <label>Source Status<select value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value)}><option value="ALL">All Source Statuses</option><option value="DRAFT">DRAFT</option><option value="COMPLETED">COMPLETED</option></select></label>
         <label>Tester<input value={tester} onChange={(event) => setTester(event.target.value)} placeholder="Name or email" /></label>
-        <label>ECN<input value={ecn} onChange={(event) => setEcn(event.target.value)} placeholder="ECN number" /></label>
+        <label>ECN<input value={ecn} onChange={(event) => setEcn(event.target.value)} placeholder="ECN Number" /></label>
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
       {loading && <p className="empty-state">Loading dashboard…</p>}

@@ -51,7 +51,7 @@ describe("tester pre-check workflow", () => {
     expect(screen.getByText("AI ECN Checker")).toBeInTheDocument();
     await user.upload(screen.getByLabelText(/ECN file/), new File(["ecn data"], "change.csv", { type: "text/csv" }));
     await user.upload(screen.getByLabelText(/BOM file/), new File(["bom data"], "parts.csv", { type: "text/csv" }));
-    const runButton = screen.getByRole("button", { name: "Run pre-check" });
+    const runButton = screen.getByRole("button", { name: "Run Pre-check" });
     expect(runButton).toBeEnabled();
     fireEvent.submit(runButton.closest("form")!);
 
@@ -74,13 +74,13 @@ describe("tester pre-check workflow", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Manual entry" }));
+    await user.click(screen.getByRole("button", { name: "Manual Entry" }));
     await user.type(screen.getByLabelText(/Change notice number/), "ECN-1234567");
     await user.type(screen.getByLabelText(/Name of change/), "Update pump");
     await user.type(screen.getByLabelText(/Reason for change/), "Improve reliability");
     await user.type(screen.getByLabelText(/Description of change/), "Replace the worn pump.");
     await user.type(screen.getByLabelText(/Part number/), "P-001");
-    fireEvent.submit(screen.getByRole("button", { name: "Run pre-check" }).closest("form")!);
+    fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
 
     expect(await screen.findByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
     const precheckRequest = vi.mocked(fetch).mock.calls.find(([input]) => input === "/api/precheck");
@@ -101,8 +101,8 @@ describe("tester pre-check workflow", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Manual entry" }));
-    fireEvent.submit(screen.getByRole("button", { name: "Run pre-check" }).closest("form")!);
+    await user.click(screen.getByRole("button", { name: "Manual Entry" }));
+    fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
 
     const validationMessage = await screen.findByRole("alert");
     expect(validationMessage).toHaveTextContent("Change notice number is required.");
@@ -118,7 +118,7 @@ describe("tester pre-check workflow", () => {
     await user.type(screen.getByLabelText(/Part number/), "P-001");
     await user.clear(screen.getByLabelText(/Quantity/));
     await user.type(screen.getByLabelText(/Quantity/), "0");
-    fireEvent.submit(screen.getByRole("button", { name: "Run pre-check" }).closest("form")!);
+    fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("BOM row 1 quantity must be a positive number.");
     expect(vi.mocked(fetch).mock.calls.some(([input]) => input === "/api/precheck")).toBe(false);
@@ -130,7 +130,7 @@ describe("tester pre-check workflow", () => {
 
     expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
     await user.upload(screen.getByLabelText(/ECN file/), new File(["ecn data"], "change.csv", { type: "text/csv" }));
-    fireEvent.submit(screen.getByRole("button", { name: "Run pre-check" }).closest("form")!);
+    fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
 
     expect(await screen.findByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Your overall judgement"), "PASS");

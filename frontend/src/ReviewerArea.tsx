@@ -199,18 +199,18 @@ export default function ReviewerArea({ user }: { user: User }) {
       <div className="page-header">
         <div>
           <p className="eyebrow">{user.role === "ADMINISTRATOR" ? "Administrator" : "Reviewer"}</p>
-          <h1 id="reviewer-heading">Reviewer queue</h1>
+          <h1 id="reviewer-heading">Reviewer Queue</h1>
           <p className="lede">Review assigned pre-checks without changing the system decision.</p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => void loadQueue()}>Refresh queue</button>
+        <button className="secondary-button" type="button" onClick={() => void loadQueue()}>Refresh Queue</button>
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="reviewer-layout">
         <section className="review-queue-card" aria-label="Review queue">
-          <div className="section-heading compact"><div><p className="step">Reviews</p><h2>Available attempts</h2></div><p>{pagination.total} item{pagination.total === 1 ? "" : "s"}</p></div>
+          <div className="section-heading compact"><div><p className="step">Reviews</p><h2>Available Attempts</h2></div><p>{pagination.total} item{pagination.total === 1 ? "" : "s"}</p></div>
           <div className="queue-filters">
             <label>Decision<select value={decisionFilter} onChange={(event) => setDecisionFilter(event.target.value)}><option value="ALL">All</option><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select></label>
-            <label>Review status<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="ALL">All</option><option value="READY_FOR_REVIEW">Ready</option><option value="IN_REVIEW">In review</option><option value="REVIEWED">Reviewed</option><option value="DISPUTED">Disputed</option></select></label>
+            <label>Review Status<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="ALL">All</option><option value="READY_FOR_REVIEW">Ready</option><option value="IN_REVIEW">In review</option><option value="REVIEWED">Reviewed</option><option value="DISPUTED">Disputed</option></select></label>
             <label>Tester<input value={testerFilter} onChange={(event) => setTesterFilter(event.target.value)} placeholder="Name or email" /></label>
           </div>
           {loading ? <p className="empty-state">Loading queue…</p> : queue.length === 0 ? <p className="empty-state">{user.role === "ADMINISTRATOR" ? "No completed attempts are available." : "No assigned attempts are waiting for review."}</p> : queue.map((attempt) => (

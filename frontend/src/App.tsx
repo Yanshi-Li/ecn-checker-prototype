@@ -315,16 +315,16 @@ function App() {
         <div className="brand-mark">ECN</div>
         <div className="brand">
           <strong>AI ECN Checker</strong>
-          <span>Pre-check workspace</span>
+          <span>Pre-check Workspace</span>
         </div>
         <nav>
-          <button className={`nav-item ${activeTab === "precheck" ? "active" : ""}`} type="button" onClick={() => setActiveTab("precheck")}>New pre-check</button>
-          {["REVIEWER", "ADMINISTRATOR"].includes(user.role) && <button className={`nav-item ${activeTab === "reviewer" ? "active" : ""}`} type="button" onClick={() => setActiveTab("reviewer")}>Reviewer queue</button>}
-          {user.role === "ADMINISTRATOR" && <button className={`nav-item ${activeTab === "dashboard" ? "active" : ""}`} type="button" onClick={() => setActiveTab("dashboard")}>Admin dashboard</button>}
+          <button className={`nav-item ${activeTab === "precheck" ? "active" : ""}`} type="button" onClick={() => setActiveTab("precheck")}>New Pre-check</button>
+          {["REVIEWER", "ADMINISTRATOR"].includes(user.role) && <button className={`nav-item ${activeTab === "reviewer" ? "active" : ""}`} type="button" onClick={() => setActiveTab("reviewer")}>Reviewer Queue</button>}
+          {user.role === "ADMINISTRATOR" && <button className={`nav-item ${activeTab === "dashboard" ? "active" : ""}`} type="button" onClick={() => setActiveTab("dashboard")}>Admin Dashboard</button>}
         </nav>
         <div className="connection-status">
           <span className={`status-dot ${apiReady ? "online" : "offline"}`} />
-          {apiReady === null ? "Connecting to validation API…" : apiReady ? "Validation API connected" : "Start Flask on port 5000"}
+          {apiReady === null ? "Connecting to validation API…" : apiReady ? "Validation API Connected" : "Start Flask on port 5000"}
         </div>
       </aside>
 
@@ -354,8 +354,8 @@ function App() {
           </div>
           <form onSubmit={runPrecheck}>
             <div className="intake-mode" role="group" aria-label="Choose intake method">
-              <button type="button" className={intakeMode === "upload" ? "active" : ""} aria-pressed={intakeMode === "upload"} onClick={() => { setIntakeMode("upload"); setRequestError(null); }}>Upload files</button>
-              <button type="button" className={intakeMode === "manual" ? "active" : ""} aria-pressed={intakeMode === "manual"} onClick={() => { setIntakeMode("manual"); setRequestError(null); }}>Manual entry</button>
+              <button type="button" className={intakeMode === "upload" ? "active" : ""} aria-pressed={intakeMode === "upload"} onClick={() => { setIntakeMode("upload"); setRequestError(null); }}>Upload Files</button>
+              <button type="button" className={intakeMode === "manual" ? "active" : ""} aria-pressed={intakeMode === "manual"} onClick={() => { setIntakeMode("manual"); setRequestError(null); }}>Manual Entry</button>
             </div>
             {intakeMode === "upload" ? (
               <div className="file-grid">
@@ -419,7 +419,7 @@ function App() {
             </select>
             {requestError && <p className="form-error" role="alert">{requestError}</p>}
             <button className="primary-button" type="submit" disabled={submitting || apiReady === false}>
-              {submitting ? "Running pre-check…" : "Run pre-check"}
+              {submitting ? "Running Pre-check…" : "Run Pre-check"}
             </button>
           </form>
         </section>
@@ -551,13 +551,13 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
   return (
     <section className="dashboard-card evaluation-attempts" aria-labelledby="tester-attempts-heading">
       <div className="section-heading compact">
-        <div><p className="step">Evaluation records</p><h2 id="tester-attempts-heading">Your pre-check attempts</h2></div>
+        <div><p className="step">Evaluation records</p><h2 id="tester-attempts-heading">Your Pre-check Attempts</h2></div>
         <p>{attempts.length} matching attempts</p>
       </div>
       <div className="dashboard-filters" aria-label="Your attempt filters">
-        <label>Source status<select value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value)}><option value="ALL">All source statuses</option><option value="DRAFT">DRAFT</option><option value="COMPLETED">COMPLETED</option></select></label>
+        <label>Source Status<select value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value)}><option value="ALL">All Source Statuses</option><option value="DRAFT">DRAFT</option><option value="COMPLETED">COMPLETED</option></select></label>
         <label>Decision<select value={decision} onChange={(event) => setDecision(event.target.value)}><option value="ALL">All decisions</option><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select></label>
-        <label>ECN number<input value={ecnNumber} onChange={(event) => setEcnNumber(event.target.value)} placeholder="Search ECN number" /></label>
+        <label>ECN Number<input value={ecnNumber} onChange={(event) => setEcnNumber(event.target.value)} placeholder="Search ECN Number" /></label>
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
       {loading ? <p className="empty-state">Loading attempts…</p> : attempts.length === 0 ? <p className="empty-state">No attempts match these filters.</p> : (
