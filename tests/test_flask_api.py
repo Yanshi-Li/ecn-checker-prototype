@@ -71,7 +71,7 @@ def test_administrator_can_run_the_staged_pipeline_for_a_generic_ecn_filename(mo
             }
         }
 
-    monkeypatch.setattr(flask_app, "run_precheck", fake_run_precheck)
+    monkeypatch.setattr(flask_app.precheck_workflow, "run_precheck", fake_run_precheck)
     client = app.test_client()
     with client.session_transaction() as session:
         session["user"] = {"id": 4, "email": "admin@example.com", "display_name": "Admin User", "role": "ADMINISTRATOR"}
@@ -103,7 +103,7 @@ def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch
         observed_times.append(value)
         return value
 
-    monkeypatch.setattr(flask_app, "_utc_now", fake_clock, raising=False)
+    monkeypatch.setattr(flask_app.precheck_workflow, "_utc_now", fake_clock)
 
     def fake_run_precheck(ecn_path, bom_path=None):
         assert observed_times == [started_at]
@@ -127,8 +127,8 @@ def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch
         received["timing"] = (source_status, started_at, completed_at)
         return {"saved": True, "attempt_id": 41, "duration_seconds": 1.5}
 
-    monkeypatch.setattr(flask_app, "run_precheck", fake_run_precheck)
-    monkeypatch.setattr(flask_app, "_persist_precheck", fake_persist)
+    monkeypatch.setattr(flask_app.precheck_workflow, "run_precheck", fake_run_precheck)
+    monkeypatch.setattr(flask_app.precheck_workflow, "_persist_precheck", fake_persist)
     client = app.test_client()
     with client.session_transaction() as session:
         session["user"] = {
@@ -174,7 +174,7 @@ class _ConnectionContext:
 
 def test_reviewer_can_run_the_staged_pipeline_as_a_tester(monkeypatch):
     monkeypatch.setattr(
-        flask_app,
+        flask_app.precheck_workflow,
         "run_precheck",
         lambda ecn_path, bom_path=None: {
             "gate": {
@@ -187,13 +187,14 @@ def test_reviewer_can_run_the_staged_pipeline_as_a_tester(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        flask_app,
+        flask_app.precheck_workflow,
         "_persist_precheck",
         lambda tester_email, tester_name, packet, uploaded_files, **timing: {
             "saved": False,
             "attempt_id": 23,
         },
     )
+
 
     client = app.test_client()
 
