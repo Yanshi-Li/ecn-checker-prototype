@@ -145,6 +145,32 @@ describe("tester pre-check workflow", () => {
     expect(vi.mocked(fetch).mock.calls.some(([input]) => input === "/api/precheck")).toBe(false);
   });
 
+  it("shows tester evaluation records in pages of ten", async () => {
+    const attempts = Array.from({ length: 12 }, (_, index) => ({
+      attempt_id: index + 1,
+      ecn_number: `ECN-${index + 1}`,
+      source_status: "COMPLETED",
+      decision: "PASS",
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/health") return jsonResponse({ status: "ok" });
+      if (String(input) === "/api/auth/session") return jsonResponse({ user: tester });
+      if (String(input).startsWith("/api/tester/evaluation-attempts")) return jsonResponse({ attempts });
+      return jsonResponse({});
+    }));
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByText("ECN-1")).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(11);
+    expect(screen.queryByText("ECN-11")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("ECN-11")).toBeInTheDocument();
+    expect(screen.getByText("ECN-12")).toBeInTheDocument();
+    expect(screen.queryByText("ECN-1", { selector: "td" })).not.toBeInTheDocument();
+  });
+
   it("records a tester judgement that disagrees with the system decision", async () => {
     const user = userEvent.setup();
     render(<App />);

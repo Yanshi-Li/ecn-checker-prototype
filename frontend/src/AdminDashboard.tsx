@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { buildAttemptFilterParams } from "./evaluationAttemptFilters";
+import RecordPagination, { RECORDS_PER_PAGE } from "./RecordPagination";
 
 
 type Reviewer = { id: number; email: string; display_name: string };
@@ -36,7 +37,8 @@ export default function AdminDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [reviewers, setReviewers] = useState<Reviewer[]>([]);
   const [assignable, setAssignable] = useState<Attempt[]>([]);
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
+    const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [page, setPage] = useState(1);
 
     const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [selectedAttempt, setSelectedAttempt] = useState("");
@@ -94,7 +96,7 @@ export default function AdminDashboard() {
     } catch { setToolStatus("Administrator tools could not be loaded."); }
   }
 
-  useEffect(() => { void loadSummary(); void loadAdminTools(); }, [decision, sourceStatus, tester, ecn]);
+  useEffect(() => { setPage(1); void loadSummary(); void loadAdminTools(); }, [decision, sourceStatus, tester, ecn]);
 
   async function createAccount() {
     setCreatingUser(true);
@@ -151,6 +153,11 @@ export default function AdminDashboard() {
   }
 
 
+      const visibleAttempts = attempts.slice(
+    (page - 1) * RECORDS_PER_PAGE,
+    page * RECORDS_PER_PAGE,
+  );
+
   return (
     <section className="dashboard-section" aria-labelledby="dashboard-heading">
       <div className="page-header">
@@ -192,9 +199,10 @@ export default function AdminDashboard() {
         <div className="section-heading compact"><div><p className="step">Evaluation records</p><h2 id="attempts-heading">Pre-check attempts</h2></div><p>{attempts.length} matching attempts</p></div>
         {attempts.length === 0 ? <p className="empty-state">No completed attempts match these filters.</p> : (
           <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Attempt ID</th><th>Source Status</th><th>Decision</th><th>Tester judgement</th><th>Agreement</th><th>Checking time</th><th>Started</th></tr></thead><tbody>
-            {attempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.attempt_id}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision}</td><td>{attempt.tester_judgement || "Pending"}</td><td>{attempt.tester_judgement ? (attempt.agreement ? "Agreed" : "Disagreed") : "Pending"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td></tr>)}
+            {visibleAttempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.attempt_id}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision}</td><td>{attempt.tester_judgement || "Pending"}</td><td>{attempt.tester_judgement ? (attempt.agreement ? "Agreed" : "Disagreed") : "Pending"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td></tr>)}
           </tbody></table></div>
-        )}
+                        )}
+        <RecordPagination page={page} pageSize={RECORDS_PER_PAGE} totalItems={attempts.length} label="Evaluation record pages" onPageChange={setPage} />
       </section>
       <section className="admin-tools" aria-label="Administrator tools">
         <div className="section-heading compact"><div><p className="step">Administration</p><h2>Assignments and reviews</h2></div><button className="secondary-button" type="button" onClick={exportEvaluation}>Export evaluation CSV</button></div>
@@ -211,9 +219,9 @@ export default function AdminDashboard() {
           </form>
         </div>
         <div className="admin-tool-grid">
-                    <div className="dashboard-card"><h3>Assign reviewers</h3><label>Attempt<select value={selectedAttempt} onChange={(event) => setSelectedAttempt(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>Attempt {attempt.attempt_id} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label><label>Reviewer<select value={selectedReviewer} onChange={(event) => setSelectedReviewer(event.target.value)}><option value="">Choose a reviewer</option>{reviewers.map((reviewer) => <option key={reviewer.id} value={reviewer.id}>{reviewer.display_name} ({reviewer.email})</option>)}</select></label><button className="primary-button" type="button" onClick={() => void assignReviewer()}>Assign reviewer</button></div>
-          <div className="dashboard-card"><h3>Reviewer comparison</h3><label>Attempt<select value={comparison?.attempt.attempt_id ?? ""} onChange={(event) => void openComparison(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>Attempt {attempt.attempt_id}</option>)}</select></label>{comparison ? <div className="comparison-table">{comparison.submissions.map((submission) => <article key={submission.submission_id}><strong>{submission.display_name}</strong><span>{submission.overall_judgement}</span><p>{submission.comment || "No comment"}</p>{submission.rule_judgements?.map((rule) => <small key={rule.rule_id}>{rule.rule_id}: {rule.judgement}</small>)}</article>)}</div> : <p className="empty-state">Compare independent reviewer judgements for one attempt.</p>}</div>
-          <div className="dashboard-card"><h3>Dispute resolution</h3>{disputes.length === 0 ? <p className="empty-state">No disputed attempts.</p> : disputes.map((dispute) => <article className="dispute-row" key={dispute.attempt_id}><strong>Attempt {dispute.attempt_id}</strong><span>{dispute.tester_email}</span><button className="evidence-link" type="button" onClick={() => void openComparison(String(dispute.attempt_id))}>Compare</button><textarea value={resolutionComment} onChange={(event) => setResolutionComment(event.target.value)} placeholder="Resolution comment" /><button className="secondary-button" type="button" onClick={() => void resolveDispute(dispute.attempt_id)}>Resolve dispute</button></article>)}</div>
+                    <div className="dashboard-card"><h3>Assign reviewers</h3><label>ECN to assign<select aria-label="ECN to assign" value={selectedAttempt} onChange={(event) => setSelectedAttempt(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>{attempt.ecn_number || attempt.attempt_name || "ECN not identified"} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label><label>Reviewer<select value={selectedReviewer} onChange={(event) => setSelectedReviewer(event.target.value)}><option value="">Choose a reviewer</option>{reviewers.map((reviewer) => <option key={reviewer.id} value={reviewer.id}>{reviewer.display_name} ({reviewer.email})</option>)}</select></label><button className="primary-button" type="button" onClick={() => void assignReviewer()}>Assign reviewer</button></div>
+          <div className="dashboard-card"><h3>Reviewer comparison</h3><label>ECN for comparison<select aria-label="ECN for comparison" value={comparison?.attempt.attempt_id ?? ""} onChange={(event) => void openComparison(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>{attempt.ecn_number || attempt.attempt_name || "ECN not identified"} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label>{comparison ? <div className="comparison-table">{comparison.submissions.map((submission) => <article key={submission.submission_id}><strong>{submission.display_name}</strong><span>{submission.overall_judgement}</span><p>{submission.comment || "No comment"}</p>{submission.rule_judgements?.map((rule) => <small key={rule.rule_id}>{rule.rule_id}: {rule.judgement}</small>)}</article>)}</div> : <p className="empty-state">Compare independent reviewer judgements for one attempt.</p>}</div>
+          <div className="dashboard-card"><h3>Dispute resolution</h3>{disputes.length === 0 ? <p className="empty-state">No disputed attempts.</p> : disputes.map((dispute) => <article className="dispute-row" key={dispute.attempt_id}><strong>{dispute.ecn_number || dispute.attempt_name || "ECN not identified"} — {dispute.system_decision}</strong><span>{dispute.tester_email}</span><button className="evidence-link" type="button" onClick={() => void openComparison(String(dispute.attempt_id))}>Compare</button><textarea value={resolutionComment} onChange={(event) => setResolutionComment(event.target.value)} placeholder="Resolution comment" /><button className="secondary-button" type="button" onClick={() => void resolveDispute(dispute.attempt_id)}>Resolve dispute</button></article>)}</div>
         </div>
         {toolStatus && <p className="empty-state" role="status">{toolStatus}</p>}
       </section>

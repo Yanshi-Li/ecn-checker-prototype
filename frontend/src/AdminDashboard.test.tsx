@@ -24,6 +24,48 @@ describe("administrator account management", () => {
     }));
   });
 
+  it("paginates dashboard records and identifies assignment/comparison choices by ECN number", async () => {
+    const attempts = Array.from({ length: 12 }, (_, index) => ({
+      attempt_id: index + 1,
+      ecn_number: `ECN-${index + 1}`,
+      system_decision: "PASS",
+      decision: "PASS",
+      source_status: "COMPLETED",
+      tester_email: `tester${index + 1}@example.com`,
+    }));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/admin/evaluation-summary")) return jsonResponse({ total_attempts: 12, pass_count: 12, pass_percentage: 100, fail_count: 0, fail_percentage: 0, judged_count: 0, agreement_count: 0, agreement_percentage: 0, average_duration_seconds: 0 });
+      if (url.startsWith("/api/admin/evaluation-attempts")) return jsonResponse({ attempts });
+      if (url === "/api/admin/reviewers") return jsonResponse({ reviewers: [] });
+      if (url === "/api/admin/assignable-attempts") return jsonResponse({ attempts });
+      if (url === "/api/admin/disputes") return jsonResponse({ attempts: [] });
+      if (url === "/api/admin/review-report") return jsonResponse({});
+      if (url === "/api/admin/attempts/1/comparison") return jsonResponse({ attempt: attempts[0], submissions: [] });
+      return jsonResponse({});
+    }));
+
+    const user = userEvent.setup();
+    render(<AdminDashboard />);
+
+    expect(await screen.findByText("ECN-1", { selector: "td" })).toBeInTheDocument();
+    expect(screen.getAllByRole("row")).toHaveLength(11);
+    expect(screen.queryByText("ECN-11", { selector: "td" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("ECN-11", { selector: "td" })).toBeInTheDocument();
+    expect(screen.getByText("ECN-12", { selector: "td" })).toBeInTheDocument();
+    expect(screen.queryByText("ECN-1", { selector: "td" })).not.toBeInTheDocument();
+
+    const assignmentSelect = screen.getByLabelText("ECN to assign") as HTMLSelectElement;
+        const assignmentOptions = Array.from(assignmentSelect.options).map((option) => option.textContent);
+    expect(assignmentOptions).toContain("ECN-1 — PASS — tester1@example.com");
+    expect(assignmentOptions.some((label) => label?.includes("Attempt 1"))).toBe(false);
+
+    const comparisonSelect = screen.getByLabelText("ECN for comparison");
+    await user.selectOptions(comparisonSelect, "1");
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/admin/attempts/1/comparison"));
+  });
+
   it("creates a user with a selected role and reports success without rendering the password", async () => {
     const user = userEvent.setup();
     render(<AdminDashboard />);

@@ -156,6 +156,33 @@ def test_judgement_and_file_retrieval_preserve_separate_system_decision():
     )["content"] == b"ecn"
 
 
+def test_admin_assignment_dispute_and_comparison_records_include_ecn_numbers():
+    attempt_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "completed_at", "tester_email", "tester_name"]
+    row = (17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", None, "tester@example.com", "Tester")
+
+    assignable_connection = Connection([Cursor(attempt_columns, [row])])
+    assignable = queries.list_assignable_attempts(assignable_connection)
+    assert assignable[0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in assignable_connection.statements[0][0]
+
+    dispute_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "review_status", "resolution_comment", "tester_email", "tester_name"]
+    dispute_row = (17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", "DISPUTED", None, "tester@example.com", "Tester")
+    disputes_connection = Connection([Cursor(dispute_columns, [dispute_row])])
+    disputes = queries.list_disputed_attempts(disputes_connection)
+    assert disputes[0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in disputes_connection.statements[0][0]
+
+    comparison_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "review_status"]
+    comparison_connection = Connection([
+        Cursor(comparison_columns, [(17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", "DISPUTED")]),
+        Cursor([], []),
+        Cursor([], []),
+    ])
+    comparison = queries.get_reviewer_comparison(comparison_connection, 17)
+    assert comparison["attempt"]["ecn_number"] == "4079118"
+    assert "logical_ecns" in comparison_connection.statements[0][0]
+
+
 def test_admin_queries_list_users_and_assign_attempts():
     user_columns = ["id", "email", "display_name", "role", "active", "created_at"]
     connection = Connection([Cursor(user_columns, [(4, "reviewer@example.com", "Reviewer", "REVIEWER", True, None)]), Cursor([], []), Cursor([], []), Cursor(["status", "assigned_count", "submitted_count", "judgement_count"], [("READY_FOR_REVIEW", 1, 0, 0)]), Cursor([], [])])

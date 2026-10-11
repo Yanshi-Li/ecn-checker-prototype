@@ -2,6 +2,7 @@
 import ReviewerArea from "./ReviewerArea";
 import AdminDashboard from "./AdminDashboard";
 import { buildAttemptFilterParams } from "./evaluationAttemptFilters";
+import RecordPagination, { RECORDS_PER_PAGE } from "./RecordPagination";
 
 
 type Severity = "error" | "warning" | string;
@@ -523,8 +524,13 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
   const [sourceStatus, setSourceStatus] = useState("ALL");
   const [decision, setDecision] = useState("ALL");
   const [attempts, setAttempts] = useState<EvaluationAttempt[]>([]);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+        useEffect(() => {
+    setPage(1);
+  }, [ecnNumber, sourceStatus, decision, refreshKey]);
 
   useEffect(() => {
     let active = true;
@@ -550,6 +556,11 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
     return () => { active = false; };
   }, [ecnNumber, sourceStatus, decision, refreshKey]);
 
+      const visibleAttempts = attempts.slice(
+    (page - 1) * RECORDS_PER_PAGE,
+    page * RECORDS_PER_PAGE,
+  );
+
   return (
     <section className="dashboard-card evaluation-attempts" aria-labelledby="tester-attempts-heading">
       <div className="section-heading compact">
@@ -564,12 +575,14 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
       {error && <p className="form-error" role="alert">{error}</p>}
       {loading ? <p className="empty-state">Loading attempts…</p> : attempts.length === 0 ? <p className="empty-state">No attempts match these filters.</p> : (
         <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Source Status</th><th>Decision</th><th>Checking time</th><th>Started</th><th>Attempt ID</th></tr></thead><tbody>
-          {attempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision || "—"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td><td>{attempt.attempt_id}</td></tr>)}
+                    {visibleAttempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision || "—"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td><td>{attempt.attempt_id}</td></tr>)}
         </tbody></table></div>
       )}
+      {!loading && attempts.length > 0 && <RecordPagination page={page} pageSize={RECORDS_PER_PAGE} totalItems={attempts.length} label="Your evaluation record pages" onPageChange={setPage} />}
     </section>
   );
 }
+
 
 type FileInputProps = {
 
