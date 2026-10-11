@@ -10,8 +10,10 @@ import os
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 from pathlib import Path
+
 
 
 print("=== app.py starting ===", flush=True)
@@ -221,7 +223,12 @@ def api_auth_logout():
 
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _save_uploaded_file(file_storage) -> str:
+
     """Write an upload to a temporary path while preserving its original stem."""
     original = Path(file_storage.filename or "upload")
     with tempfile.NamedTemporaryFile(
@@ -239,20 +246,18 @@ def _persist_precheck(
     packet: dict,
     uploaded_files: list[dict],
     source_status: str = "DRAFT",
+    *,
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
 ) -> dict:
     """Persist a completed pre-check when local PostgreSQL is configured."""
     if not os.environ.get("ECN_DB_PASSWORD"):
         return {"saved": False, "message": "Evaluation database is not configured."}
 
-
-
-
-
-
-
-
-    filename = next((str(file.get("filename", "")) for file in uploaded_files if file.get("role") == "ecn"), "")
-
+    filename = next(
+        (str(file.get("filename", "")) for file in uploaded_files if file.get("role") == "ecn"),
+        "",
+    )
     match = re.search(r"(?<!\d)(\d{7})(?!\d)", Path(filename).name)
     attempt_name = f"{match.group(1)}_MBOM_{source_status}" if match else "legacy"
 
@@ -260,9 +265,12 @@ def _persist_precheck(
         initialise_schema(connection)
         session_id = create_session(connection, tester_email, tester_name)
         attempt_id = start_precheck(
-            connection, session_id, source_status=source_status, attempt_name=attempt_name
+            connection,
+            session_id,
+            source_status=source_status,
+            attempt_name=attempt_name,
+            started_at=started_at,
         )
-
         store_evaluation_files(connection, attempt_id, uploaded_files)
         duration = complete_precheck(
             connection,
@@ -270,18 +278,17 @@ def _persist_precheck(
             session_id,
             packet["gate"]["decision"],
             {"packet": packet},
+            completed_at=completed_at,
         )
 
-        return {
-            "saved": True,
-            "attempt_id": attempt_id,
-            "attempt_name": attempt_name,
-            "ecn_number": match.group(1) if match else None,
-            "source_status": source_status,
-            "duration_seconds": duration,
-        }
-
-
+    return {
+        "saved": True,
+        "attempt_id": attempt_id,
+        "attempt_name": attempt_name,
+        "ecn_number": match.group(1) if match else None,
+        "source_status": source_status,
+        "duration_seconds": duration,
+    }
 
 
 def _precheck_response(packet: dict, file_count: int, persistence: dict | None = None) -> dict:
@@ -321,18 +328,19 @@ def api_precheck():
 
     if user is None:
         return jsonify({"error": "Sign in before running a pre-check."}), 401
-
     if not can_test(user["role"]):
         return jsonify({"error": "Tester access is required to run a pre-check."}), 403
 
-
     tester_email = str(user["email"])
     tester_name = str(user.get("display_name", ""))
-
     if ecn_file is None or not ecn_file.filename:
         return jsonify({"error": "An ECN file is required."}), 400
 
+    source_status = str(request.form.get("source_status", "DRAFT")).strip().upper()
+    if source_status not in {"DRAFT", "COMPLETED"}:
+        return jsonify({"error": "source_status must be DRAFT or COMPLETED."}), 400
 
+    started_at = _utc_now()
     temporary_paths = []
     try:
         ecn_bytes = ecn_file.read()
@@ -353,20 +361,23 @@ def api_precheck():
             temporary_paths.append(bom_path)
             uploaded_files.append({
                 "role": "bom",
-                                "filename": bom_file.filename,
+                "filename": bom_file.filename,
                 "mime_type": bom_file.mimetype,
                 "bytes": bom_bytes,
-                        })
+            })
+
         packet = run_precheck(ecn_path, bom_path)
-        source_status = str(request.form.get("source_status", "DRAFT")).strip().upper()
-        if source_status not in {"DRAFT", "COMPLETED"}:
-            return jsonify({"error": "source_status must be DRAFT or COMPLETED."}), 400
-        if source_status == "DRAFT":
-            persistence = _persist_precheck(tester_email, tester_name, packet, uploaded_files)
-        else:
-            persistence = _persist_precheck(
-                tester_email, tester_name, packet, uploaded_files, source_status
-            )
+        completed_at = _utc_now()
+        persistence = _persist_precheck(
+            tester_email,
+            tester_name,
+            packet,
+            uploaded_files,
+            source_status=source_status,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
         return jsonify(_precheck_response(packet, len(uploaded_files), persistence))
     except Exception as exc:
         return jsonify({"error": f"The pre-check could not be completed: {exc}"}), 422
@@ -378,9 +389,8 @@ def api_precheck():
                 pass
 
 
-
-
 def _reviewer_user() -> tuple[dict | None, tuple[object, int] | None]:
+
     """Return the signed-in reviewer or an appropriate JSON error response."""
     user = _current_user()
     if user is None:

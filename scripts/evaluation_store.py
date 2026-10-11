@@ -442,29 +442,30 @@ def start_precheck(
     source_status: str = "DRAFT",
     attempt_name: str = "legacy",
     idempotency_key: str | None = None,
+    started_at: datetime | None = None,
 ) -> int:
     """Create or reuse a pre-check attempt and its start event."""
     source_status = _normalise_source_status(source_status)
 
     with connection.transaction():
         cursor = connection.execute(
-                        """
+            """
             INSERT INTO precheck_attempts
                 (session_id, case_id, source_status, attempt_name, idempotency_key, started_at)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            VALUES (%s, %s, %s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP))
             RETURNING id
             """,
-            (session_id, case_id, source_status, attempt_name, idempotency_key),
+            (session_id, case_id, source_status, attempt_name, idempotency_key, started_at),
         )
         attempt_id = int(cursor.fetchone()[0])
         connection.execute(
-
             """
-            INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type)
-            VALUES (%s, %s, 'precheck_started')
+            INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, occurred_at)
+            VALUES (%s, %s, 'precheck_started', COALESCE(%s, CURRENT_TIMESTAMP))
             """,
-            (session_id, attempt_id),
+            (session_id, attempt_id, started_at),
         )
+
     return attempt_id
 
 
@@ -474,6 +475,7 @@ def complete_precheck(
     session_id: int,
     system_decision: str,
     result_payload: Mapping[str, object] | None = None,
+    completed_at: datetime | None = None,
 ) -> float:
     """Complete a pre-check, record its event, and return duration in seconds."""
     decision = system_decision.strip().upper()
@@ -485,21 +487,24 @@ def complete_precheck(
             """
             UPDATE precheck_attempts
             SET system_decision = %s,
-                completed_at = CURRENT_TIMESTAMP,
+                completed_at = COALESCE(%s, CURRENT_TIMESTAMP),
                 result_payload = %s
             WHERE id = %s AND session_id = %s
             RETURNING EXTRACT(EPOCH FROM (completed_at - started_at))
             """,
-            (decision, Jsonb(dict(result_payload or {})), attempt_id, session_id),
+            (decision, completed_at, Jsonb(dict(result_payload or {})), attempt_id, session_id),
         )
         row = cursor.fetchone()
         if row is None:
             raise ValueError("pre-check attempt was not found for this session")
         connection.execute(
             """
-            INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
-            VALUES (%s, %s, 'precheck_completed', %s)
+            INSERT INTO evaluation_events
+                (session_id, precheck_attempt_id, event_type, occurred_at, metadata)
+            VALUES (%s, %s, 'precheck_completed', COALESCE(%s, CURRENT_TIMESTAMP), %s)
             """,
-            (session_id, attempt_id, Jsonb({"system_decision": decision})),
+            (session_id, attempt_id, completed_at, Jsonb({"system_decision": decision})),
         )
+
     return float(row[0])
+

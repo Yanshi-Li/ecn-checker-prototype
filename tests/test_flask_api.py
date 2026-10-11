@@ -1,8 +1,10 @@
 
 """Contract tests for the Flask endpoints used by the React frontend."""
 
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
+
 
 from scripts import app as flask_app
 
@@ -91,8 +93,20 @@ def test_administrator_can_run_the_staged_pipeline_for_a_generic_ecn_filename(mo
 
 def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch):
     received = {}
+    started_at = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
+    completed_at = datetime(2026, 10, 11, 12, 0, 4, tzinfo=timezone.utc)
+    clock_values = iter((started_at, completed_at))
+    observed_times = []
+
+    def fake_clock():
+        value = next(clock_values)
+        observed_times.append(value)
+        return value
+
+    monkeypatch.setattr(flask_app, "_utc_now", fake_clock, raising=False)
 
     def fake_run_precheck(ecn_path, bom_path=None):
+        assert observed_times == [started_at]
         received["paths"] = (ecn_path, bom_path)
         return {
             "gate": {
@@ -104,10 +118,13 @@ def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch
             }
         }
 
-    def fake_persist(tester_email, tester_name, packet, uploaded_files):
+    def fake_persist(
+        tester_email, tester_name, packet, uploaded_files, *, source_status, started_at, completed_at
+    ):
         received["identity"] = (tester_email, tester_name)
         received["packet"] = packet
         received["files"] = uploaded_files
+        received["timing"] = (source_status, started_at, completed_at)
         return {"saved": True, "attempt_id": 41, "duration_seconds": 1.5}
 
     monkeypatch.setattr(flask_app, "run_precheck", fake_run_precheck)
@@ -136,14 +153,14 @@ def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch
         "duration_seconds": 1.5,
     }
     assert received["paths"][1] is None
+    assert observed_times == [started_at, completed_at]
+    assert received["timing"] == ("DRAFT", started_at, completed_at)
     assert [file["role"] for file in received["files"]] == ["ecn"]
     assert received["files"][0]["bytes"] == b"change_notice_number\nECN-4079118\n"
 
 
-
-
-
 class _ConnectionContext:
+
 
     def __init__(self, connection):
         self.connection = connection
@@ -172,12 +189,14 @@ def test_reviewer_can_run_the_staged_pipeline_as_a_tester(monkeypatch):
     monkeypatch.setattr(
         flask_app,
         "_persist_precheck",
-        lambda tester_email, tester_name, packet, uploaded_files: {
+        lambda tester_email, tester_name, packet, uploaded_files, **timing: {
             "saved": False,
             "attempt_id": 23,
         },
     )
+
     client = app.test_client()
+
     with client.session_transaction() as session:
         session["user"] = {
             "id": 4,
