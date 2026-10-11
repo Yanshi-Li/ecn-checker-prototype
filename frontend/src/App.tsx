@@ -88,7 +88,6 @@ function validateManualIntake(ecn: ManualEcn, bomRows: ManualBomRow[]): string[]
   const errors = ECN_MANUAL_FIELDS
     .filter((field) => REQUIRED_MANUAL_ECN_FIELDS.has(field) && !ecn[field].trim())
     .map((field) => `${field.replaceAll("_", " ").replace(/^\w/, (letter) => letter.toUpperCase())} is required.`);
-  if (bomRows.length === 0) errors.push("At least one BOM row is required.");
   bomRows.forEach((row, index) => {
     if (!row.part_number.trim()) errors.push(`BOM row ${index + 1} requires a part number.`);
     const quantity = Number(row.quantity);
@@ -119,7 +118,7 @@ function App() {
   const [ecnFile, setEcnFile] = useState<File | null>(null);
   const [bomFile, setBomFile] = useState<File | null>(null);
   const [manualEcn, setManualEcn] = useState<ManualEcn>({ ...EMPTY_MANUAL_ECN });
-  const [manualBomRows, setManualBomRows] = useState<ManualBomRow[]>([{ ...EMPTY_MANUAL_BOM_ROW }]);
+  const [manualBomRows, setManualBomRows] = useState<ManualBomRow[]>([]);
   const [sourceStatus, setSourceStatus] = useState<"DRAFT" | "COMPLETED">("DRAFT");
   const [user, setUser] = useState<User | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
@@ -140,7 +139,8 @@ function App() {
   useEffect(() => {
     void fetch("/api/health")
       .then((response) => setApiReady(response.ok))
-      .catch(() => setApiReady(false));
+            .catch(() => setApiReady(false));
+
     void fetch("/api/auth/session")
       .then(async (response) => {
         if (response.ok) {
@@ -207,13 +207,15 @@ function App() {
         const formData = new FormData();
     if (intakeMode === "manual") {
       const ecnCsv = rowsToCsv(ECN_MANUAL_FIELDS, [manualEcn]);
-      const bomCsv = rowsToCsv(
-        BOM_MANUAL_FIELDS,
-        manualBomRows.map((row, index) => ({ ...row, line_number: row.line_number.trim() || String(index + 1) })),
-      );
-      const identifier = manualEcn.change_notice_number.match(/\d{7}/)?.[0] ?? "manual";
+            const identifier = manualEcn.change_notice_number.match(/\d{7}/)?.[0] ?? "manual";
       formData.append("ecn", new File([ecnCsv], `ECN_${identifier}_manual.csv`, { type: "text/csv" }));
-      formData.append("bom", new File([bomCsv], `BOM_${identifier}_manual.csv`, { type: "text/csv" }));
+      if (manualBomRows.length > 0) {
+        const bomCsv = rowsToCsv(
+          BOM_MANUAL_FIELDS,
+          manualBomRows.map((row, index) => ({ ...row, line_number: row.line_number.trim() || String(index + 1) })),
+        );
+        formData.append("bom", new File([bomCsv], `BOM_${identifier}_manual.csv`, { type: "text/csv" }));
+      }
     } else {
       if (ecnFile) formData.append("ecn", ecnFile);
       if (bomFile) formData.append("bom", bomFile);
@@ -395,7 +397,7 @@ function App() {
                 </fieldset>
                 <fieldset className="manual-fieldset">
                   <legend>BOM rows</legend>
-                  <p className="manual-help">Enter at least one part. Quantity must be greater than zero.</p>
+                                    <p className="manual-help">BOM details are optional. Add rows when the ECN includes a bill of materials; each entered quantity must be greater than zero.</p>
                   {manualBomRows.map((row, index) => (
                     <div className="manual-bom-row" key={index}>
                       <strong>Row {index + 1}</strong>
@@ -405,7 +407,7 @@ function App() {
                       <label>Unit<input value={row.unit} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, unit: event.target.value } : item))} /></label>
                       <label>Action<input value={row.action} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, action: event.target.value } : item))} /></label>
                       <label>Parent part number<input value={row.parent_part_no} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, parent_part_no: event.target.value } : item))} /></label>
-                                            <button className="remove-row-button" type="button" disabled={manualBomRows.length === 1} onClick={() => setManualBomRows(manualBomRows.filter((_, rowIndex) => rowIndex !== index))}>Remove row</button>
+                                            <button className="remove-row-button" type="button" onClick={() => setManualBomRows(manualBomRows.filter((_, rowIndex) => rowIndex !== index))}>Remove row</button>
                     </div>
                   ))}
                   <button className="secondary-button add-row-button" type="button" onClick={() => setManualBomRows([...manualBomRows, { ...EMPTY_MANUAL_BOM_ROW }])}>Add BOM row</button>

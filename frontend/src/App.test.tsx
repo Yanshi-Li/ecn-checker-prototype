@@ -23,7 +23,7 @@ describe("tester pre-check workflow", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         switch (String(input)) {
-          case "/api/health":
+                    case "/api/health":
             return jsonResponse({ status: "ok" });
           case "/api/auth/session":
             return jsonResponse({ user: tester });
@@ -78,7 +78,8 @@ describe("tester pre-check workflow", () => {
     await user.type(screen.getByLabelText(/Change notice number/), "ECN-1234567");
     await user.type(screen.getByLabelText(/Name of change/), "Update pump");
     await user.type(screen.getByLabelText(/Reason for change/), "Improve reliability");
-    await user.type(screen.getByLabelText(/Description of change/), "Replace the worn pump.");
+        await user.type(screen.getByLabelText(/Description of change/), "Replace the worn pump.");
+    await user.click(screen.getByRole("button", { name: "Add BOM row" }));
     await user.type(screen.getByLabelText(/Part number/), "P-001");
     fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
 
@@ -96,6 +97,26 @@ describe("tester pre-check workflow", () => {
     expect(await bomFile.text()).toContain('"1","P-001"');
   });
 
+  it("submits a valid manual ECN without a BOM and shows the saved result", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manual Entry" }));
+    await user.type(screen.getByLabelText(/Change notice number/), "ECN-1234567");
+    await user.type(screen.getByLabelText(/Name of change/), "Update pump");
+    await user.type(screen.getByLabelText(/Reason for change/), "Improve reliability");
+    await user.type(screen.getByLabelText(/Description of change/), "Replace the worn pump.");
+    fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
+
+    expect(await screen.findByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
+    expect(screen.getByText("Evaluation saved for reviewer follow-up.")).toBeInTheDocument();
+    const precheckRequest = vi.mocked(fetch).mock.calls.find(([input]) => input === "/api/precheck");
+    const submittedFiles = precheckRequest?.[1]?.body as FormData;
+    expect(submittedFiles.get("ecn")).toBeInstanceOf(File);
+    expect(submittedFiles.get("bom")).toBeNull();
+  });
+
   it("shows manual intake validation errors without sending an incomplete pre-check", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -108,14 +129,14 @@ describe("tester pre-check workflow", () => {
     expect(validationMessage).toHaveTextContent("Change notice number is required.");
     expect(validationMessage).toHaveTextContent("Name of change is required.");
     expect(validationMessage).toHaveTextContent("Reason for change is required.");
-    expect(validationMessage).toHaveTextContent("Description of change is required.");
-    expect(validationMessage).toHaveTextContent("BOM row 1 requires a part number.");
+        expect(validationMessage).toHaveTextContent("Description of change is required.");
+    expect(validationMessage).not.toHaveTextContent("BOM row");
 
     await user.type(screen.getByLabelText(/Change notice number/), "ECN-1234567");
     await user.type(screen.getByLabelText(/Name of change/), "Update pump");
     await user.type(screen.getByLabelText(/Reason for change/), "Improve reliability");
     await user.type(screen.getByLabelText(/Description of change/), "Replace the worn pump.");
-    await user.type(screen.getByLabelText(/Part number/), "P-001");
+    await user.click(screen.getByRole("button", { name: "Add BOM row" }));
     await user.clear(screen.getByLabelText(/Quantity/));
     await user.type(screen.getByLabelText(/Quantity/), "0");
     fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);

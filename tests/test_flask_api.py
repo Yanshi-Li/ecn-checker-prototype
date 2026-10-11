@@ -89,7 +89,62 @@ def test_administrator_can_run_the_staged_pipeline_for_a_generic_ecn_filename(mo
     assert paths[1] is None
 
 
+def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch):
+    received = {}
+
+    def fake_run_precheck(ecn_path, bom_path=None):
+        received["paths"] = (ecn_path, bom_path)
+        return {
+            "gate": {
+                "decision": "PASS",
+                "blockers": [],
+                "part_issues": [],
+                "conflict_alerts": [],
+                "warnings": [],
+            }
+        }
+
+    def fake_persist(tester_email, tester_name, packet, uploaded_files):
+        received["identity"] = (tester_email, tester_name)
+        received["packet"] = packet
+        received["files"] = uploaded_files
+        return {"saved": True, "attempt_id": 41, "duration_seconds": 1.5}
+
+    monkeypatch.setattr(flask_app, "run_precheck", fake_run_precheck)
+    monkeypatch.setattr(flask_app, "_persist_precheck", fake_persist)
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {
+            "id": 4,
+            "email": "tester@example.com",
+            "display_name": "Evaluation Tester",
+            "role": "TESTER",
+        }
+
+    response = client.post(
+        "/api/precheck",
+        data={"ecn": (BytesIO(b"change_notice_number\nECN-4079118\n"), "ECN_4079118.csv")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["decision"] == "PASS"
+    assert response.get_json()["summary"]["total_files"] == 1
+    assert response.get_json()["persistence"] == {
+        "saved": True,
+        "attempt_id": 41,
+        "duration_seconds": 1.5,
+    }
+    assert received["paths"][1] is None
+    assert [file["role"] for file in received["files"]] == ["ecn"]
+    assert received["files"][0]["bytes"] == b"change_notice_number\nECN-4079118\n"
+
+
+
+
+
 class _ConnectionContext:
+
     def __init__(self, connection):
         self.connection = connection
 

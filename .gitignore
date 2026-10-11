@@ -24,8 +24,10 @@ frontend/*.tsbuildinfo
 .DS_Store
 Thumbs.db
 
-# Local configuration / secrets
+# Local configuration / secrets and private planning
+.scratch/
 .env
+
 .streamlit/secrets.toml
 config-local.properties
 .continue/config.yaml
