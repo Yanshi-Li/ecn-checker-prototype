@@ -497,3 +497,82 @@ def test_notification_rejects_sending_a_failed_result_to_someone_other_than_the_
 
     assert response.status_code == 403
     assert response.get_json() == {"error": "Failed results can only be emailed to the tester."}
+
+
+def test_legacy_upload_endpoint_is_retired():
+    response = app.test_client().post("/upload", data={})
+
+    assert response.status_code in {404, 405}
+
+
+
+def test_admin_user_creation_requires_an_authenticated_administrator():
+    client = app.test_client()
+
+    unauthenticated = client.post("/api/admin/users", json={})
+    assert unauthenticated.status_code == 401
+
+    with client.session_transaction() as session:
+        session["user"] = {"id": 4, "email": "reviewer@example.com", "role": "REVIEWER"}
+    forbidden = client.post("/api/admin/users", json={})
+
+    assert forbidden.status_code == 403
+    assert forbidden.get_json() == {"error": "Administrator access is required."}
+
+
+def test_admin_user_creation_validates_required_fields_and_role():
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@example.com", "role": "ADMINISTRATOR"}
+
+    missing = client.post("/api/admin/users", json={"email": "new@example.com"})
+    invalid_role = client.post(
+        "/api/admin/users",
+        json={"email": "new@example.com", "display_name": "New User", "password": "secret", "role": "OWNER"},
+    )
+
+    assert missing.status_code == 400
+    assert invalid_role.status_code == 400
+
+
+def test_admin_can_create_account_without_exposing_the_password(monkeypatch):
+    connection = object()
+    created = {}
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(flask_app, "initialise_schema", lambda _: None)
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "create_user",
+        lambda db, email, name, password, role: created.update(
+            database=db, email=email, name=name, password=password, role=role,
+        ) or 51,
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@example.com", "role": "ADMINISTRATOR"}
+
+    response = client.post(
+        "/api/admin/users",
+        json={
+            "email": "  NEW@example.com ",
+            "display_name": " New Tester ",
+            "password": "private password",
+            "role": "TESTER",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.get_json() == {
+        "user": {"id": 51, "email": "new@example.com", "display_name": "New Tester", "role": "TESTER"},
+    }
+    assert created == {
+        "database": connection,
+        "email": "new@example.com",
+        "name": "New Tester",
+        "password": "private password",
+        "role": "TESTER",
+    }
+    assert "password" not in response.get_json()["user"]
+
+
+

@@ -1,17 +1,11 @@
 
 from __future__ import annotations
 
-import csv
 import io
-
-
-
 import os
 import sys
-import tempfile
-
-
 from pathlib import Path
+
 
 
 
@@ -22,13 +16,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from flask import Flask, Response, jsonify, render_template, request, send_file, send_from_directory, session
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory, session
+from psycopg.errors import UniqueViolation
 
-
-
-from scripts.ecn_checker import run_checks
-from scripts.stages.intake import load_file
 from scripts import precheck_workflow
+
 
 
 from scripts import evaluation_queries
@@ -39,7 +31,8 @@ from scripts.evaluation_store import (
 )
 
 from scripts.stages.validation_notification import send_validation_email
-from scripts.evaluation_auth import can_test
+from scripts.evaluation_auth import can_test, normalise_role
+
 
 
 
@@ -74,90 +67,7 @@ app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB limit
 
 
-ROLE_ALLOWED_EXTENSIONS = {
-    "ecn_creator": {".csv", ".xls", ".xlsx", ".xlsm", ".pdf", ".eml", ".txt"},
-    "bom_coordinator": {".csv", ".xls", ".xlsx", ".xlsm", ".xl"},
-}
 
-
-def allowed_file(filename: str, role: str = "ecn_creator") -> bool:
-    if not filename or "." not in filename:
-        return False
-    ext = Path(filename).suffix.lower()
-    return ext in ROLE_ALLOWED_EXTENSIONS.get(role, set())
-
-
-def _csv_from_loaded_row(row: dict[str, object], header: list[str]) -> str:
-    values = []
-    for key in header:
-        value = row.get(key, "")
-        if isinstance(value, (int, float)):
-            value = str(value)
-        elif value is None:
-            value = ""
-        values.append(str(value).replace('"', '""'))
-    return ",".join(header) + "\n" + ",".join(f'"{v}"' for v in values) + "\n"
-
-
-def _normalise_uploaded_data(filename: str, payload: object, role: str) -> tuple[str, str]:
-    stem = Path(filename).stem or "uploaded"
-    if role == "ecn_creator":
-        synthetic_name = f"{stem}_ecn_header.csv"
-        if isinstance(payload, dict):
-            ecn_number = str(
-                payload.get("change_notice_number") or payload.get("ecn_number") or ""
-            ).strip()
-            title = str(payload.get("title") or "ECN Intake").strip()
-            status = str(payload.get("status") or "draft").strip().lower()
-            initiator = str(payload.get("author") or payload.get("initiator") or "Manual review").strip()
-            date_value = str(payload.get("date") or payload.get("date_initiated") or "").strip()
-            reason = str(payload.get("reason_for_change") or payload.get("reason") or payload.get("description") or "").replace('"', '""')
-            description = str(payload.get("description") or "").replace('"', '""')
-            csv_text = (
-                'ecn_number,title,reason_for_change,description,status,initiator,date_initiated\n'
-                f'"{ecn_number}","{title}","{reason}","{description}","{status}","{initiator}","{date_value}"\n'
-            )
-            return synthetic_name, csv_text
-        if isinstance(payload, list):
-            rows = payload or []
-            row = rows[0] if rows else {}
-            csv_text = (
-                'ecn_number,title,reason_for_change,description,status,initiator,date_initiated\n'
-                f'"{row.get("change_notice_number", row.get("ecn_number", ""))}",'
-                f'"{row.get("title", "ECN Intake")}",'
-                f'"{row.get("reason_for_change", row.get("reason", ""))}",'
-                f'"{row.get("description", "")}",'
-                f'"{row.get("status", "draft")}",'
-                f'"{row.get("author", row.get("initiator", "Manual review"))}",'
-                f'"{row.get("date", row.get("date_initiated", ""))}"\n'
-            )
-            return synthetic_name, csv_text
-    synthetic_name = f"{stem}_bom.csv"
-    if isinstance(payload, list):
-        rows = payload or []
-        csv_lines = ["part_number,parent_part,quantity,unit_of_measure"]
-        for row in rows:
-            part = str(row.get("part_number") or row.get("part") or "").strip()
-            parent = str(row.get("parent_part") or row.get("parent") or "").strip()
-            qty = str(row.get("quantity") or row.get("qty") or "1").strip()
-            unit = str(row.get("unit") or row.get("unit_of_measure") or row.get("uom") or "ea").strip()
-            if not part:
-                continue
-            csv_lines.append(f'"{part}","{parent}","{qty}","{unit}"')
-        return synthetic_name, "\n".join(csv_lines) + "\n"
-    if isinstance(payload, dict):
-        part = str(payload.get("part_number") or payload.get("part") or "").strip()
-        if not part:
-            part = str(payload.get("item") or "").strip()
-        parent = str(payload.get("parent_part") or payload.get("parent") or "").strip()
-        qty = str(payload.get("quantity") or payload.get("qty") or "1").strip()
-        unit = str(payload.get("unit") or payload.get("unit_of_measure") or payload.get("uom") or "ea").strip()
-        csv_text = (
-            'part_number,parent_part,quantity,unit_of_measure\n'
-            f'"{part}","{parent}","{qty}","{unit}"\n'
-        )
-        return synthetic_name, csv_text
-    return synthetic_name, "part_number,parent_part,quantity,unit_of_measure\n"
 
 
 @app.route("/")
@@ -274,8 +184,55 @@ def _administrator_user() -> tuple[dict | None, tuple[object, int] | None]:
     return user, None
 
 
+@app.route("/api/admin/users", methods=["POST"])
+def api_admin_create_user():
+    """Create an application account after enforcing administrator access."""
+    _, error = _administrator_user()
+    if error:
+        return error
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "A JSON account payload is required."}), 400
+
+    email = str(body.get("email", "")).strip().casefold()
+    display_name = str(body.get("display_name", "")).strip()
+    password = str(body.get("password", ""))
+    raw_role = str(body.get("role", "")).strip()
+    if not email or "@" not in email or any(character.isspace() for character in email):
+        return jsonify({"error": "A valid email address is required."}), 400
+    if not display_name:
+        return jsonify({"error": "A display name is required."}), 400
+    if not password.strip():
+        return jsonify({"error": "A non-empty password is required."}), 400
+    try:
+        role = normalise_role(raw_role)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    try:
+        with connect_evaluation_db() as connection:
+            initialise_schema(connection)
+            user_id = evaluation_queries.create_user(
+                connection, email, display_name, password, role
+            )
+        return jsonify({
+            "user": {
+                "id": user_id,
+                "email": email,
+                "display_name": display_name,
+                "role": role,
+            },
+        }), 201
+    except UniqueViolation:
+        return jsonify({"error": "An account with that email already exists."}), 409
+    except Exception:
+        return jsonify({"error": "The account could not be created."}), 503
+
+
 @app.route("/api/admin/reviewers")
 def api_admin_reviewers():
+
     user, error = _administrator_user()
 
 
@@ -763,74 +720,7 @@ def api_notification():
 
 
 
-@app.route("/upload", methods=["POST"])
-def upload():
-
-
-
-    role = request.form.get("role", "ecn_creator")
-    uploaded = request.files.getlist("files")
-
-
-    if not uploaded or all(f.filename == "" for f in uploaded):
-        return jsonify({"error": "No files selected."}), 400
-
-    results = []
-    file_data = {}
-    accepted_files = 0
-
-    for f in uploaded:
-        name = f.filename or ""
-        if not name or not allowed_file(name, role):
-            results.append({
-                "file": name or "unnamed",
-                "issues": [{"rule": "UPLOAD", "severity": "error",
-                             "message": f"Only {', '.join(sorted(ROLE_ALLOWED_EXTENSIONS.get(role, set())))} files are accepted for this role."}]
-            })
-            continue
-
-        accepted_files += 1
-        file_bytes = f.read()
-        ext = Path(name).suffix.lower()
-        try:
-            if ext == ".csv":
-                content = file_bytes.decode("utf-8-sig")
-                file_data[name] = content
-            else:
-                with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                    tmp.write(file_bytes)
-                    tmp_path = tmp.name
-                try:
-                    parsed = load_file(tmp_path)
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-                synthetic_name, csv_text = _normalise_uploaded_data(name, parsed, role)
-                file_data[synthetic_name] = csv_text
-        except Exception as exc:  # pragma: no cover - defensive validation path
-            results.append({
-                "file": name,
-                "issues": [{"rule": "UPLOAD", "severity": "error",
-                             "message": f"Unable to parse {name}: {exc}"}]
-            })
-            continue
-
-    check_results = run_checks(file_data, role=role)
-    results.extend(check_results)
-
-    summary = {
-        "total_files": accepted_files,
-        "total_issues": sum(len(r.get("issues", [])) for r in results),
-        "errors": sum(1 for r in results for i in r.get("issues", []) if i["severity"] == "error"),
-        "warnings": sum(1 for r in results for i in r.get("issues", []) if i["severity"] == "warning"),
-    }
-
-    return jsonify({"summary": summary, "results": results})
 
 
 if __name__ == "__main__":
-    print(f"Templates folder: {os.path.join(ROOT, 'templates')}", flush=True)
-    print(f"templates/index.html exists: {os.path.exists(os.path.join(ROOT, 'templates', 'index.html'))}", flush=True)
     app.run(debug=True, port=5000)

@@ -23,7 +23,7 @@ npm install
 npm run dev
 ```
 
-Open the Vite URL shown in the terminal, normally `http://localhost:5173`. Vite proxies `/api` and `/upload` requests to Flask at `http://127.0.0.1:5000`.
+Open the Vite URL shown in the terminal, normally `http://localhost:5173`. Vite proxies the `/api` backend requests to Flask at `http://127.0.0.1:5000`.
 
 ## Checks
 
@@ -38,7 +38,10 @@ npm run build
 
 The React UI starts at a login page. It uses the existing PostgreSQL `app_users` records, storing the authenticated user in Flask's signed session cookie. The pre-check page therefore gets the tester's email and display name from the signed-in account rather than asking for them in the upload form.
 
-Create accounts from the repository root. The script prompts for passwords, so no password is placed in command history or source control:
+An administrator can create tester, reviewer, or administrator accounts from **Admin Dashboard → Create an account**. The account password is submitted directly to Flask over the local app connection and stored as a salted PBKDF2 hash. Give the initial password to the account holder through a separate secure channel; do not send it in email or commit it to source control.
+
+For command-line setup, use the repository-root script. It prompts for passwords, so no password is placed in command history or source control:
+
 
 ```powershell create-tester.ps1
 py scripts/create_evaluation_user.py --email tester@example.com --name "Test User" --role TESTER
