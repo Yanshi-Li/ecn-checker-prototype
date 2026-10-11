@@ -220,8 +220,9 @@ def get_attempt_detail(
 ) -> dict[str, object] | None:
     """Return an authorized attempt, payload, findings, and file metadata."""
     _require_attempt_access(connection, attempt_id, user)
-    cursor = connection.execute(
-                """SELECT a.id AS attempt_id, a.session_id, a.case_id, a.attempt_name,
+        cursor = connection.execute(
+        f"""SELECT a.id AS attempt_id, a.session_id, a.case_id, a.attempt_name,
+                  {_ECN_NUMBER_EXPRESSION} AS ecn_number,
                   a.source_status, a.attempt_number, a.system_decision,
                   a.started_at, a.completed_at,
                   EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
@@ -670,8 +671,9 @@ def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, 
 
         clause, params = "WHERE ra.reviewer_id = %s AND ra.status <> 'REVOKED'", [user["id"]]
         assignment_join = "JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
-    cursor = connection.execute(
-        """SELECT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
+        cursor = connection.execute(
+        f"""SELECT a.id AS attempt_id, {_ECN_NUMBER_EXPRESSION} AS ecn_number,
+                  a.system_decision, a.started_at, a.completed_at,
                   ra.status AS assignment_status, ra.reviewer_id,
                   COALESCE(rev.status, 'ACTIVE') AS review_status,
                   s.tester_email, s.tester_name
@@ -679,6 +681,8 @@ def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, 
            JOIN evaluation_sessions s ON s.id = a.session_id
            """ + assignment_join + """
            LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
+           LEFT JOIN precheck_cases pc ON pc.id = a.case_id
+           LEFT JOIN logical_ecns le ON le.id = pc.logical_ecn_id
            """ + clause + " ORDER BY a.started_at DESC, a.id DESC",
         params,
     )
@@ -730,8 +734,9 @@ def list_review_queue_page(
     )
     total = int(count_cursor.fetchone()[0])
     offset = (page - 1) * page_size
-    rows = _rows(connection.execute(
-        """SELECT DISTINCT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
+        rows = _rows(connection.execute(
+        f"""SELECT DISTINCT a.id AS attempt_id, {_ECN_NUMBER_EXPRESSION} AS ecn_number,
+                  a.system_decision, a.started_at, a.completed_at,
                   EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
                   ra.status AS assignment_status, ra.reviewer_id,
                   COALESCE(rev.status, 'ACTIVE') AS review_status,
@@ -740,6 +745,8 @@ def list_review_queue_page(
            JOIN evaluation_sessions s ON s.id = a.session_id
            """ + assignment_join + """
            LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
+           LEFT JOIN precheck_cases pc ON pc.id = a.case_id
+           LEFT JOIN logical_ecns le ON le.id = pc.logical_ecn_id
            WHERE """ + where + " ORDER BY a.started_at DESC, a.id DESC LIMIT %s OFFSET %s",
         params + [page_size, offset],
     ))

@@ -16,6 +16,7 @@ type QueuePagination = {
 
 type QueueAttempt = {
   attempt_id: number;
+  ecn_number?: string;
   system_decision: "PASS" | "FAIL";
   started_at?: string;
   completed_at?: string;
@@ -214,17 +215,17 @@ export default function ReviewerArea({ user }: { user: User }) {
             <label>Tester<input value={testerFilter} onChange={(event) => setTesterFilter(event.target.value)} placeholder="Name or email" /></label>
           </div>
           {loading ? <p className="empty-state">Loading queue…</p> : queue.length === 0 ? <p className="empty-state">{user.role === "ADMINISTRATOR" ? "No completed attempts are available." : "No assigned attempts are waiting for review."}</p> : queue.map((attempt) => (
-            <button className={`review-row ${selectedId === attempt.attempt_id ? "selected" : ""}`} type="button" key={attempt.attempt_id} onClick={() => void openAttempt(attempt.attempt_id)}>
-              <span><strong>Attempt {attempt.attempt_id}</strong></span>
+                        <button className={`review-row ${selectedId === attempt.attempt_id ? "selected" : ""}`} type="button" key={attempt.attempt_id} onClick={() => void openAttempt(attempt.attempt_id)}>
+              <span><strong>{attempt.ecn_number || "ECN number unavailable"}</strong></span>
               <span className={`pill ${attempt.system_decision === "PASS" ? "success" : "error"}`}>{attempt.system_decision}</span>
-              <small>{attempt.review_status ?? attempt.assignment_status ?? "ACTIVE"}</small>
+              <small>Attempt ID {attempt.attempt_id} · {attempt.review_status ?? attempt.assignment_status ?? "ACTIVE"}</small>
             </button>
           ))}
           {pagination.total_pages > 1 && <nav className="pagination" aria-label="Attempt pages"><button type="button" disabled={page <= 1} onClick={() => void loadQueue(page - 1)}>Previous</button><form className="page-jump" onSubmit={goToTypedPage}><label htmlFor="review-page">Page</label><input id="review-page" type="number" min="1" max={pagination.total_pages} value={pageInput} onChange={(event) => setPageInput(event.target.value)} aria-label="Page number" /><span>of {pagination.total_pages}</span><button type="submit">Go</button></form><button type="button" disabled={page >= pagination.total_pages} onClick={() => void loadQueue(page + 1)}>Next</button></nav>}
         </section>
         <section ref={detailRef} className="review-detail-card" aria-label="Review attempt details">
           {!detail ? <p className="empty-state">Select an attempt to inspect its findings.</p> : <>
-            <div className="section-heading compact"><div><p className="step">Attempt {detail.attempt_id}</p><h2>System result: {detail.system_decision}</h2></div><span className={`pill ${detail.system_decision === "PASS" ? "success" : "error"}`}>{detail.review_status ?? "ACTIVE"}</span></div>
+            <div className="section-heading compact"><div><p className="step">ECN {detail.ecn_number || "number unavailable"} · Attempt ID {detail.attempt_id}</p><h2>System result: {detail.system_decision}</h2></div><span className={`pill ${detail.system_decision === "PASS" ? "success" : "error"}`}>{detail.review_status ?? "ACTIVE"}</span></div>
             <dl className="review-meta"><div><dt>Tester</dt><dd>{detail.tester_name || detail.tester_email}</dd></div><div><dt>Duration</dt><dd>{detail.duration_seconds == null ? "—" : `${Number(detail.duration_seconds).toFixed(2)} seconds`}</dd></div></dl>
             <h3>Source and evidence</h3>
             <div className="source-tabs" role="tablist" aria-label="Attempt source content">
