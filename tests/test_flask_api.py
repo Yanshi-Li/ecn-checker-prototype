@@ -173,7 +173,60 @@ class _ConnectionContext:
         return False
 
 
+def test_saved_fail_precheck_automatically_notifies_the_signed_in_tester(monkeypatch):
+    delivered = []
+    monkeypatch.setattr(flask_app.precheck_workflow, "run_precheck", lambda *_: {
+        "header": {"change_notice_number": "ECN-4079118"},
+        "gate": {"decision": "FAIL", "blockers": [{"rule_id": "H01", "severity": "ERROR"}]},
+    })
+    monkeypatch.setattr(flask_app.precheck_workflow, "_persist_precheck", lambda *_args, **_kwargs: {
+        "saved": True, "attempt_id": 81, "ecn_number": "ECN-4079118",
+    })
+    monkeypatch.setattr(flask_app, "_deliver_notification", lambda *args: delivered.append(args) or {
+        "sent": False, "status": "not_configured", "message": "Proofpoint delivery is not configured.",
+    })
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 4, "email": "tester@fisherpaykel.com", "role": "TESTER"}
+
+    response = client.post(
+        "/api/precheck",
+        data={"ecn": (BytesIO(b"change_notice_number\\nECN-4079118\\n"), "ECN_4079118.csv")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["decision"] == "FAIL"
+    assert response.get_json()["notification"]["status"] == "not_configured"
+    assert delivered[0][0:3] == (81, "validation_report", "tester@fisherpaykel.com")
+
+
+def test_unsaved_precheck_does_not_send_a_notification(monkeypatch):
+    monkeypatch.setattr(flask_app.precheck_workflow, "run_precheck", lambda *_: {
+        "gate": {"decision": "FAIL", "blockers": []},
+    })
+    monkeypatch.setattr(flask_app.precheck_workflow, "_persist_precheck", lambda *_args, **_kwargs: {
+        "saved": False, "attempt_id": None, "message": "Persistence unavailable.",
+    })
+    monkeypatch.setattr(flask_app, "_deliver_notification", lambda *_: pytest.fail("unsaved results must not be emailed"))
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 4, "email": "tester@fisherpaykel.com", "role": "TESTER"}
+
+    response = client.post(
+        "/api/precheck",
+        data={"ecn": (BytesIO(b"change_notice_number\\nECN-4079118\\n"), "ECN_4079118.csv")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["decision"] == "FAIL"
+    assert response.get_json()["persistence"]["saved"] is False
+    assert "notification" not in response.get_json()
+
+
 def test_reviewer_can_run_the_staged_pipeline_as_a_tester(monkeypatch):
+
     monkeypatch.setattr(
         flask_app.precheck_workflow,
         "run_precheck",
@@ -491,68 +544,83 @@ def test_reviewer_endpoints_reject_testers():
     assert response.get_json() == {"error": "Reviewer or administrator access is required."}
 
 
-def test_notification_allows_a_pass_result_to_be_sent_to_the_next_checker(monkeypatch):
-    sent = {}
+def test_failed_result_retry_uses_the_authenticated_tester_as_recipient(monkeypatch):
     connection = object()
-
-    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
-    monkeypatch.setattr(
-        flask_app.evaluation_queries,
-        "get_attempt_detail",
-        lambda *_: {"payload": {"packet": {"gate": {"decision": "PASS"}}}},
-    )
-    monkeypatch.setattr(
-        flask_app,
-        "send_validation_email",
-        lambda packet, recipient: sent.update(packet=packet, recipient=recipient)
-        or {"sent": True, "message": f"Validation report sent to {recipient}."},
-    )
-    recorded = []
-    monkeypatch.setattr(flask_app, "record_notification_attempt", lambda *args: recorded.append(args))
-    client = app.test_client()
-    with client.session_transaction() as session:
-        session["user"] = {"id": 4, "email": "creator@example.com", "display_name": "Creator", "role": "TESTER"}
-
-    response = client.post(
-        "/api/notification",
-        json={
-            "attempt_id": 17,
-            "recipient": "next.checker@example.com",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.get_json() == {
-        "sent": True,
-        "message": "Validation report sent to next.checker@example.com.",
-    }
-    assert sent["recipient"] == "next.checker@example.com"
-    assert recorded[0][2:] == ("validation_report", "next.checker@example.com", "sent", "Validation report sent to next.checker@example.com.")
-
-
-def test_notification_rejects_sending_a_failed_result_to_someone_other_than_the_tester(monkeypatch):
-    connection = object()
-
+    delivered = []
     monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
     monkeypatch.setattr(
         flask_app.evaluation_queries,
         "get_attempt_detail",
         lambda *_: {"payload": {"packet": {"gate": {"decision": "FAIL"}}}},
     )
+    monkeypatch.setattr(flask_app, "_deliver_notification", lambda *args: delivered.append(args) or {
+        "sent": True, "status": "sent", "message": "Validation result notification sent.",
+    })
     client = app.test_client()
     with client.session_transaction() as session:
-        session["user"] = {"id": 4, "email": "creator@example.com", "display_name": "Creator", "role": "TESTER"}
+        session["user"] = {"id": 4, "email": "creator@fisherpaykel.com", "role": "TESTER"}
 
-    response = client.post(
-        "/api/notification",
-        json={
-            "attempt_id": 18,
-            "recipient": "next.checker@example.com",
-        },
-    )
+    response = client.post("/api/notification", json={
+        "attempt_id": 18, "recipient": "attacker@example.com",
+    })
 
-    assert response.status_code == 403
-    assert response.get_json() == {"error": "Failed results can only be emailed to the tester."}
+    assert response.status_code == 200
+    assert delivered[0][0:3] == (18, "validation_report", "creator@fisherpaykel.com")
+    assert response.get_json()["sent"] is True
+
+
+def test_pass_result_is_emailed_to_the_assigned_checker(monkeypatch):
+    connection = object()
+    delivered = []
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(flask_app, "initialise_schema", lambda _: None)
+    monkeypatch.setattr(flask_app.evaluation_queries, "assign_reviewer", lambda *_: None)
+    monkeypatch.setattr(flask_app.evaluation_queries, "list_assignments", lambda *_: [
+        {"reviewer_id": 9, "email": "checker@fisherpaykel.com", "status": "ASSIGNED"},
+    ])
+    monkeypatch.setattr(flask_app.evaluation_queries, "get_attempt_detail", lambda *_: {
+        "system_decision": "PASS", "payload": {"packet": {"gate": {"decision": "PASS"}}},
+    })
+    monkeypatch.setattr(flask_app, "_deliver_notification", lambda *args: delivered.append(args) or {
+        "sent": True, "status": "sent", "message": "Validation result notification sent.",
+    })
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@fisherpaykel.com", "role": "ADMINISTRATOR"}
+
+    response = client.post("/api/admin/assignments", json={"attempt_id": 17, "reviewer_id": 9})
+
+    assert response.status_code == 200
+    assert delivered[0][0:3] == (17, "validation_report", "checker@fisherpaykel.com")
+    assert response.get_json()["notification"]["sent"] is True
+
+
+
+
+
+def test_email_failure_does_not_fail_reviewer_assignment(monkeypatch):
+    connection = object()
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(flask_app, "initialise_schema", lambda _: None)
+    monkeypatch.setattr(flask_app.evaluation_queries, "assign_reviewer", lambda *_: None)
+    monkeypatch.setattr(flask_app.evaluation_queries, "list_assignments", lambda *_: [
+        {"reviewer_id": 9, "email": "checker@fisherpaykel.com", "status": "ASSIGNED"},
+    ])
+    monkeypatch.setattr(flask_app.evaluation_queries, "get_attempt_detail", lambda *_: {
+        "system_decision": "PASS", "payload": {"packet": {"gate": {"decision": "PASS"}}},
+    })
+    monkeypatch.setattr(flask_app, "_deliver_notification", lambda *_: {
+        "sent": False, "status": "failed", "message": "Email could not be sent; the saved pre-check is unchanged.",
+    })
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@fisherpaykel.com", "role": "ADMINISTRATOR"}
+
+    response = client.post("/api/admin/assignments", json={"attempt_id": 17, "reviewer_id": 9})
+
+    assert response.status_code == 200
+    assert response.get_json()["saved"] is True
+    assert response.get_json()["notification"]["status"] == "failed"
 
 
 def test_legacy_upload_endpoint_is_retired():

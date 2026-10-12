@@ -123,8 +123,12 @@ export default function AdminDashboard() {
 
     if (!selectedAttempt || !selectedReviewer) return;
     const response = await fetch("/api/admin/assignments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ attempt_id: selectedAttempt, reviewer_id: selectedReviewer }) });
-    const payload = await readJson<{ error?: string }>(response);
-    setToolStatus(response.ok ? "Reviewer assigned." : payload.error ?? "Assignment failed.");
+        const payload = await readJson<{ error?: string; notification?: { sent: boolean; message: string } | null }>(response);
+    const status = payload.notification
+      ? payload.notification.message
+      : "No email was sent for this result.";
+    setToolStatus(response.ok ? `Reviewer assigned. ${status}` : payload.error ?? "Assignment failed.");
+
     if (response.ok) void loadAdminTools();
   }
 

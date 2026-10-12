@@ -51,12 +51,20 @@ Create reviewer and administrator accounts by substituting `REVIEWER` or `ADMINI
 
 When `ECN_DB_PASSWORD` and the related `ECN_DB_*` settings are configured, Flask stores the complete packet and submitted input files in PostgreSQL. In manual mode these are the generated canonical ECN and BOM CSV files; no separate validation or persistence path is used.
 
-The email path follows the gate decision:
+The email path follows the gate decision and is controlled by Flask:
 
-- For a `FAIL`, the creator can email the validation report only to their own identified email address, so they can correct and resubmit it.
-- For a `PASS`, the creator enters the next checker's email address and explicitly sends the validation report to that person.
+- For a saved `FAIL`, Flask automatically attempts to email the signed-in creator. The interface shows `sent`, `failed`, or `not_configured`; an authorized retry does not rerun validation.
+- For a saved `PASS`, the interface explains that an administrator must assign a reviewer. Flask then attempts delivery to that assigned reviewer's internal account. Assignment success is reported separately from delivery status.
+- The browser never chooses the recipient. Flask restricts recipients and sender addresses to the approved internal email domain.
+
+Proofpoint production delivery remains disabled until IT supplies the exact send URL and token/send request contracts. The known token URL is `https://mail-us.ser.proofpoint.com/v1/token`; see the root README for the required backend settings and unresolved configuration. The existing CLI/Stage 6 SendGrid behavior is separate.
 
 Flask records the delivery outcome for either path. Reviewer authentication, review queues, and administrator workflows are available in React and use the same protected Flask backend.
+
+
+
+
+
 
 
 

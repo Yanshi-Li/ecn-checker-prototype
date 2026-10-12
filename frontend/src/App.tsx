@@ -51,7 +51,6 @@ type AttemptDetail = EvaluationAttempt & {
 };
 
 type PrecheckResponse = {
-
   error?: string;
   decision: "PASS" | "FAIL" | string;
   summary: {
@@ -60,7 +59,8 @@ type PrecheckResponse = {
     errors: number;
     warnings: number;
   };
-  findings: Finding[];
+      findings: Finding[];
+  notification?: { sent: boolean; status: string; message: string };
   persistence: {
     saved: boolean;
     message?: string;
@@ -143,23 +143,22 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState<string | null>(null);
+    const [loginError, setLoginError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [nextCheckerEmail, setNextCheckerEmail] = useState("");
   const [result, setResult] = useState<PrecheckResponse | null>(null);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [apiReady, setApiReady] = useState<boolean | null>(null);
+    const [apiReady, setApiReady] = useState<boolean | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
-    const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
+  const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
   const [attemptRefreshKey, setAttemptRefreshKey] = useState(0);
   const [activeTab, setActiveTab] = useState<"precheck" | "reviewer" | "dashboard">("precheck");
 
 
   useEffect(() => {
-    void fetch("/api/health")
+        void fetch("/api/health")
       .then((response) => setApiReady(response.ok))
-            .catch(() => setApiReady(false));
+      .catch(() => setApiReady(false));
 
     void fetch("/api/auth/session")
       .then(async (response) => {
@@ -172,8 +171,7 @@ function App() {
   }, []);
 
   const findings = useMemo(() => result?.findings ?? [], [result]);
-  const isPass = result?.decision === "PASS";
-  const testerEmail = user?.email ?? "";
+    const isPass = result?.decision === "PASS";
 
   async function login(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -199,8 +197,8 @@ function App() {
     setResult(null);
   }
 
-  async function runPrecheck(event: React.FormEvent<HTMLFormElement>) {
-        event.preventDefault();
+    async function runPrecheck(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     if (intakeMode === "upload" && !ecnFile) {
       setRequestError("Choose an ECN file before running the pre-check.");
       return;
@@ -221,13 +219,13 @@ function App() {
     setSubmitting(true);
     setRequestError(null);
     setResult(null);
-    setSelectedFinding(null);
+        setSelectedFinding(null);
     setNotificationStatus(null);
 
         const formData = new FormData();
     if (intakeMode === "manual") {
       const ecnCsv = rowsToCsv(ECN_MANUAL_FIELDS, [manualEcn]);
-            const identifier = manualEcn.change_notice_number.match(/\d{7}/)?.[0] ?? "manual";
+      const identifier = manualEcn.change_notice_number.match(/\d{7}/)?.[0] ?? "manual";
       formData.append("ecn", new File([ecnCsv], `ECN_${identifier}_manual.csv`, { type: "text/csv" }));
       if (manualBomRows.length > 0) {
         const bomCsv = rowsToCsv(
@@ -244,14 +242,14 @@ function App() {
 
     try {
       const response = await fetch("/api/precheck", { method: "POST", body: formData });
-      const payload = await readJson<PrecheckResponse>(response);
+            const payload = await readJson<PrecheckResponse>(response);
       if (!response.ok || payload.error) {
         throw new Error(payload.error ?? "The pre-check could not be completed.");
       }
-            setResult(payload);
+      setResult(payload);
       setSelectedFinding(payload.findings[0] ?? null);
-      setAttemptRefreshKey((current) => current + 1);
-
+      setNotificationStatus(payload.notification?.message ?? null);
+            setAttemptRefreshKey((current) => current + 1);
     } catch (error) {
       setRequestError(
         error instanceof Error ? error.message : "The pre-check could not be completed.",
@@ -261,26 +259,19 @@ function App() {
     }
   }
 
-  async function sendReport() {
-    if (!result?.persistence.attempt_id) return;
-    const recipient = isPass ? nextCheckerEmail.trim() : testerEmail.trim();
-    if (!recipient) {
-      setNotificationStatus("Enter the next checker's email before sending this passed result.");
-      return;
-    }
-    setNotificationStatus("Sending validation report…");
+  async function retryNotification() {
+    if (!result?.persistence.attempt_id || isPass) return;
+    setNotificationStatus("Retrying notification…");
+
     try {
-      const response = await fetch("/api/notification", {
+            const response = await fetch("/api/notification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          attempt_id: result.persistence.attempt_id,
-          recipient,
-        }),
+        body: JSON.stringify({ attempt_id: result.persistence.attempt_id }),
       });
-      const payload = await readJson<{ error?: string; message?: string }>(response);
+      const payload = await readJson<{ error?: string; sent?: boolean; notifications?: Array<{ message?: string }> }>(response);
       if (!response.ok || payload.error) throw new Error(payload.error ?? "Email could not be sent.");
-      setNotificationStatus(payload.message ?? "Validation report sent.");
+            setNotificationStatus(payload.notifications?.[0]?.message ?? (payload.sent ? "Validation result notification sent." : "Email could not be sent."));
     } catch (error) {
       setNotificationStatus(error instanceof Error ? error.message : "Email could not be sent.");
     }
@@ -366,8 +357,8 @@ function App() {
         </header>}
 
         {activeTab === "dashboard" && user.role === "ADMINISTRATOR" ? <AdminDashboard /> : activeTab === "reviewer" && ["REVIEWER", "ADMINISTRATOR"].includes(user.role) ? <ReviewerArea user={user} /> : <>
-        <section className="upload-card" id="new-precheck" aria-labelledby="upload-heading">
-                    <div className="section-heading">
+                <section className="upload-card" id="new-precheck" aria-labelledby="upload-heading">
+          <div className="section-heading">
             <div>
               <p className="step">Step 1</p>
               <h2 id="upload-heading">Prepare ECN and BOM</h2>
@@ -416,8 +407,8 @@ function App() {
                   </div>
                 </fieldset>
                 <fieldset className="manual-fieldset">
-                  <legend>BOM rows</legend>
-                                    <p className="manual-help">BOM details are optional. Add rows when the ECN includes a bill of materials; each entered quantity must be greater than zero.</p>
+                                    <legend>BOM rows</legend>
+                  <p className="manual-help">BOM details are optional. Add rows when the ECN includes a bill of materials; each entered quantity must be greater than zero.</p>
                   {manualBomRows.map((row, index) => (
                     <div className="manual-bom-row" key={index}>
                       <strong>Row {index + 1}</strong>
@@ -426,8 +417,8 @@ function App() {
                       <label>Quantity <span className="required-mark">Required</span><input type="number" min="0.000001" step="any" required value={row.quantity} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, quantity: event.target.value } : item))} /></label>
                       <label>Unit<input value={row.unit} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, unit: event.target.value } : item))} /></label>
                       <label>Action<input value={row.action} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, action: event.target.value } : item))} /></label>
-                      <label>Parent part number<input value={row.parent_part_no} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, parent_part_no: event.target.value } : item))} /></label>
-                                            <button className="remove-row-button" type="button" onClick={() => setManualBomRows(manualBomRows.filter((_, rowIndex) => rowIndex !== index))}>Remove row</button>
+                                            <label>Parent part number<input value={row.parent_part_no} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, parent_part_no: event.target.value } : item))} /></label>
+                      <button className="remove-row-button" type="button" onClick={() => setManualBomRows(manualBomRows.filter((_, rowIndex) => rowIndex !== index))}>Remove row</button>
                     </div>
                   ))}
                   <button className="secondary-button add-row-button" type="button" onClick={() => setManualBomRows([...manualBomRows, { ...EMPTY_MANUAL_BOM_ROW }])}>Add BOM row</button>
@@ -459,32 +450,18 @@ function App() {
                 </p>
               </div>
               <div className="result-actions">
-                <button className="secondary-button" type="button" onClick={downloadReport}>Download report</button>
-                {result.persistence.saved && (isPass ? (
-                  <div className="next-checker-action">
-                    <label htmlFor="next-checker-email">Next checker email</label>
-                    <input
-                      id="next-checker-email"
-                      type="email"
-                      value={nextCheckerEmail}
-                      onChange={(event) => setNextCheckerEmail(event.target.value)}
-                      placeholder="checker@example.com"
-                    />
-                    <button className="secondary-button" type="button" onClick={() => void sendReport()}>
-                      Send to next checker
-                    </button>
-                  </div>
-                ) : (
-                  <button className="secondary-button" type="button" onClick={() => void sendReport()}>
-                    Email result to me
-                  </button>
-                ))}
+                                <button className="secondary-button" type="button" onClick={downloadReport}>Download report</button>
+                {result.persistence.saved && isPass && <p className="empty-state">An administrator assigns the next checker; the result is emailed to that assigned reviewer.</p>}
+
               </div>
             </div>
 
-            {!result.persistence.saved && <p className="form-error" role="status">{result.persistence.message ?? "The result is available, but the evaluation was not saved."}</p>}
+                        {!result.persistence.saved && <p className="form-error" role="status">{result.persistence.message ?? "The result is available, but the evaluation was not saved."}</p>}
+
             {result.persistence.saved && <p className="empty-state">Evaluation saved for reviewer follow-up.</p>}
             {notificationStatus && <p className="empty-state" role="status">{notificationStatus}</p>}
+            {result.persistence.saved && !isPass && result.notification?.status !== "sent" && <button className="secondary-button" type="button" onClick={() => void retryNotification()}>Retry notification</button>}
+
             {result.persistence.saved && result.persistence.attempt_id && <TesterJudgement result={result} findings={findings} />}
 
             <div className="metric-grid" aria-label="Pre-check summary">
@@ -541,8 +518,8 @@ function App() {
 function TesterAttempts({ refreshKey }: { refreshKey: number }) {
   const [ecnNumber, setEcnNumber] = useState("");
   const [sourceStatus, setSourceStatus] = useState("ALL");
-  const [decision, setDecision] = useState("ALL");
-    const [attempts, setAttempts] = useState<EvaluationAttempt[]>([]);
+    const [decision, setDecision] = useState("ALL");
+  const [attempts, setAttempts] = useState<EvaluationAttempt[]>([]);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -591,10 +568,10 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
       .finally(() => {
         if (active) setLoading(false);
       });
-    return () => { active = false; };
-      }, [ecnNumber, sourceStatus, decision, refreshKey]);
+        return () => { active = false; };
+  }, [ecnNumber, sourceStatus, decision, refreshKey]);
 
-      const visibleAttempts = attempts.slice(
+  const visibleAttempts = attempts.slice(
     (page - 1) * RECORDS_PER_PAGE,
     page * RECORDS_PER_PAGE,
   );
@@ -612,8 +589,8 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
       </div>
       {error && <p className="form-error" role="alert">{error}</p>}
       {loading ? <p className="empty-state">Loading attempts…</p> : attempts.length === 0 ? <p className="empty-state">No attempts match these filters.</p> : (
-        <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Source Status</th><th>Decision</th><th>Checking time</th><th>Started</th><th>Attempt ID</th></tr></thead><tbody>
-                                      {visibleAttempts.map((attempt) => {
+                <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Source Status</th><th>Decision</th><th>Checking time</th><th>Started</th><th>Attempt ID</th></tr></thead><tbody>
+          {visibleAttempts.map((attempt) => {
             const label = attempt.ecn_number || attempt.attempt_name || `Attempt ${attempt.attempt_id}`;
             return <tr key={attempt.attempt_id}><td><button className="attempt-result-link" type="button" aria-label={`View results for ECN ${label}`} onClick={() => void openAttempt(attempt.attempt_id)}>{label}</button></td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision || "—"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td><td>{attempt.attempt_id}</td></tr>;
           })}

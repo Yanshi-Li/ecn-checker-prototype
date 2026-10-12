@@ -170,9 +170,17 @@ CREATE TABLE IF NOT EXISTS notification_attempts (
     status TEXT NOT NULL
         CHECK (status IN ('requested', 'sent', 'failed')),
     requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMPTZ,
-    error_message TEXT
+        completed_at TIMESTAMPTZ,
+    error_message TEXT,
+    idempotency_key TEXT
 );
+
+ALTER TABLE notification_attempts
+    ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS notification_attempts_idempotency_key_uq
+    ON notification_attempts (idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 ALTER TABLE precheck_attempts
     ADD COLUMN IF NOT EXISTS case_id BIGINT REFERENCES precheck_cases(id);
