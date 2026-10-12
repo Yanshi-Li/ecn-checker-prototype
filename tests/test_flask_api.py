@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 
 from scripts import app as flask_app
 
@@ -368,6 +369,61 @@ def test_reviewer_queue_returns_only_authorized_queue(monkeypatch):
 
     assert response.status_code == 200
     assert response.get_json() == {"attempts": [{"attempt_id": 17, "system_decision": "FAIL"}]}
+
+
+def test_tester_attempt_detail_returns_owned_saved_result(monkeypatch):
+    connection = object()
+    detail = {"attempt_id": 19, "system_decision": "FAIL", "findings": [{"rule_id": "H01"}]}
+    received = {}
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "get_attempt_detail",
+        lambda db, attempt_id, user: received.update(database=db, attempt_id=attempt_id, user=user) or detail,
+    )
+    client = app.test_client()
+    authenticated_user = {"id": 4, "email": "tester@example.com", "role": "TESTER"}
+    with client.session_transaction() as session:
+        session["user"] = authenticated_user
+
+    response = client.get("/api/tester/attempts/19")
+
+    assert response.status_code == 200
+    assert response.get_json() == detail
+    assert received == {"database": connection, "attempt_id": 19, "user": authenticated_user}
+
+
+def test_tester_attempt_detail_rejects_non_tester_role_before_database_access(monkeypatch):
+    monkeypatch.setattr(
+        flask_app,
+        "connect_evaluation_db",
+        lambda: pytest.fail("non-testers must not access tester attempt details"),
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 9, "email": "reviewer@example.com", "role": "REVIEWER"}
+
+    response = client.get("/api/tester/attempts/19")
+
+    assert response.status_code == 403
+    assert response.get_json() == {"error": "Tester access is required."}
+
+
+def test_tester_attempt_detail_rejects_an_attempt_owned_by_another_tester(monkeypatch):
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(object()))
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "get_attempt_detail",
+        lambda *_: (_ for _ in ()).throw(PermissionError("attempt is not owned by this tester")),
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 4, "email": "tester@example.com", "role": "TESTER"}
+
+    response = client.get("/api/tester/attempts/19")
+
+    assert response.status_code == 403
+    assert response.get_json() == {"error": "This evaluation is not owned by the tester."}
 
 
 def test_reviewer_detail_returns_query_layer_result(monkeypatch):

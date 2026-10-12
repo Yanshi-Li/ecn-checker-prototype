@@ -520,6 +520,27 @@ def api_reviewer_queue():
 
 
 
+@app.route("/api/tester/attempts/<int:attempt_id>")
+def api_tester_attempt_detail(attempt_id: int):
+    """Return one saved attempt after verifying it belongs to the signed-in tester."""
+    user = _current_user()
+    if user is None:
+        return jsonify({"error": "Sign in before viewing an evaluation attempt."}), 401
+    if user.get("role") != "TESTER":
+        return jsonify({"error": "Tester access is required."}), 403
+
+    try:
+        with connect_evaluation_db() as connection:
+            detail = evaluation_queries.get_attempt_detail(connection, attempt_id, user)
+        if detail is None:
+            return jsonify({"error": "Evaluation attempt was not found."}), 404
+        return jsonify(detail)
+    except PermissionError:
+        return jsonify({"error": "This evaluation is not owned by the tester."}), 403
+    except Exception:
+        return jsonify({"error": "The evaluation attempt is unavailable."}), 503
+
+
 @app.route("/api/reviewer/attempts/<int:attempt_id>")
 def api_reviewer_attempt_detail(attempt_id: int):
     """Return one authorized review attempt and its findings."""

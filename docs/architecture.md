@@ -175,7 +175,7 @@ and original input bytes. A database outage is reported as a persistence warning
 and does not change validation outcomes.
 
 
-`scripts/evaluation_queries.py` provides query and judgement operations used by the Flask API. It lists persisted attempts, calculates PASS/FAIL and tester-system agreement metrics, returns the complete result payload and rule findings for one attempt, downloads original ECN/BOM evidence, and records separate tester and reviewer judgements. React consumes these operations through role-protected Flask routes.
+`scripts/evaluation_queries.py` provides query and judgement operations used by the Flask API. It lists persisted attempts, calculates PASS/FAIL and tester-system agreement metrics, returns the complete result payload and rule findings for one attempt, downloads original ECN/BOM evidence, and records separate tester and reviewer judgements. Testers can open an attempt from their evaluation-record list to inspect the saved system decision, checking duration, rule findings and explanations, normalized ECN/BOM content, and source-file metadata; the detail route enforces tester ownership. Reviewers use the same persisted finding and evidence model through their assigned-attempt view. React consumes these operations through role-protected Flask routes.
 
 Testers can submit one overall PASS/FAIL judgement plus per-rule CORRECT,
 INCORRECT, UNCLEAR, or NOT_APPLICABLE comments in

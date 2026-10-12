@@ -220,7 +220,7 @@ def get_attempt_detail(
 ) -> dict[str, object] | None:
     """Return an authorized attempt, payload, findings, and file metadata."""
     _require_attempt_access(connection, attempt_id, user)
-        cursor = connection.execute(
+    cursor = connection.execute(
         f"""SELECT a.id AS attempt_id, a.session_id, a.case_id, a.attempt_name,
                   {_ECN_NUMBER_EXPRESSION} AS ecn_number,
                   a.source_status, a.attempt_number, a.system_decision,
@@ -661,17 +661,15 @@ def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, 
     """Return only attempts the authenticated reviewer is allowed to inspect."""
 
     role = normalise_role(user["role"])
-
     if not can_review(role):
         raise PermissionError("reviewer access required")
     if can_administer(role):
         clause, params = "", []
         assignment_join = "LEFT JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
     else:
-
         clause, params = "WHERE ra.reviewer_id = %s AND ra.status <> 'REVOKED'", [user["id"]]
         assignment_join = "JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
-        cursor = connection.execute(
+    cursor = connection.execute(
         f"""SELECT a.id AS attempt_id, {_ECN_NUMBER_EXPRESSION} AS ecn_number,
                   a.system_decision, a.started_at, a.completed_at,
                   ra.status AS assignment_status, ra.reviewer_id,
@@ -729,12 +727,12 @@ def list_review_queue_page(
            JOIN evaluation_sessions s ON s.id = a.session_id
            """ + assignment_join + """
            LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
-           WHERE """ + where,
+                      WHERE """ + where,
         params,
     )
     total = int(count_cursor.fetchone()[0])
     offset = (page - 1) * page_size
-        rows = _rows(connection.execute(
+    rows = _rows(connection.execute(
         f"""SELECT DISTINCT a.id AS attempt_id, {_ECN_NUMBER_EXPRESSION} AS ecn_number,
                   a.system_decision, a.started_at, a.completed_at,
                   EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
