@@ -1,17 +1,12 @@
 
 from __future__ import annotations
 
-import csv
 import io
-
-
-
 import os
-import re
 import sys
-import tempfile
-
 from pathlib import Path
+
+
 
 
 print("=== app.py starting ===", flush=True)
@@ -21,25 +16,23 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from flask import Flask, Response, jsonify, render_template, request, send_file, send_from_directory, session
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory, session
+from psycopg.errors import UniqueViolation
+
+from scripts import precheck_workflow
 
 
 
-from scripts.ecn_checker import run_checks
-from scripts.stages.intake import load_file
-from scripts.precheck_pipeline import run_precheck
 from scripts import evaluation_queries
 from scripts.evaluation_store import (
-    complete_precheck,
     connect_evaluation_db,
-    create_session,
     initialise_schema,
     record_notification_attempt,
-    start_precheck,
-    store_evaluation_files,
 )
+
 from scripts.stages.validation_notification import send_validation_email
-from scripts.evaluation_auth import can_test
+from scripts.evaluation_auth import can_test, normalise_role
+
 
 
 
@@ -74,90 +67,7 @@ app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB limit
 
 
-ROLE_ALLOWED_EXTENSIONS = {
-    "ecn_creator": {".csv", ".xls", ".xlsx", ".xlsm", ".pdf", ".eml", ".txt"},
-    "bom_coordinator": {".csv", ".xls", ".xlsx", ".xlsm", ".xl"},
-}
 
-
-def allowed_file(filename: str, role: str = "ecn_creator") -> bool:
-    if not filename or "." not in filename:
-        return False
-    ext = Path(filename).suffix.lower()
-    return ext in ROLE_ALLOWED_EXTENSIONS.get(role, set())
-
-
-def _csv_from_loaded_row(row: dict[str, object], header: list[str]) -> str:
-    values = []
-    for key in header:
-        value = row.get(key, "")
-        if isinstance(value, (int, float)):
-            value = str(value)
-        elif value is None:
-            value = ""
-        values.append(str(value).replace('"', '""'))
-    return ",".join(header) + "\n" + ",".join(f'"{v}"' for v in values) + "\n"
-
-
-def _normalise_uploaded_data(filename: str, payload: object, role: str) -> tuple[str, str]:
-    stem = Path(filename).stem or "uploaded"
-    if role == "ecn_creator":
-        synthetic_name = f"{stem}_ecn_header.csv"
-        if isinstance(payload, dict):
-            ecn_number = str(
-                payload.get("change_notice_number") or payload.get("ecn_number") or ""
-            ).strip()
-            title = str(payload.get("title") or "ECN Intake").strip()
-            status = str(payload.get("status") or "draft").strip().lower()
-            initiator = str(payload.get("author") or payload.get("initiator") or "Manual review").strip()
-            date_value = str(payload.get("date") or payload.get("date_initiated") or "").strip()
-            reason = str(payload.get("reason_for_change") or payload.get("reason") or payload.get("description") or "").replace('"', '""')
-            description = str(payload.get("description") or "").replace('"', '""')
-            csv_text = (
-                'ecn_number,title,reason_for_change,description,status,initiator,date_initiated\n'
-                f'"{ecn_number}","{title}","{reason}","{description}","{status}","{initiator}","{date_value}"\n'
-            )
-            return synthetic_name, csv_text
-        if isinstance(payload, list):
-            rows = payload or []
-            row = rows[0] if rows else {}
-            csv_text = (
-                'ecn_number,title,reason_for_change,description,status,initiator,date_initiated\n'
-                f'"{row.get("change_notice_number", row.get("ecn_number", ""))}",'
-                f'"{row.get("title", "ECN Intake")}",'
-                f'"{row.get("reason_for_change", row.get("reason", ""))}",'
-                f'"{row.get("description", "")}",'
-                f'"{row.get("status", "draft")}",'
-                f'"{row.get("author", row.get("initiator", "Manual review"))}",'
-                f'"{row.get("date", row.get("date_initiated", ""))}"\n'
-            )
-            return synthetic_name, csv_text
-    synthetic_name = f"{stem}_bom.csv"
-    if isinstance(payload, list):
-        rows = payload or []
-        csv_lines = ["part_number,parent_part,quantity,unit_of_measure"]
-        for row in rows:
-            part = str(row.get("part_number") or row.get("part") or "").strip()
-            parent = str(row.get("parent_part") or row.get("parent") or "").strip()
-            qty = str(row.get("quantity") or row.get("qty") or "1").strip()
-            unit = str(row.get("unit") or row.get("unit_of_measure") or row.get("uom") or "ea").strip()
-            if not part:
-                continue
-            csv_lines.append(f'"{part}","{parent}","{qty}","{unit}"')
-        return synthetic_name, "\n".join(csv_lines) + "\n"
-    if isinstance(payload, dict):
-        part = str(payload.get("part_number") or payload.get("part") or "").strip()
-        if not part:
-            part = str(payload.get("item") or "").strip()
-        parent = str(payload.get("parent_part") or payload.get("parent") or "").strip()
-        qty = str(payload.get("quantity") or payload.get("qty") or "1").strip()
-        unit = str(payload.get("unit") or payload.get("unit_of_measure") or payload.get("uom") or "ea").strip()
-        csv_text = (
-            'part_number,parent_part,quantity,unit_of_measure\n'
-            f'"{part}","{parent}","{qty}","{unit}"\n'
-        )
-        return synthetic_name, csv_text
-    return synthetic_name, "part_number,parent_part,quantity,unit_of_measure\n"
 
 
 @app.route("/")
@@ -221,166 +131,41 @@ def api_auth_logout():
 
 
 
-def _save_uploaded_file(file_storage) -> str:
-    """Write an upload to a temporary path while preserving its original stem."""
-    original = Path(file_storage.filename or "upload")
-    with tempfile.NamedTemporaryFile(
-        prefix=f"{original.stem}_",
-        suffix=original.suffix.lower(),
-        delete=False,
-    ) as temporary:
-        temporary.write(file_storage.read())
-        return temporary.name
-
-
-def _persist_precheck(
-    tester_email: str,
-    tester_name: str,
-    packet: dict,
-    uploaded_files: list[dict],
-    source_status: str = "DRAFT",
-) -> dict:
-    """Persist a completed pre-check when local PostgreSQL is configured."""
-    if not os.environ.get("ECN_DB_PASSWORD"):
-        return {"saved": False, "message": "Evaluation database is not configured."}
-
-
-
-
-
-
-
-
-    filename = next((str(file.get("filename", "")) for file in uploaded_files if file.get("role") == "ecn"), "")
-
-    match = re.search(r"(?<!\d)(\d{7})(?!\d)", Path(filename).name)
-    attempt_name = f"{match.group(1)}_MBOM_{source_status}" if match else "legacy"
-
-    with connect_evaluation_db() as connection:
-        initialise_schema(connection)
-        session_id = create_session(connection, tester_email, tester_name)
-        attempt_id = start_precheck(
-            connection, session_id, source_status=source_status, attempt_name=attempt_name
-        )
-
-        store_evaluation_files(connection, attempt_id, uploaded_files)
-        duration = complete_precheck(
-            connection,
-            attempt_id,
-            session_id,
-            packet["gate"]["decision"],
-            {"packet": packet},
-        )
-
-        return {
-            "saved": True,
-            "attempt_id": attempt_id,
-            "attempt_name": attempt_name,
-            "ecn_number": match.group(1) if match else None,
-            "source_status": source_status,
-            "duration_seconds": duration,
-        }
-
-
-
-
-def _precheck_response(packet: dict, file_count: int, persistence: dict | None = None) -> dict:
-    gate = packet.get("gate", {})
-    findings = []
-    for category in ("blockers", "part_issues", "conflict_alerts", "warnings"):
-        for finding in gate.get(category, []):
-            findings.append({
-                "rule": finding.get("rule_id") or finding.get("flag_type") or finding.get("type", category),
-                "severity": str(finding.get("severity", "advisory")).lower(),
-                "message": finding.get("message") or finding.get("detail", ""),
-                "location": finding.get("location"),
-                "evidence": finding.get("evidence"),
-                "category": category,
-            })
-    errors = sum(1 for finding in findings if finding["severity"] in {"error", "fail"})
-    warnings = sum(1 for finding in findings if finding["severity"] == "warning")
-    return {
-        "decision": gate.get("decision", "FAIL"),
-        "summary": {
-            "total_files": file_count,
-            "total_issues": len(findings),
-            "errors": errors,
-            "warnings": warnings,
-        },
-        "findings": findings,
-        "persistence": persistence or {"saved": False},
-    }
-
-
 @app.route("/api/precheck", methods=["POST"])
 def api_precheck():
-    """Run the staged validation pipeline for a signed-in tester."""
+    """Validate request access and delegate the pre-check workflow."""
     ecn_file = request.files.get("ecn")
     bom_file = request.files.get("bom")
     user = _current_user()
 
     if user is None:
         return jsonify({"error": "Sign in before running a pre-check."}), 401
-
     if not can_test(user["role"]):
         return jsonify({"error": "Tester access is required to run a pre-check."}), 403
-
-
-    tester_email = str(user["email"])
-    tester_name = str(user.get("display_name", ""))
 
     if ecn_file is None or not ecn_file.filename:
         return jsonify({"error": "An ECN file is required."}), 400
 
+    source_status = str(request.form.get("source_status", "DRAFT")).strip().upper()
+    if source_status not in {"DRAFT", "COMPLETED"}:
+        return jsonify({"error": "source_status must be DRAFT or COMPLETED."}), 400
 
-    temporary_paths = []
     try:
-        ecn_bytes = ecn_file.read()
-        ecn_file.stream.seek(0)
-        ecn_path = _save_uploaded_file(ecn_file)
-        temporary_paths.append(ecn_path)
-        uploaded_files = [{
-            "role": "ecn",
-            "filename": ecn_file.filename,
-            "mime_type": ecn_file.mimetype,
-            "bytes": ecn_bytes,
-        }]
-        bom_path = None
-        if bom_file is not None and bom_file.filename:
-            bom_bytes = bom_file.read()
-            bom_file.stream.seek(0)
-            bom_path = _save_uploaded_file(bom_file)
-            temporary_paths.append(bom_path)
-            uploaded_files.append({
-                "role": "bom",
-                                "filename": bom_file.filename,
-                "mime_type": bom_file.mimetype,
-                "bytes": bom_bytes,
-                        })
-        packet = run_precheck(ecn_path, bom_path)
-        source_status = str(request.form.get("source_status", "DRAFT")).strip().upper()
-        if source_status not in {"DRAFT", "COMPLETED"}:
-            return jsonify({"error": "source_status must be DRAFT or COMPLETED."}), 400
-        if source_status == "DRAFT":
-            persistence = _persist_precheck(tester_email, tester_name, packet, uploaded_files)
-        else:
-            persistence = _persist_precheck(
-                tester_email, tester_name, packet, uploaded_files, source_status
-            )
-        return jsonify(_precheck_response(packet, len(uploaded_files), persistence))
+        result = precheck_workflow.run_precheck_workflow(
+            ecn_file,
+            bom_file,
+            tester_email=str(user["email"]),
+            tester_name=str(user.get("display_name", "")),
+            source_status=source_status,
+        )
+        return jsonify(result)
     except Exception as exc:
         return jsonify({"error": f"The pre-check could not be completed: {exc}"}), 422
-    finally:
-        for temporary_path in temporary_paths:
-            try:
-                os.unlink(temporary_path)
-            except OSError:
-                pass
-
 
 
 
 def _reviewer_user() -> tuple[dict | None, tuple[object, int] | None]:
+
     """Return the signed-in reviewer or an appropriate JSON error response."""
     user = _current_user()
     if user is None:
@@ -399,8 +184,55 @@ def _administrator_user() -> tuple[dict | None, tuple[object, int] | None]:
     return user, None
 
 
+@app.route("/api/admin/users", methods=["POST"])
+def api_admin_create_user():
+    """Create an application account after enforcing administrator access."""
+    _, error = _administrator_user()
+    if error:
+        return error
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "A JSON account payload is required."}), 400
+
+    email = str(body.get("email", "")).strip().casefold()
+    display_name = str(body.get("display_name", "")).strip()
+    password = str(body.get("password", ""))
+    raw_role = str(body.get("role", "")).strip()
+    if not email or "@" not in email or any(character.isspace() for character in email):
+        return jsonify({"error": "A valid email address is required."}), 400
+    if not display_name:
+        return jsonify({"error": "A display name is required."}), 400
+    if not password.strip():
+        return jsonify({"error": "A non-empty password is required."}), 400
+    try:
+        role = normalise_role(raw_role)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    try:
+        with connect_evaluation_db() as connection:
+            initialise_schema(connection)
+            user_id = evaluation_queries.create_user(
+                connection, email, display_name, password, role
+            )
+        return jsonify({
+            "user": {
+                "id": user_id,
+                "email": email,
+                "display_name": display_name,
+                "role": role,
+            },
+        }), 201
+    except UniqueViolation:
+        return jsonify({"error": "An account with that email already exists."}), 409
+    except Exception:
+        return jsonify({"error": "The account could not be created."}), 503
+
+
 @app.route("/api/admin/reviewers")
 def api_admin_reviewers():
+
     user, error = _administrator_user()
 
 
@@ -688,6 +520,27 @@ def api_reviewer_queue():
 
 
 
+@app.route("/api/tester/attempts/<int:attempt_id>")
+def api_tester_attempt_detail(attempt_id: int):
+    """Return one saved attempt after verifying it belongs to the signed-in tester."""
+    user = _current_user()
+    if user is None:
+        return jsonify({"error": "Sign in before viewing an evaluation attempt."}), 401
+    if user.get("role") != "TESTER":
+        return jsonify({"error": "Tester access is required."}), 403
+
+    try:
+        with connect_evaluation_db() as connection:
+            detail = evaluation_queries.get_attempt_detail(connection, attempt_id, user)
+        if detail is None:
+            return jsonify({"error": "Evaluation attempt was not found."}), 404
+        return jsonify(detail)
+    except PermissionError:
+        return jsonify({"error": "This evaluation is not owned by the tester."}), 403
+    except Exception:
+        return jsonify({"error": "The evaluation attempt is unavailable."}), 503
+
+
 @app.route("/api/reviewer/attempts/<int:attempt_id>")
 def api_reviewer_attempt_detail(attempt_id: int):
     """Return one authorized review attempt and its findings."""
@@ -888,74 +741,7 @@ def api_notification():
 
 
 
-@app.route("/upload", methods=["POST"])
-def upload():
-
-
-
-    role = request.form.get("role", "ecn_creator")
-    uploaded = request.files.getlist("files")
-
-
-    if not uploaded or all(f.filename == "" for f in uploaded):
-        return jsonify({"error": "No files selected."}), 400
-
-    results = []
-    file_data = {}
-    accepted_files = 0
-
-    for f in uploaded:
-        name = f.filename or ""
-        if not name or not allowed_file(name, role):
-            results.append({
-                "file": name or "unnamed",
-                "issues": [{"rule": "UPLOAD", "severity": "error",
-                             "message": f"Only {', '.join(sorted(ROLE_ALLOWED_EXTENSIONS.get(role, set())))} files are accepted for this role."}]
-            })
-            continue
-
-        accepted_files += 1
-        file_bytes = f.read()
-        ext = Path(name).suffix.lower()
-        try:
-            if ext == ".csv":
-                content = file_bytes.decode("utf-8-sig")
-                file_data[name] = content
-            else:
-                with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-                    tmp.write(file_bytes)
-                    tmp_path = tmp.name
-                try:
-                    parsed = load_file(tmp_path)
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-                synthetic_name, csv_text = _normalise_uploaded_data(name, parsed, role)
-                file_data[synthetic_name] = csv_text
-        except Exception as exc:  # pragma: no cover - defensive validation path
-            results.append({
-                "file": name,
-                "issues": [{"rule": "UPLOAD", "severity": "error",
-                             "message": f"Unable to parse {name}: {exc}"}]
-            })
-            continue
-
-    check_results = run_checks(file_data, role=role)
-    results.extend(check_results)
-
-    summary = {
-        "total_files": accepted_files,
-        "total_issues": sum(len(r.get("issues", [])) for r in results),
-        "errors": sum(1 for r in results for i in r.get("issues", []) if i["severity"] == "error"),
-        "warnings": sum(1 for r in results for i in r.get("issues", []) if i["severity"] == "warning"),
-    }
-
-    return jsonify({"summary": summary, "results": results})
 
 
 if __name__ == "__main__":
-    print(f"Templates folder: {os.path.join(ROOT, 'templates')}", flush=True)
-    print(f"templates/index.html exists: {os.path.exists(os.path.join(ROOT, 'templates', 'index.html'))}", flush=True)
     app.run(debug=True, port=5000)

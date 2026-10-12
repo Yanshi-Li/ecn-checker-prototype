@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { buildAttemptFilterParams } from "./evaluationAttemptFilters";
+import RecordPagination, { RECORDS_PER_PAGE } from "./RecordPagination";
 
 
 type Reviewer = { id: number; email: string; display_name: string };
@@ -36,15 +37,20 @@ export default function AdminDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [reviewers, setReviewers] = useState<Reviewer[]>([]);
   const [assignable, setAssignable] = useState<Attempt[]>([]);
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
+    const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [page, setPage] = useState(1);
 
-  const [disputes, setDisputes] = useState<Dispute[]>([]);
+    const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [selectedAttempt, setSelectedAttempt] = useState("");
   const [selectedReviewer, setSelectedReviewer] = useState("");
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [resolutionComment, setResolutionComment] = useState("");
   const [toolStatus, setToolStatus] = useState<string | null>(null);
+
+  const [newUser, setNewUser] = useState({ display_name: "", email: "", role: "TESTER", password: "" });
+  const [creatingUser, setCreatingUser] = useState(false);
   const [reviewReport, setReviewReport] = useState<{ rule_group_count: number; rule_disagreement_count: number; rule_disagreement_percentage: number; disputed_attempt_count: number } | null>(null);
+
 
   async function loadSummary() {
     setLoading(true);
@@ -86,14 +92,35 @@ export default function AdminDashboard() {
       const disputePayload = await readJson<{ attempts?: Dispute[] }>(disputeResponse);
       const reportPayload = await readJson<{ rule_group_count?: number; rule_disagreement_count?: number; rule_disagreement_percentage?: number; disputed_attempt_count?: number }>(reportResponse);
       setReviewers(reviewerPayload.reviewers ?? []); setAssignable(attemptPayload.attempts ?? []); setDisputes(disputePayload.attempts ?? []);
-      setReviewReport({ rule_group_count: reportPayload.rule_group_count ?? 0, rule_disagreement_count: reportPayload.rule_disagreement_count ?? 0, rule_disagreement_percentage: reportPayload.rule_disagreement_percentage ?? 0, disputed_attempt_count: reportPayload.disputed_attempt_count ?? 0 });
+            setReviewReport({ rule_group_count: reportPayload.rule_group_count ?? 0, rule_disagreement_count: reportPayload.rule_disagreement_count ?? 0, rule_disagreement_percentage: reportPayload.rule_disagreement_percentage ?? 0, disputed_attempt_count: reportPayload.disputed_attempt_count ?? 0 });
     } catch { setToolStatus("Administrator tools could not be loaded."); }
   }
 
-    useEffect(() => { void loadSummary(); void loadAdminTools(); }, [decision, sourceStatus, tester, ecn]);
+  useEffect(() => { setPage(1); void loadSummary(); void loadAdminTools(); }, [decision, sourceStatus, tester, ecn]);
 
+  async function createAccount() {
+    setCreatingUser(true);
+    setToolStatus(null);
+    try {
+      const response = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(newUser),
+      });
+      const payload = await readJson<{ user?: { email: string }; error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error ?? "The account could not be created.");
+      setToolStatus(`Account created for ${payload.user?.email ?? newUser.email}.`);
+      setNewUser({ display_name: "", email: "", role: "TESTER", password: "" });
+      void loadAdminTools();
+    } catch (reason) {
+      setToolStatus(reason instanceof Error ? reason.message : "The account could not be created.");
+    } finally {
+      setCreatingUser(false);
+    }
+  }
 
   async function assignReviewer() {
+
     if (!selectedAttempt || !selectedReviewer) return;
     const response = await fetch("/api/admin/assignments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ attempt_id: selectedAttempt, reviewer_id: selectedReviewer }) });
     const payload = await readJson<{ error?: string }>(response);
@@ -125,6 +152,11 @@ export default function AdminDashboard() {
     window.location.href = `/api/admin/evaluation-export?${params.toString()}`;
   }
 
+
+      const visibleAttempts = attempts.slice(
+    (page - 1) * RECORDS_PER_PAGE,
+    page * RECORDS_PER_PAGE,
+  );
 
   return (
     <section className="dashboard-section" aria-labelledby="dashboard-heading">
@@ -167,18 +199,29 @@ export default function AdminDashboard() {
         <div className="section-heading compact"><div><p className="step">Evaluation records</p><h2 id="attempts-heading">Pre-check attempts</h2></div><p>{attempts.length} matching attempts</p></div>
         {attempts.length === 0 ? <p className="empty-state">No completed attempts match these filters.</p> : (
           <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Attempt ID</th><th>Source Status</th><th>Decision</th><th>Tester judgement</th><th>Agreement</th><th>Checking time</th><th>Started</th></tr></thead><tbody>
-            {attempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.attempt_id}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision}</td><td>{attempt.tester_judgement || "Pending"}</td><td>{attempt.tester_judgement ? (attempt.agreement ? "Agreed" : "Disagreed") : "Pending"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td></tr>)}
+            {visibleAttempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.attempt_id}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision}</td><td>{attempt.tester_judgement || "Pending"}</td><td>{attempt.tester_judgement ? (attempt.agreement ? "Agreed" : "Disagreed") : "Pending"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td></tr>)}
           </tbody></table></div>
-        )}
+                        )}
+        <RecordPagination page={page} pageSize={RECORDS_PER_PAGE} totalItems={attempts.length} label="Evaluation record pages" onPageChange={setPage} />
       </section>
       <section className="admin-tools" aria-label="Administrator tools">
         <div className="section-heading compact"><div><p className="step">Administration</p><h2>Assignments and reviews</h2></div><button className="secondary-button" type="button" onClick={exportEvaluation}>Export evaluation CSV</button></div>
 
-        {reviewReport && <div className="dashboard-metrics review-report"><Metric label="Rule groups reviewed" value={String(reviewReport.rule_group_count)} /><Metric label="Rule disagreements" value={`${reviewReport.rule_disagreement_percentage}%`} detail={`${reviewReport.rule_disagreement_count} groups`} tone="danger" /><Metric label="Disputed attempts" value={String(reviewReport.disputed_attempt_count)} tone="danger" /></div>}
+                {reviewReport && <div className="dashboard-metrics review-report"><Metric label="Rule groups reviewed" value={String(reviewReport.rule_group_count)} /><Metric label="Rule disagreements" value={`${reviewReport.rule_disagreement_percentage}%`} detail={`${reviewReport.rule_disagreement_count} groups`} tone="danger" /><Metric label="Disputed attempts" value={String(reviewReport.disputed_attempt_count)} tone="danger" /></div>}
+        <div className="dashboard-card account-creation-card">
+          <h3>Create an account</h3>
+          <form onSubmit={(event) => { event.preventDefault(); void createAccount(); }}>
+            <label>Name<input autoComplete="name" value={newUser.display_name} onChange={(event) => setNewUser({ ...newUser, display_name: event.target.value })} required /></label>
+            <label>Email<input type="email" autoComplete="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required /></label>
+            <label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value })}><option value="TESTER">Tester</option><option value="REVIEWER">Reviewer</option><option value="ADMINISTRATOR">Administrator</option></select></label>
+            <label>Initial password<input type="password" autoComplete="new-password" value={newUser.password} onChange={(event) => setNewUser({ ...newUser, password: event.target.value })} required /></label>
+            <button className="primary-button" type="submit" disabled={creatingUser}>{creatingUser ? "Creating account…" : "Create account"}</button>
+          </form>
+        </div>
         <div className="admin-tool-grid">
-          <div className="dashboard-card"><h3>Assign reviewers</h3><label>Attempt<select value={selectedAttempt} onChange={(event) => setSelectedAttempt(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>Attempt {attempt.attempt_id} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label><label>Reviewer<select value={selectedReviewer} onChange={(event) => setSelectedReviewer(event.target.value)}><option value="">Choose a reviewer</option>{reviewers.map((reviewer) => <option key={reviewer.id} value={reviewer.id}>{reviewer.display_name} ({reviewer.email})</option>)}</select></label><button className="primary-button" type="button" onClick={() => void assignReviewer()}>Assign reviewer</button></div>
-          <div className="dashboard-card"><h3>Reviewer comparison</h3><label>Attempt<select value={comparison?.attempt.attempt_id ?? ""} onChange={(event) => void openComparison(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>Attempt {attempt.attempt_id}</option>)}</select></label>{comparison ? <div className="comparison-table">{comparison.submissions.map((submission) => <article key={submission.submission_id}><strong>{submission.display_name}</strong><span>{submission.overall_judgement}</span><p>{submission.comment || "No comment"}</p>{submission.rule_judgements?.map((rule) => <small key={rule.rule_id}>{rule.rule_id}: {rule.judgement}</small>)}</article>)}</div> : <p className="empty-state">Compare independent reviewer judgements for one attempt.</p>}</div>
-          <div className="dashboard-card"><h3>Dispute resolution</h3>{disputes.length === 0 ? <p className="empty-state">No disputed attempts.</p> : disputes.map((dispute) => <article className="dispute-row" key={dispute.attempt_id}><strong>Attempt {dispute.attempt_id}</strong><span>{dispute.tester_email}</span><button className="evidence-link" type="button" onClick={() => void openComparison(String(dispute.attempt_id))}>Compare</button><textarea value={resolutionComment} onChange={(event) => setResolutionComment(event.target.value)} placeholder="Resolution comment" /><button className="secondary-button" type="button" onClick={() => void resolveDispute(dispute.attempt_id)}>Resolve dispute</button></article>)}</div>
+                    <div className="dashboard-card"><h3>Assign reviewers</h3><label>ECN to assign<select aria-label="ECN to assign" value={selectedAttempt} onChange={(event) => setSelectedAttempt(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>{attempt.ecn_number || attempt.attempt_name || "ECN not identified"} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label><label>Reviewer<select value={selectedReviewer} onChange={(event) => setSelectedReviewer(event.target.value)}><option value="">Choose a reviewer</option>{reviewers.map((reviewer) => <option key={reviewer.id} value={reviewer.id}>{reviewer.display_name} ({reviewer.email})</option>)}</select></label><button className="primary-button" type="button" onClick={() => void assignReviewer()}>Assign reviewer</button></div>
+          <div className="dashboard-card"><h3>Reviewer comparison</h3><label>ECN for comparison<select aria-label="ECN for comparison" value={comparison?.attempt.attempt_id ?? ""} onChange={(event) => void openComparison(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>{attempt.ecn_number || attempt.attempt_name || "ECN not identified"} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label>{comparison ? <div className="comparison-table">{comparison.submissions.map((submission) => <article key={submission.submission_id}><strong>{submission.display_name}</strong><span>{submission.overall_judgement}</span><p>{submission.comment || "No comment"}</p>{submission.rule_judgements?.map((rule) => <small key={rule.rule_id}>{rule.rule_id}: {rule.judgement}</small>)}</article>)}</div> : <p className="empty-state">Compare independent reviewer judgements for one attempt.</p>}</div>
+          <div className="dashboard-card"><h3>Dispute resolution</h3>{disputes.length === 0 ? <p className="empty-state">No disputed attempts.</p> : disputes.map((dispute) => <article className="dispute-row" key={dispute.attempt_id}><strong>{dispute.ecn_number || dispute.attempt_name || "ECN not identified"} — {dispute.system_decision}</strong><span>{dispute.tester_email}</span><button className="evidence-link" type="button" onClick={() => void openComparison(String(dispute.attempt_id))}>Compare</button><textarea value={resolutionComment} onChange={(event) => setResolutionComment(event.target.value)} placeholder="Resolution comment" /><button className="secondary-button" type="button" onClick={() => void resolveDispute(dispute.attempt_id)}>Resolve dispute</button></article>)}</div>
         </div>
         {toolStatus && <p className="empty-state" role="status">{toolStatus}</p>}
       </section>

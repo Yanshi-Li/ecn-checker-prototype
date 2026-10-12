@@ -151,7 +151,7 @@ python -m pytest -q
 # Windows, if `python` is not on PATH: py -m pytest -q
 ```
 
-The backend suite covers intake (including sample HTML ECN and PDF MBOM extraction), the validated rule catalogue and stage ownership mapping, deterministic rules, AI fallback/configuration, part-master checks, merge/gate behavior, notification rendering, evaluation persistence, reviewer/admin operations, the hybrid pipeline, and the legacy CSV checker. React behavior tests cover tester pre-check and independent judgement flows; run them from `frontend/` with `npm test`.
+The backend suite covers intake (including sample HTML ECN and PDF MBOM extraction), the validated rule catalogue and stage ownership mapping, deterministic rules, AI fallback/configuration, part-master checks, merge/gate behavior, notification rendering, evaluation persistence, reviewer/admin operations, the hybrid pipeline, and the legacy CSV checker. React behavior tests cover tester pre-checks, independent judgements, and administrator account creation; run them from `frontend/` with `npm test`.
 
 ## Email notifications
 
@@ -172,7 +172,7 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers and 
 
 | Path | Description |
 |---|---|
-| `scripts/app.py` | Flask web server — upload UI and validation endpoint |
+| `scripts/app.py` | Flask backend — authenticated API, pre-checks, evaluation storage, and notifications |
 | `scripts/ecn_checker.py` | Core validation rule engine |
 | `scripts/run_hybrid.py` | End-to-end CLI pipeline |
 | `scripts/stages/validation_notification.py` | Validation report email builder and SMTP sender |
@@ -190,7 +190,7 @@ scripts/    # pipeline stages and orchestration code
 data/       # sample ECN/BOM/parts/history input files
 tests/      # regression and module tests
 docs/       # architecture/rules/test scenario docs
-templates/  # web UI templates
+templates/  # legacy page template; not served by the supported React app
 out/        # generated outputs (ignored in git)
 ```
 

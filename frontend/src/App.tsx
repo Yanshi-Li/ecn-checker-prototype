@@ -2,6 +2,7 @@
 import ReviewerArea from "./ReviewerArea";
 import AdminDashboard from "./AdminDashboard";
 import { buildAttemptFilterParams } from "./evaluationAttemptFilters";
+import RecordPagination, { RECORDS_PER_PAGE } from "./RecordPagination";
 
 
 type Severity = "error" | "warning" | string;
@@ -28,6 +29,25 @@ type EvaluationAttempt = {
   system_decision?: string;
   duration_seconds?: number;
   started_at?: string;
+};
+
+type AttemptDetailFinding = {
+  category?: string;
+  rule_id?: string;
+  severity?: string;
+  message?: unknown;
+  location?: unknown;
+  evidence?: unknown;
+};
+
+type AttemptDetail = EvaluationAttempt & {
+  system_decision: string;
+  completed_at?: string;
+  tester_judgement?: string;
+  judgement_explanation?: string;
+  files?: Array<{ id: number; role: string; filename: string; mime_type: string }>;
+  findings?: AttemptDetailFinding[];
+  payload?: Record<string, unknown>;
 };
 
 type PrecheckResponse = {
@@ -522,9 +542,33 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
   const [ecnNumber, setEcnNumber] = useState("");
   const [sourceStatus, setSourceStatus] = useState("ALL");
   const [decision, setDecision] = useState("ALL");
-  const [attempts, setAttempts] = useState<EvaluationAttempt[]>([]);
+    const [attempts, setAttempts] = useState<EvaluationAttempt[]>([]);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedAttempt, setSelectedAttempt] = useState<AttemptDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  async function openAttempt(attemptId: number) {
+    setSelectedAttempt(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const response = await fetch(`/api/tester/attempts/${attemptId}`);
+      const payload = await readJson<AttemptDetail & { error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error ?? "The evaluation result could not be opened.");
+      setSelectedAttempt({ ...payload, findings: payload.findings ?? [], files: payload.files ?? [] });
+    } catch (reason) {
+      setDetailError(reason instanceof Error ? reason.message : "The evaluation result could not be opened.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+          useEffect(() => {
+    setPage(1);
+  }, [ecnNumber, sourceStatus, decision, refreshKey]);
 
   useEffect(() => {
     let active = true;
@@ -548,7 +592,12 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [ecnNumber, sourceStatus, decision, refreshKey]);
+      }, [ecnNumber, sourceStatus, decision, refreshKey]);
+
+      const visibleAttempts = attempts.slice(
+    (page - 1) * RECORDS_PER_PAGE,
+    page * RECORDS_PER_PAGE,
+  );
 
   return (
     <section className="dashboard-card evaluation-attempts" aria-labelledby="tester-attempts-heading">
@@ -564,12 +613,57 @@ function TesterAttempts({ refreshKey }: { refreshKey: number }) {
       {error && <p className="form-error" role="alert">{error}</p>}
       {loading ? <p className="empty-state">Loading attempts…</p> : attempts.length === 0 ? <p className="empty-state">No attempts match these filters.</p> : (
         <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Source Status</th><th>Decision</th><th>Checking time</th><th>Started</th><th>Attempt ID</th></tr></thead><tbody>
-          {attempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision || "—"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td><td>{attempt.attempt_id}</td></tr>)}
+                                      {visibleAttempts.map((attempt) => {
+            const label = attempt.ecn_number || attempt.attempt_name || `Attempt ${attempt.attempt_id}`;
+            return <tr key={attempt.attempt_id}><td><button className="attempt-result-link" type="button" aria-label={`View results for ECN ${label}`} onClick={() => void openAttempt(attempt.attempt_id)}>{label}</button></td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision || "—"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td><td>{attempt.attempt_id}</td></tr>;
+          })}
         </tbody></table></div>
       )}
+      {!loading && attempts.length > 0 && <RecordPagination page={page} pageSize={RECORDS_PER_PAGE} totalItems={attempts.length} label="Your evaluation record pages" onPageChange={setPage} />}
+      {detailError && <p className="form-error" role="alert">{detailError}</p>}
+      {detailLoading && <p className="empty-state" role="status">Loading saved result…</p>}
+      {selectedAttempt && <TesterAttemptDetails detail={selectedAttempt} onClose={() => setSelectedAttempt(null)} />}
     </section>
   );
 }
+
+function displayAttemptValue(value: unknown, fallback = "—"): string {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function TesterAttemptDetails({ detail, onClose }: { detail: AttemptDetail; onClose: () => void }) {
+  const [sourceTab, setSourceTab] = useState<"evidence" | "ecn" | "bom">("evidence");
+  const payload = detail.payload ?? {};
+  const packet = payload.packet && typeof payload.packet === "object" ? payload.packet as Record<string, unknown> : {};
+  const header = packet.header && typeof packet.header === "object" ? packet.header as Record<string, unknown> : {};
+  const bomRows = Array.isArray(packet.bom) ? packet.bom.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object")) : [];
+  const findings = detail.findings ?? [];
+  const passed = detail.system_decision === "PASS";
+
+  return <section className="review-detail-card tester-attempt-detail" aria-label="Saved pre-check result">
+    <div className="section-heading compact"><div><p className="step">ECN {detail.ecn_number || "number unavailable"} · Attempt ID {detail.attempt_id}</p><h2>System result: {detail.system_decision}</h2></div><button className="secondary-button" type="button" onClick={onClose}>Close result</button></div>
+    <div className="tester-result-summary">
+      <span className={`pill ${passed ? "success" : "error"}`}>{detail.system_decision}</span>
+      <span>Checking time: {detail.duration_seconds == null ? "—" : `${Number(detail.duration_seconds).toFixed(2)} seconds`}</span>
+      <span>Tester judgement: {detail.tester_judgement ?? "Not submitted"}</span>
+    </div>
+    {detail.judgement_explanation && <p className="dashboard-note">Your judgement: {detail.judgement_explanation}</p>}
+    <h3>Source and rule results</h3>
+    <div className="source-tabs" role="tablist" aria-label="Saved attempt details">
+      <button type="button" role="tab" aria-selected={sourceTab === "evidence"} className={sourceTab === "evidence" ? "active" : ""} onClick={() => setSourceTab("evidence")}>Rule results</button>
+      <button type="button" role="tab" aria-selected={sourceTab === "ecn"} className={sourceTab === "ecn" ? "active" : ""} onClick={() => setSourceTab("ecn")}>ECN content</button>
+      <button type="button" role="tab" aria-selected={sourceTab === "bom"} className={sourceTab === "bom" ? "active" : ""} onClick={() => setSourceTab("bom")}>BOM content</button>
+    </div>
+    {sourceTab === "evidence" && (findings.length === 0 ? <p className="empty-state">No rule findings were recorded.</p> : <div className="review-findings">{findings.map((finding, index) => <article className="review-finding" key={`${finding.rule_id ?? finding.category}-${index}`}><strong>{finding.rule_id ?? finding.category ?? "Finding"}</strong><span className={`pill ${(finding.severity ?? "advisory").toLowerCase()}`}>{finding.severity ?? "Advisory"}</span><p>{displayAttemptValue(finding.message, "No explanation provided.")}</p>{finding.location != null && <small>Location: {displayAttemptValue(finding.location)}</small>}{finding.evidence != null && <small>Evidence: {displayAttemptValue(finding.evidence)}</small>}</article>)}</div>)}
+    {sourceTab === "ecn" && (Object.keys(header).length === 0 ? <p className="empty-state">No normalized ECN content was recorded.</p> : <dl className="source-fields">{Object.entries(header).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{displayAttemptValue(value)}</dd></div>)}</dl>)}
+    {sourceTab === "bom" && (bomRows.length === 0 ? <p className="empty-state">No normalized BOM content was recorded.</p> : <div className="source-table-wrap"><table className="source-table"><thead><tr>{Array.from(new Set(bomRows.flatMap((row) => Object.keys(row)))).map((column) => <th key={column}>{column.replaceAll("_", " ")}</th>)}</tr></thead><tbody>{bomRows.map((row, index) => <tr key={String(row.line_number ?? index)}>{Array.from(new Set(bomRows.flatMap((item) => Object.keys(item)))).map((column) => <td key={column}>{displayAttemptValue(row[column])}</td>)}</tr>)}</tbody></table></div>)}
+    <p className="source-file-note">Source files: {(detail.files ?? []).map((file) => `${file.filename} (${file.role}, ${file.mime_type})`).join(", ") || "not recorded"}.</p>
+  </section>;
+}
+
+
 
 type FileInputProps = {
 

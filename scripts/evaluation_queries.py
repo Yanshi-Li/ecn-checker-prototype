@@ -100,6 +100,13 @@ LEFT JOIN precheck_cases pc ON pc.id = a.case_id
 LEFT JOIN logical_ecns le ON le.id = pc.logical_ecn_id
 LEFT JOIN tester_judgements j ON j.precheck_attempt_id = a.id
 """
+_ECN_NUMBER_EXPRESSION = (
+    "COALESCE(NULLIF(le.logical_ecn_key, ''), "
+    "NULLIF(a.result_payload->>'case_id', ''), "
+    "CASE WHEN a.attempt_name ~ '^[0-9]+_MBOM_(DRAFT|COMPLETED)$' "
+    "THEN split_part(a.attempt_name, '_MBOM_', 1) END)"
+)
+
 
 
 def list_attempts(connection, filters: Mapping[str, object] | None = None) -> list[dict[str, object]]:
@@ -214,7 +221,8 @@ def get_attempt_detail(
     """Return an authorized attempt, payload, findings, and file metadata."""
     _require_attempt_access(connection, attempt_id, user)
     cursor = connection.execute(
-                """SELECT a.id AS attempt_id, a.session_id, a.case_id, a.attempt_name,
+        f"""SELECT a.id AS attempt_id, a.session_id, a.case_id, a.attempt_name,
+                  {_ECN_NUMBER_EXPRESSION} AS ecn_number,
                   a.source_status, a.attempt_number, a.system_decision,
                   a.started_at, a.completed_at,
                   EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
@@ -406,10 +414,13 @@ def list_assignments(connection, attempt_id: int) -> list[dict[str, object]]:
 def list_assignable_attempts(connection) -> list[dict[str, object]]:
     """List completed attempts that an administrator may assign."""
     cursor = connection.execute(
-        """SELECT a.id AS attempt_id, a.system_decision, a.completed_at,
-                  s.tester_email, s.tester_name
+        f"""SELECT a.id AS attempt_id, a.attempt_name,
+                  {_ECN_NUMBER_EXPRESSION} AS ecn_number,
+                  a.system_decision, a.completed_at, s.tester_email, s.tester_name
            FROM precheck_attempts a
            JOIN evaluation_sessions s ON s.id = a.session_id
+           LEFT JOIN precheck_cases pc ON pc.id = a.case_id
+           LEFT JOIN logical_ecns le ON le.id = pc.logical_ecn_id
            WHERE a.system_decision IS NOT NULL
            ORDER BY a.completed_at DESC NULLS LAST, a.id DESC"""
     )
@@ -419,11 +430,14 @@ def list_assignable_attempts(connection) -> list[dict[str, object]]:
 def list_disputed_attempts(connection) -> list[dict[str, object]]:
     """Return attempts requiring administrator dispute resolution."""
     cursor = connection.execute(
-        """SELECT a.id AS attempt_id, a.system_decision,
-                  COALESCE(rs.status, 'ACTIVE') AS review_status,
+        f"""SELECT a.id AS attempt_id, a.attempt_name,
+                  {_ECN_NUMBER_EXPRESSION} AS ecn_number,
+                  a.system_decision, COALESCE(rs.status, 'ACTIVE') AS review_status,
                   rs.resolution_comment, s.tester_email, s.tester_name
            FROM precheck_attempts a
            JOIN evaluation_sessions s ON s.id = a.session_id
+           LEFT JOIN precheck_cases pc ON pc.id = a.case_id
+           LEFT JOIN logical_ecns le ON le.id = pc.logical_ecn_id
            JOIN evaluation_review_status rs ON rs.precheck_attempt_id = a.id
            WHERE rs.status = 'DISPUTED'
            ORDER BY a.started_at DESC, a.id DESC"""
@@ -434,11 +448,15 @@ def list_disputed_attempts(connection) -> list[dict[str, object]]:
 def get_reviewer_comparison(connection, attempt_id: int) -> dict[str, object] | None:
     """Return all independent reviewer submissions for administrator comparison."""
     attempt = _row(connection.execute(
-        """SELECT a.id AS attempt_id, a.system_decision,
-                  COALESCE(rs.status, 'ACTIVE') AS review_status
+        f"""SELECT a.id AS attempt_id, a.attempt_name,
+                  {_ECN_NUMBER_EXPRESSION} AS ecn_number,
+                  a.system_decision, COALESCE(rs.status, 'ACTIVE') AS review_status
            FROM precheck_attempts a
+           LEFT JOIN precheck_cases pc ON pc.id = a.case_id
+           LEFT JOIN logical_ecns le ON le.id = pc.logical_ecn_id
            LEFT JOIN evaluation_review_status rs ON rs.precheck_attempt_id = a.id
-           WHERE a.id = %s""", (attempt_id,)
+           WHERE a.id = %s""",
+        (attempt_id,),
     ))
     if attempt is None:
         return None
@@ -643,18 +661,17 @@ def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, 
     """Return only attempts the authenticated reviewer is allowed to inspect."""
 
     role = normalise_role(user["role"])
-
     if not can_review(role):
         raise PermissionError("reviewer access required")
     if can_administer(role):
         clause, params = "", []
         assignment_join = "LEFT JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
     else:
-
         clause, params = "WHERE ra.reviewer_id = %s AND ra.status <> 'REVOKED'", [user["id"]]
         assignment_join = "JOIN review_assignments ra ON ra.precheck_attempt_id = a.id"
     cursor = connection.execute(
-        """SELECT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
+        f"""SELECT a.id AS attempt_id, {_ECN_NUMBER_EXPRESSION} AS ecn_number,
+                  a.system_decision, a.started_at, a.completed_at,
                   ra.status AS assignment_status, ra.reviewer_id,
                   COALESCE(rev.status, 'ACTIVE') AS review_status,
                   s.tester_email, s.tester_name
@@ -662,6 +679,8 @@ def list_review_queue(connection, user: Mapping[str, object]) -> list[dict[str, 
            JOIN evaluation_sessions s ON s.id = a.session_id
            """ + assignment_join + """
            LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
+           LEFT JOIN precheck_cases pc ON pc.id = a.case_id
+           LEFT JOIN logical_ecns le ON le.id = pc.logical_ecn_id
            """ + clause + " ORDER BY a.started_at DESC, a.id DESC",
         params,
     )
@@ -708,13 +727,14 @@ def list_review_queue_page(
            JOIN evaluation_sessions s ON s.id = a.session_id
            """ + assignment_join + """
            LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
-           WHERE """ + where,
+                      WHERE """ + where,
         params,
     )
     total = int(count_cursor.fetchone()[0])
     offset = (page - 1) * page_size
     rows = _rows(connection.execute(
-        """SELECT DISTINCT a.id AS attempt_id, a.system_decision, a.started_at, a.completed_at,
+        f"""SELECT DISTINCT a.id AS attempt_id, {_ECN_NUMBER_EXPRESSION} AS ecn_number,
+                  a.system_decision, a.started_at, a.completed_at,
                   EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) AS duration_seconds,
                   ra.status AS assignment_status, ra.reviewer_id,
                   COALESCE(rev.status, 'ACTIVE') AS review_status,
@@ -723,6 +743,8 @@ def list_review_queue_page(
            JOIN evaluation_sessions s ON s.id = a.session_id
            """ + assignment_join + """
            LEFT JOIN evaluation_review_status rev ON rev.precheck_attempt_id = a.id
+           LEFT JOIN precheck_cases pc ON pc.id = a.case_id
+           LEFT JOIN logical_ecns le ON le.id = pc.logical_ecn_id
            WHERE """ + where + " ORDER BY a.started_at DESC, a.id DESC LIMIT %s OFFSET %s",
         params + [page_size, offset],
     ))

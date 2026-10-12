@@ -1,6 +1,9 @@
 """Tests for evaluation database configuration and schema setup."""
 
+from datetime import datetime, timezone
+
 import pytest
+
 
 import scripts.evaluation_store as evaluation_store
 
@@ -20,6 +23,7 @@ class _FakeConnection:
         self.rows = iter(rows)
 
     class _Transaction:
+
         def __init__(self, connection):
             self.connection = connection
 
@@ -37,10 +41,15 @@ class _FakeConnection:
         self.executed.append((statement, params))
         if "RETURNING id" in statement:
             return _FakeCursor(next(self.rows))
+        if "RETURNING EXTRACT(EPOCH" in statement:
+            return _FakeCursor((4.0,))
         return _FakeCursor((1,))
 
 
 def test_connect_uses_dedicated_local_database_configuration(monkeypatch):
+
+
+
     captured = {}
 
     def fake_connect(**kwargs):
@@ -125,7 +134,45 @@ def test_update_case_and_complete_batch_validate_and_persist_statuses():
     assert any("UPDATE evaluation_batches" in statement for statement, _ in connection.executed)
 
 
+def test_precheck_timing_uses_application_start_and_result_ready_timestamps():
+    started_at = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
+    completed_at = datetime(2026, 10, 11, 12, 0, 4, tzinfo=timezone.utc)
+    connection = _FakeConnection(rows=[(17,), (4.0,)])
+
+    attempt_id = evaluation_store.start_precheck(
+        connection, 7, started_at=started_at
+    )
+    duration = evaluation_store.complete_precheck(
+        connection,
+        attempt_id,
+        7,
+        "PASS",
+        {"packet": {"gate": {"decision": "PASS"}}},
+        completed_at=completed_at,
+    )
+
+    assert duration == 4.0
+    start_params = next(params for statement, params in connection.executed if "INSERT INTO precheck_attempts" in statement)
+    assert start_params[-1] == started_at
+    start_event_params = next(
+        params for statement, params in connection.executed
+        if "precheck_started" in statement
+    )
+    assert start_event_params[-1] == started_at
+    completion_params = next(
+        params for statement, params in connection.executed
+        if "UPDATE precheck_attempts" in statement
+    )
+    assert completion_params[1] == completed_at
+    completion_event_params = next(
+        params for statement, params in connection.executed
+        if "precheck_completed" in statement
+    )
+    assert completion_event_params[2] == completed_at
+
+
 def test_fail_precheck_records_error_event_without_system_decision():
+
     connection = _FakeConnection(rows=[(61,)])
 
     evaluation_store.fail_precheck(connection, 61, 7, "parser failed")

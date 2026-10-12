@@ -13,7 +13,8 @@ The intake layer normalises these inputs into a common ECN packet before the rul
 
 ## User-interface direction and current status
 
-React is the supported browser interface for tester intake and pre-checks, reviewer queues and judgements, and administrator assignments and evaluation reporting. Flask remains responsible for authentication and authorization, intake, validation, evaluation persistence, and notifications; PostgreSQL credentials and direct database access stay server-side. Batch testing is a separate command-line workflow through `scripts/run_batch.py`, not a browser workflow. No Streamlit application is maintained.
+React is the supported browser interface for tester intake and pre-checks, reviewer queues and judgements, and administrator assignments and evaluation reporting. Flask remains responsible for authentication, authorization, and HTTP request validation; the authenticated pre-check route delegates upload staging, validation, evaluation persistence, timing, and response shaping to the `precheck_workflow` module. PostgreSQL credentials and direct database access stay server-side. Batch testing is a separate command-line workflow through `scripts/run_batch.py`, not a browser workflow. No Streamlit application is maintained.
+
 
 
 ## Pipeline Overview
@@ -174,7 +175,7 @@ and original input bytes. A database outage is reported as a persistence warning
 and does not change validation outcomes.
 
 
-`scripts/evaluation_queries.py` provides query and judgement operations used by the Flask API. It lists persisted attempts, calculates PASS/FAIL and tester-system agreement metrics, returns the complete result payload and rule findings for one attempt, downloads original ECN/BOM evidence, and records separate tester and reviewer judgements. React consumes these operations through role-protected Flask routes.
+`scripts/evaluation_queries.py` provides query and judgement operations used by the Flask API. It lists persisted attempts, calculates PASS/FAIL and tester-system agreement metrics, returns the complete result payload and rule findings for one attempt, downloads original ECN/BOM evidence, and records separate tester and reviewer judgements. Testers can open an attempt from their evaluation-record list to inspect the saved system decision, checking duration, rule findings and explanations, normalized ECN/BOM content, and source-file metadata; the detail route enforces tester ownership. Reviewers use the same persisted finding and evidence model through their assigned-attempt view. React consumes these operations through role-protected Flask routes.
 
 Testers can submit one overall PASS/FAIL judgement plus per-rule CORRECT,
 INCORRECT, UNCLEAR, or NOT_APPLICABLE comments in
@@ -214,6 +215,8 @@ without changing the original submissions, and the action is audited. The admini
 | `scripts/batch_orchestration.py` | Independent normalized batch case execution |
 | `scripts/run_batch.py` | Batch command-line runner and persistence/export entry point |
 | `scripts/evaluation_store.py` | PostgreSQL configuration, schema setup, and snapshot persistence |
+| `scripts/precheck_workflow.py` | Upload staging, validation orchestration, persistence, and pre-check response shaping |
+
 | `scripts/evaluation_bundle.py` | Integrity-checked offline evaluation bundle export/import |
 | `scripts/evaluation_queries.py` | Reviewer dashboard query, judgement, and evidence operations |
 | `frontend/` | React browser interface for testers, reviewers, and administrators |

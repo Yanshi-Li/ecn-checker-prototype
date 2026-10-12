@@ -1,8 +1,11 @@
 
 """Contract tests for the Flask endpoints used by the React frontend."""
 
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
+
+import pytest
 
 from scripts import app as flask_app
 
@@ -69,7 +72,7 @@ def test_administrator_can_run_the_staged_pipeline_for_a_generic_ecn_filename(mo
             }
         }
 
-    monkeypatch.setattr(flask_app, "run_precheck", fake_run_precheck)
+    monkeypatch.setattr(flask_app.precheck_workflow, "run_precheck", fake_run_precheck)
     client = app.test_client()
     with client.session_transaction() as session:
         session["user"] = {"id": 4, "email": "admin@example.com", "display_name": "Admin User", "role": "ADMINISTRATOR"}
@@ -91,8 +94,20 @@ def test_administrator_can_run_the_staged_pipeline_for_a_generic_ecn_filename(mo
 
 def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch):
     received = {}
+    started_at = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
+    completed_at = datetime(2026, 10, 11, 12, 0, 4, tzinfo=timezone.utc)
+    clock_values = iter((started_at, completed_at))
+    observed_times = []
+
+    def fake_clock():
+        value = next(clock_values)
+        observed_times.append(value)
+        return value
+
+    monkeypatch.setattr(flask_app.precheck_workflow, "_utc_now", fake_clock)
 
     def fake_run_precheck(ecn_path, bom_path=None):
+        assert observed_times == [started_at]
         received["paths"] = (ecn_path, bom_path)
         return {
             "gate": {
@@ -104,14 +119,17 @@ def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch
             }
         }
 
-    def fake_persist(tester_email, tester_name, packet, uploaded_files):
+    def fake_persist(
+        tester_email, tester_name, packet, uploaded_files, *, source_status, started_at, completed_at
+    ):
         received["identity"] = (tester_email, tester_name)
         received["packet"] = packet
         received["files"] = uploaded_files
+        received["timing"] = (source_status, started_at, completed_at)
         return {"saved": True, "attempt_id": 41, "duration_seconds": 1.5}
 
-    monkeypatch.setattr(flask_app, "run_precheck", fake_run_precheck)
-    monkeypatch.setattr(flask_app, "_persist_precheck", fake_persist)
+    monkeypatch.setattr(flask_app.precheck_workflow, "run_precheck", fake_run_precheck)
+    monkeypatch.setattr(flask_app.precheck_workflow, "_persist_precheck", fake_persist)
     client = app.test_client()
     with client.session_transaction() as session:
         session["user"] = {
@@ -136,14 +154,14 @@ def test_ecn_only_precheck_persists_the_ecn_and_returns_saved_result(monkeypatch
         "duration_seconds": 1.5,
     }
     assert received["paths"][1] is None
+    assert observed_times == [started_at, completed_at]
+    assert received["timing"] == ("DRAFT", started_at, completed_at)
     assert [file["role"] for file in received["files"]] == ["ecn"]
     assert received["files"][0]["bytes"] == b"change_notice_number\nECN-4079118\n"
 
 
-
-
-
 class _ConnectionContext:
+
 
     def __init__(self, connection):
         self.connection = connection
@@ -157,7 +175,7 @@ class _ConnectionContext:
 
 def test_reviewer_can_run_the_staged_pipeline_as_a_tester(monkeypatch):
     monkeypatch.setattr(
-        flask_app,
+        flask_app.precheck_workflow,
         "run_precheck",
         lambda ecn_path, bom_path=None: {
             "gate": {
@@ -170,14 +188,17 @@ def test_reviewer_can_run_the_staged_pipeline_as_a_tester(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        flask_app,
+        flask_app.precheck_workflow,
         "_persist_precheck",
-        lambda tester_email, tester_name, packet, uploaded_files: {
+        lambda tester_email, tester_name, packet, uploaded_files, **timing: {
             "saved": False,
             "attempt_id": 23,
         },
     )
+
+
     client = app.test_client()
+
     with client.session_transaction() as session:
         session["user"] = {
             "id": 4,
@@ -350,6 +371,61 @@ def test_reviewer_queue_returns_only_authorized_queue(monkeypatch):
     assert response.get_json() == {"attempts": [{"attempt_id": 17, "system_decision": "FAIL"}]}
 
 
+def test_tester_attempt_detail_returns_owned_saved_result(monkeypatch):
+    connection = object()
+    detail = {"attempt_id": 19, "system_decision": "FAIL", "findings": [{"rule_id": "H01"}]}
+    received = {}
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "get_attempt_detail",
+        lambda db, attempt_id, user: received.update(database=db, attempt_id=attempt_id, user=user) or detail,
+    )
+    client = app.test_client()
+    authenticated_user = {"id": 4, "email": "tester@example.com", "role": "TESTER"}
+    with client.session_transaction() as session:
+        session["user"] = authenticated_user
+
+    response = client.get("/api/tester/attempts/19")
+
+    assert response.status_code == 200
+    assert response.get_json() == detail
+    assert received == {"database": connection, "attempt_id": 19, "user": authenticated_user}
+
+
+def test_tester_attempt_detail_rejects_non_tester_role_before_database_access(monkeypatch):
+    monkeypatch.setattr(
+        flask_app,
+        "connect_evaluation_db",
+        lambda: pytest.fail("non-testers must not access tester attempt details"),
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 9, "email": "reviewer@example.com", "role": "REVIEWER"}
+
+    response = client.get("/api/tester/attempts/19")
+
+    assert response.status_code == 403
+    assert response.get_json() == {"error": "Tester access is required."}
+
+
+def test_tester_attempt_detail_rejects_an_attempt_owned_by_another_tester(monkeypatch):
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(object()))
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "get_attempt_detail",
+        lambda *_: (_ for _ in ()).throw(PermissionError("attempt is not owned by this tester")),
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 4, "email": "tester@example.com", "role": "TESTER"}
+
+    response = client.get("/api/tester/attempts/19")
+
+    assert response.status_code == 403
+    assert response.get_json() == {"error": "This evaluation is not owned by the tester."}
+
+
 def test_reviewer_detail_returns_query_layer_result(monkeypatch):
     connection = object()
     detail = {"attempt_id": 17, "system_decision": "FAIL", "findings": []}
@@ -477,3 +553,82 @@ def test_notification_rejects_sending_a_failed_result_to_someone_other_than_the_
 
     assert response.status_code == 403
     assert response.get_json() == {"error": "Failed results can only be emailed to the tester."}
+
+
+def test_legacy_upload_endpoint_is_retired():
+    response = app.test_client().post("/upload", data={})
+
+    assert response.status_code in {404, 405}
+
+
+
+def test_admin_user_creation_requires_an_authenticated_administrator():
+    client = app.test_client()
+
+    unauthenticated = client.post("/api/admin/users", json={})
+    assert unauthenticated.status_code == 401
+
+    with client.session_transaction() as session:
+        session["user"] = {"id": 4, "email": "reviewer@example.com", "role": "REVIEWER"}
+    forbidden = client.post("/api/admin/users", json={})
+
+    assert forbidden.status_code == 403
+    assert forbidden.get_json() == {"error": "Administrator access is required."}
+
+
+def test_admin_user_creation_validates_required_fields_and_role():
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@example.com", "role": "ADMINISTRATOR"}
+
+    missing = client.post("/api/admin/users", json={"email": "new@example.com"})
+    invalid_role = client.post(
+        "/api/admin/users",
+        json={"email": "new@example.com", "display_name": "New User", "password": "secret", "role": "OWNER"},
+    )
+
+    assert missing.status_code == 400
+    assert invalid_role.status_code == 400
+
+
+def test_admin_can_create_account_without_exposing_the_password(monkeypatch):
+    connection = object()
+    created = {}
+    monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
+    monkeypatch.setattr(flask_app, "initialise_schema", lambda _: None)
+    monkeypatch.setattr(
+        flask_app.evaluation_queries,
+        "create_user",
+        lambda db, email, name, password, role: created.update(
+            database=db, email=email, name=name, password=password, role=role,
+        ) or 51,
+    )
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 1, "email": "admin@example.com", "role": "ADMINISTRATOR"}
+
+    response = client.post(
+        "/api/admin/users",
+        json={
+            "email": "  NEW@example.com ",
+            "display_name": " New Tester ",
+            "password": "private password",
+            "role": "TESTER",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.get_json() == {
+        "user": {"id": 51, "email": "new@example.com", "display_name": "New Tester", "role": "TESTER"},
+    }
+    assert created == {
+        "database": connection,
+        "email": "new@example.com",
+        "name": "New Tester",
+        "password": "private password",
+        "role": "TESTER",
+    }
+    assert "password" not in response.get_json()["user"]
+
+
+

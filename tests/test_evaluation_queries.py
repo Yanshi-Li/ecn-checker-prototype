@@ -110,17 +110,19 @@ def test_list_attempts_applies_canonical_filters_with_and_logic_and_shapes_busin
 
 
 def test_detail_contains_payload_findings_and_files():
-    detail_row = (9, 4, 3, "FAIL", datetime(2026, 1, 1, tzinfo=timezone.utc),
+    detail_row = (9, 4, 3, "4079118_MBOM_COMPLETED", "4079118", "COMPLETED", 1, "FAIL",
+                  datetime(2026, 1, 1, tzinfo=timezone.utc),
                   datetime(2026, 1, 1, 0, 0, 2, tzinfo=timezone.utc), 2.0,
                   {"packet": {"gate": {"blockers": [{"rule_id": "H01", "severity": "ERROR", "message": "Missing", "location": "header", "evidence": "x", "gate_effect": "FAIL"}], "warnings": [], "part_issues": [], "conflict_alerts": [], "ai_notes": {"flags": []}}}},
-                  "a@example.com", "Tester", "ECN", None, None, None, None)
-    columns = ["attempt_id", "session_id", "case_id", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
+                  "a@example.com", "Tester", "ECN", None, None, None)
+    columns = ["attempt_id", "session_id", "case_id", "attempt_name", "ecn_number", "source_status", "attempt_number", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
     files = Cursor(["id", "role", "filename", "mime_type", "size_bytes", "sha256", "captured_at"], [(1, "ecn", "input.csv", "text/csv", 3, "a" * 64, datetime.now(timezone.utc))])
     detail = queries.get_attempt_detail(
         Connection([Cursor([], [(1,)]), Cursor(columns, [detail_row]), files]),
         9,
         {"id": 4, "role": "REVIEWER"},
     )
+    assert detail["ecn_number"] == "4079118"
     assert detail["payload"]["packet"]["gate"]["blockers"][0]["rule_id"] == "H01"
     assert detail["findings"][0]["evidence"] == "x"
     assert detail["files"][0]["filename"] == "input.csv"
@@ -154,6 +156,49 @@ def test_judgement_and_file_retrieval_preserve_separate_system_decision():
     assert queries.get_original_file(
         file_connection, 9, "ecn", {"id": 4, "role": "REVIEWER"}
     )["content"] == b"ecn"
+
+
+def test_admin_assignment_dispute_and_comparison_records_include_ecn_numbers():
+    attempt_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "completed_at", "tester_email", "tester_name"]
+    row = (17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", None, "tester@example.com", "Tester")
+
+    assignable_connection = Connection([Cursor(attempt_columns, [row])])
+    assignable = queries.list_assignable_attempts(assignable_connection)
+    assert assignable[0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in assignable_connection.statements[0][0]
+
+    dispute_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "review_status", "resolution_comment", "tester_email", "tester_name"]
+    dispute_row = (17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", "DISPUTED", None, "tester@example.com", "Tester")
+    disputes_connection = Connection([Cursor(dispute_columns, [dispute_row])])
+    disputes = queries.list_disputed_attempts(disputes_connection)
+    assert disputes[0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in disputes_connection.statements[0][0]
+
+    comparison_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "review_status"]
+    comparison_connection = Connection([
+        Cursor(comparison_columns, [(17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", "DISPUTED")]),
+        Cursor([], []),
+        Cursor([], []),
+    ])
+    comparison = queries.get_reviewer_comparison(comparison_connection, 17)
+    assert comparison["attempt"]["ecn_number"] == "4079118"
+    assert "logical_ecns" in comparison_connection.statements[0][0]
+
+
+def test_reviewer_queue_queries_include_ecn_numbers():
+    user = {"id": 4, "role": "REVIEWER"}
+    columns = ["attempt_id", "ecn_number", "system_decision", "started_at", "completed_at", "duration_seconds", "assignment_status", "reviewer_id", "review_status", "tester_email", "tester_name"]
+    queue_row = (17, "4079118", "FAIL", None, None, None, "ASSIGNED", 4, "READY_FOR_REVIEW", "tester@example.com", "Tester")
+
+    queue_connection = Connection([Cursor(columns, [queue_row])])
+    queue = queries.list_review_queue(queue_connection, user)
+    assert queue[0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in queue_connection.statements[0][0]
+
+    page_connection = Connection([Cursor(["count"], [(1,)]), Cursor(columns, [queue_row])])
+    page = queries.list_review_queue_page(page_connection, user)
+    assert page["attempts"][0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in page_connection.statements[1][0]
 
 
 def test_admin_queries_list_users_and_assign_attempts():
@@ -260,8 +305,8 @@ def test_query_layer_denies_unassigned_reviewer_details_and_files():
 
 
 def test_administrator_can_access_details_without_assignment_lookup():
-    detail_row = (9, 4, 3, "PASS", None, None, None, {}, "a@example.com", "Tester", "ECN", None, None, None)
-    columns = ["attempt_id", "session_id", "case_id", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
+    detail_row = (9, 4, 3, "4079118_MBOM_COMPLETED", "4079118", "COMPLETED", 1, "PASS", None, None, None, {}, "a@example.com", "Tester", "ECN", None, None, None)
+    columns = ["attempt_id", "session_id", "case_id", "attempt_name", "ecn_number", "source_status", "attempt_number", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
     connection = Connection([Cursor(columns, [detail_row]), Cursor([], [])])
     detail = queries.get_attempt_detail(connection, 9, {"id": 1, "role": "ADMINISTRATOR"})
     assert detail["attempt_id"] == 9
@@ -269,8 +314,8 @@ def test_administrator_can_access_details_without_assignment_lookup():
 
 
 def test_tester_can_access_only_owned_attempt_details_and_files():
-    detail_row = (9, 4, 3, "PASS", None, None, None, {}, "tester@example.com", "Tester", "ECN", None, None, None)
-    columns = ["attempt_id", "session_id", "case_id", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
+    detail_row = (9, 4, 3, "4079118_MBOM_COMPLETED", "4079118", "COMPLETED", 1, "PASS", None, None, None, {}, "tester@example.com", "Tester", "ECN", None, None, None)
+    columns = ["attempt_id", "session_id", "case_id", "attempt_name", "ecn_number", "source_status", "attempt_number", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
     connection = Connection([
         Cursor([], [(1,)]),
         Cursor(columns, [detail_row]),
