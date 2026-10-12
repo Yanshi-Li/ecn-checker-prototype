@@ -1,32 +1,34 @@
-# Terraform files
-*.tfstate
-*.tfstate.*
-crash.log
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-.terraform/
-.terraform.lock.hcl
+# Python cache / tooling
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
 
-# Ansible files
-*.retry
-*.vault
+# Build output
+out/
+target/
+build/
+frontend/dist/
+frontend/node_modules/
+frontend/*.tsbuildinfo
 
-# CloudFormation files
-*.stack-output.json
 
-# General sensitive files
-.env
-*.key
-*.pem
-*.p12
-*.cer
-*.crt
+# IDE files
+.idea/
+.vscode/
+.settings/
+.classpath
+.project
 
-# Logs and temporary files
-*.log
-*.tmp
-*.bak
+# Operating system files
 .DS_Store
 Thumbs.db
+
+# Local configuration / secrets and private planning
+.scratch/
+.env
+
+.streamlit/secrets.toml
+config-local.properties
+.continue/config.yaml
+.continue/skills/

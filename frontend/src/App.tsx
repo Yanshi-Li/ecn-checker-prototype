@@ -1,0 +1,731 @@
+    import { useEffect, useMemo, useState } from "react";
+import ReviewerArea from "./ReviewerArea";
+import AdminDashboard from "./AdminDashboard";
+import { buildAttemptFilterParams } from "./evaluationAttemptFilters";
+import RecordPagination, { RECORDS_PER_PAGE } from "./RecordPagination";
+
+
+type Severity = "error" | "warning" | string;
+
+type Finding = {
+  rule: string;
+  severity: Severity;
+  message: string;
+};
+
+type User = {
+  id: number;
+  email: string;
+  display_name: string;
+  role: "TESTER" | "REVIEWER" | "ADMINISTRATOR";
+};
+
+type EvaluationAttempt = {
+  attempt_id: number;
+  attempt_name?: string;
+  ecn_number?: string;
+  source_status?: string;
+  decision?: string;
+  system_decision?: string;
+  duration_seconds?: number;
+  started_at?: string;
+};
+
+type AttemptDetailFinding = {
+  category?: string;
+  rule_id?: string;
+  severity?: string;
+  message?: unknown;
+  location?: unknown;
+  evidence?: unknown;
+};
+
+type AttemptDetail = EvaluationAttempt & {
+  system_decision: string;
+  completed_at?: string;
+  tester_judgement?: string;
+  judgement_explanation?: string;
+  files?: Array<{ id: number; role: string; filename: string; mime_type: string }>;
+  findings?: AttemptDetailFinding[];
+  payload?: Record<string, unknown>;
+};
+
+type PrecheckResponse = {
+
+  error?: string;
+  decision: "PASS" | "FAIL" | string;
+  summary: {
+    total_files: number;
+    total_issues: number;
+    errors: number;
+    warnings: number;
+  };
+  findings: Finding[];
+  persistence: {
+    saved: boolean;
+    message?: string;
+    attempt_id?: number;
+    duration_seconds?: number;
+  };
+};
+
+const FIX_HINTS: Record<string, string> = {
+  UPLOAD: "Choose a file type supported by this pre-check.",
+  "ECN-H-001": "Add the required fields to the ECN header.",
+  "ECN-H-002": "Use an ECN number in the required format.",
+  "BOM-001": "Add the required columns to the BOM file.",
+  "BOM-002": "Use a quantity greater than zero.",
+};
+
+const ECN_MANUAL_FIELDS = [
+  "change_notice_number", "name_of_change", "reason_for_change", "description_of_change",
+  "products_affected", "change_actions", "date", "project", "product_group",
+  "change_category", "associated_a3", "a3_number", "checker", "reviewer",
+  "chief_engineer", "bom_coordinator",
+] as const;
+const BOM_MANUAL_FIELDS = [
+  "line_number", "part_number", "description", "quantity", "unit", "action", "parent_part_no",
+] as const;
+type ManualEcn = Record<(typeof ECN_MANUAL_FIELDS)[number], string>;
+type ManualBomRow = Record<(typeof BOM_MANUAL_FIELDS)[number], string>;
+const REQUIRED_MANUAL_ECN_FIELDS = new Set([
+  "change_notice_number", "name_of_change", "reason_for_change", "description_of_change",
+]);
+const EMPTY_MANUAL_ECN = Object.fromEntries(ECN_MANUAL_FIELDS.map((field) => [field, ""])) as ManualEcn;
+const EMPTY_MANUAL_BOM_ROW: ManualBomRow = {
+  line_number: "", part_number: "", description: "", quantity: "1", unit: "EA", action: "", parent_part_no: "",
+};
+
+function csvCell(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function rowsToCsv<T extends Record<string, string>>(fields: readonly string[], rows: T[]): string {
+  return [fields.join(","), ...rows.map((row) => fields.map((field) => csvCell(row[field] ?? "")).join(","))].join("\r\n") + "\r\n";
+}
+
+function validateManualIntake(ecn: ManualEcn, bomRows: ManualBomRow[]): string[] {
+  const errors = ECN_MANUAL_FIELDS
+    .filter((field) => REQUIRED_MANUAL_ECN_FIELDS.has(field) && !ecn[field].trim())
+    .map((field) => `${field.replaceAll("_", " ").replace(/^\w/, (letter) => letter.toUpperCase())} is required.`);
+  bomRows.forEach((row, index) => {
+    if (!row.part_number.trim()) errors.push(`BOM row ${index + 1} requires a part number.`);
+    const quantity = Number(row.quantity);
+    if (!row.quantity.trim() || !Number.isFinite(quantity) || quantity <= 0) {
+      errors.push(`BOM row ${index + 1} quantity must be a positive number.`);
+    }
+  });
+  return errors;
+}
+
+
+function formatRule(rule: string): string {
+  return rule === "UPLOAD" ? "File upload" : `Rule ${rule}`;
+}
+
+async function readJson<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  if (!text.trim()) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("The server returned an invalid response.");
+  }
+}
+
+function App() {
+  const [intakeMode, setIntakeMode] = useState<"upload" | "manual">("upload");
+  const [ecnFile, setEcnFile] = useState<File | null>(null);
+  const [bomFile, setBomFile] = useState<File | null>(null);
+  const [manualEcn, setManualEcn] = useState<ManualEcn>({ ...EMPTY_MANUAL_ECN });
+  const [manualBomRows, setManualBomRows] = useState<ManualBomRow[]>([]);
+  const [sourceStatus, setSourceStatus] = useState<"DRAFT" | "COMPLETED">("DRAFT");
+  const [user, setUser] = useState<User | null>(null);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [nextCheckerEmail, setNextCheckerEmail] = useState("");
+  const [result, setResult] = useState<PrecheckResponse | null>(null);
+  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [apiReady, setApiReady] = useState<boolean | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
+    const [notificationStatus, setNotificationStatus] = useState<string | null>(null);
+  const [attemptRefreshKey, setAttemptRefreshKey] = useState(0);
+  const [activeTab, setActiveTab] = useState<"precheck" | "reviewer" | "dashboard">("precheck");
+
+
+  useEffect(() => {
+    void fetch("/api/health")
+      .then((response) => setApiReady(response.ok))
+            .catch(() => setApiReady(false));
+
+    void fetch("/api/auth/session")
+      .then(async (response) => {
+        if (response.ok) {
+          const payload = await readJson<{ user: User }>(response);
+          setUser(payload.user);
+        }
+      })
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const findings = useMemo(() => result?.findings ?? [], [result]);
+  const isPass = result?.decision === "PASS";
+  const testerEmail = user?.email ?? "";
+
+  async function login(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoginError(null);
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail.trim(), password: loginPassword }),
+      });
+      const payload = await readJson<{ error?: string; user?: User }>(response);
+      if (!response.ok || !payload.user) throw new Error(payload.error ?? "Login could not be completed.");
+      setUser(payload.user);
+      setLoginPassword("");
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "Login could not be completed.");
+    }
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setUser(null);
+    setResult(null);
+  }
+
+  async function runPrecheck(event: React.FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+    if (intakeMode === "upload" && !ecnFile) {
+      setRequestError("Choose an ECN file before running the pre-check.");
+      return;
+    }
+    if (intakeMode === "manual") {
+      const validationErrors = validateManualIntake(manualEcn, manualBomRows);
+      if (validationErrors.length > 0) {
+        setRequestError(validationErrors.join(" "));
+        return;
+      }
+    }
+    if (!user || !["TESTER", "REVIEWER", "ADMINISTRATOR"].includes(user.role)) {
+      setRequestError("Sign in with a tester, reviewer, or administrator account to run a pre-check.");
+
+      return;
+    }
+
+    setSubmitting(true);
+    setRequestError(null);
+    setResult(null);
+    setSelectedFinding(null);
+    setNotificationStatus(null);
+
+        const formData = new FormData();
+    if (intakeMode === "manual") {
+      const ecnCsv = rowsToCsv(ECN_MANUAL_FIELDS, [manualEcn]);
+            const identifier = manualEcn.change_notice_number.match(/\d{7}/)?.[0] ?? "manual";
+      formData.append("ecn", new File([ecnCsv], `ECN_${identifier}_manual.csv`, { type: "text/csv" }));
+      if (manualBomRows.length > 0) {
+        const bomCsv = rowsToCsv(
+          BOM_MANUAL_FIELDS,
+          manualBomRows.map((row, index) => ({ ...row, line_number: row.line_number.trim() || String(index + 1) })),
+        );
+        formData.append("bom", new File([bomCsv], `BOM_${identifier}_manual.csv`, { type: "text/csv" }));
+      }
+    } else {
+      if (ecnFile) formData.append("ecn", ecnFile);
+      if (bomFile) formData.append("bom", bomFile);
+    }
+    formData.append("source_status", sourceStatus);
+
+    try {
+      const response = await fetch("/api/precheck", { method: "POST", body: formData });
+      const payload = await readJson<PrecheckResponse>(response);
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error ?? "The pre-check could not be completed.");
+      }
+            setResult(payload);
+      setSelectedFinding(payload.findings[0] ?? null);
+      setAttemptRefreshKey((current) => current + 1);
+
+    } catch (error) {
+      setRequestError(
+        error instanceof Error ? error.message : "The pre-check could not be completed.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function sendReport() {
+    if (!result?.persistence.attempt_id) return;
+    const recipient = isPass ? nextCheckerEmail.trim() : testerEmail.trim();
+    if (!recipient) {
+      setNotificationStatus("Enter the next checker's email before sending this passed result.");
+      return;
+    }
+    setNotificationStatus("Sending validation report…");
+    try {
+      const response = await fetch("/api/notification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          attempt_id: result.persistence.attempt_id,
+          recipient,
+        }),
+      });
+      const payload = await readJson<{ error?: string; message?: string }>(response);
+      if (!response.ok || payload.error) throw new Error(payload.error ?? "Email could not be sent.");
+      setNotificationStatus(payload.message ?? "Validation report sent.");
+    } catch (error) {
+      setNotificationStatus(error instanceof Error ? error.message : "Email could not be sent.");
+    }
+  }
+
+  function downloadReport() {
+    if (!result) return;
+    const lines = [
+      "ECN Pre-check report",
+      "",
+      `Decision: ${isPass ? "PASS" : "FAIL"}`,
+      `Files checked: ${result.summary.total_files}`,
+      `Errors: ${result.summary.errors}`,
+      `Warnings: ${result.summary.warnings}`,
+      "",
+      ...result.findings.map(
+        (finding) => `[${finding.severity.toUpperCase()}] ${finding.rule}: ${finding.message}`,
+      ),
+    ];
+    const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "ecn-precheck-report.txt";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (authLoading) {
+    return <main className="login-shell"><p>Checking your sign-in session…</p></main>;
+  }
+
+  if (!user) {
+    return (
+      <main className="login-shell">
+        <form className="login-card" onSubmit={login}>
+          <div className="brand-mark">ECN</div>
+          <p className="eyebrow">AI ECN Checker</p>
+          <h1>Sign in to pre-check</h1>
+          <p className="lede">Use the account created for your evaluation role.</p>
+          <label htmlFor="login-email">Email</label>
+          <input id="login-email" type="email" required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} />
+          <label htmlFor="login-password">Password</label>
+          <input id="login-password" type="password" required value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} />
+          {loginError && <p className="form-error" role="alert">{loginError}</p>}
+          <button className="primary-button" type="submit">Sign in</button>
+        </form>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell">
+      <aside className="sidebar" aria-label="Main navigation">
+        <div className="brand-mark">ECN</div>
+        <div className="brand">
+          <strong>AI ECN Checker</strong>
+          <span>Pre-check Workspace</span>
+        </div>
+        <nav>
+          <button className={`nav-item ${activeTab === "precheck" ? "active" : ""}`} type="button" onClick={() => setActiveTab("precheck")}>New Pre-check</button>
+          {["REVIEWER", "ADMINISTRATOR"].includes(user.role) && <button className={`nav-item ${activeTab === "reviewer" ? "active" : ""}`} type="button" onClick={() => setActiveTab("reviewer")}>Reviewer Queue</button>}
+          {user.role === "ADMINISTRATOR" && <button className={`nav-item ${activeTab === "dashboard" ? "active" : ""}`} type="button" onClick={() => setActiveTab("dashboard")}>Admin Dashboard</button>}
+        </nav>
+        <div className="connection-status">
+          <span className={`status-dot ${apiReady ? "online" : "offline"}`} />
+          {apiReady === null ? "Connecting to validation API…" : apiReady ? "Validation API Connected" : "Start Flask on port 5000"}
+        </div>
+      </aside>
+
+      <section className="content">
+        {activeTab !== "reviewer" && activeTab !== "dashboard" && <header className="page-header">
+          <div>
+            <p className="eyebrow">ECN creator</p>
+            <h1>Check an ECN before submission</h1>
+            <p className="lede">Enter ECN and BOM details manually or upload files. We will show the outcome and next action clearly.</p>
+          </div>
+          <div className="signed-in-user">
+            <span>Signed in as</span>
+            <strong>{user.display_name}</strong>
+            <small>{user.email}</small>
+            <button type="button" onClick={() => void logout()}>Sign out</button>
+          </div>
+        </header>}
+
+        {activeTab === "dashboard" && user.role === "ADMINISTRATOR" ? <AdminDashboard /> : activeTab === "reviewer" && ["REVIEWER", "ADMINISTRATOR"].includes(user.role) ? <ReviewerArea user={user} /> : <>
+        <section className="upload-card" id="new-precheck" aria-labelledby="upload-heading">
+                    <div className="section-heading">
+            <div>
+              <p className="step">Step 1</p>
+              <h2 id="upload-heading">Prepare ECN and BOM</h2>
+            </div>
+            <p>Choose manual entry or upload.</p>
+          </div>
+          <form onSubmit={runPrecheck}>
+            <div className="intake-mode" role="group" aria-label="Choose intake method">
+              <button type="button" className={intakeMode === "upload" ? "active" : ""} aria-pressed={intakeMode === "upload"} onClick={() => { setIntakeMode("upload"); setRequestError(null); }}>Upload Files</button>
+              <button type="button" className={intakeMode === "manual" ? "active" : ""} aria-pressed={intakeMode === "manual"} onClick={() => { setIntakeMode("manual"); setRequestError(null); }}>Manual Entry</button>
+            </div>
+            {intakeMode === "upload" ? (
+              <div className="file-grid">
+                <FileInput
+                  id="ecn-file"
+                  label="ECN file"
+                  required
+                  accept=".csv,.xls,.xlsx,.xlsm,.pdf,.eml,.txt"
+                  file={ecnFile}
+                  onChange={setEcnFile}
+                />
+                <FileInput
+                  id="bom-file"
+                  label="BOM file"
+                  accept=".csv,.xls,.xlsx,.xlsm,.pdf"
+                  file={bomFile}
+                  onChange={setBomFile}
+                />
+              </div>
+            ) : (
+              <div className="manual-intake">
+                <fieldset className="manual-fieldset">
+                  <legend>ECN details</legend>
+                  <div className="manual-field-grid">
+                    {ECN_MANUAL_FIELDS.map((field) => (
+                      <label className={field === "description_of_change" || field === "reason_for_change" ? "wide" : ""} htmlFor={`manual-ecn-${field}`} key={field}>
+                        {field.replaceAll("_", " ").replace(/^\w/, (letter) => letter.toUpperCase())}
+                        {REQUIRED_MANUAL_ECN_FIELDS.has(field) && <span className="required-mark">Required</span>}
+                        {field === "description_of_change" || field === "reason_for_change" ? (
+                          <textarea id={`manual-ecn-${field}`} required={REQUIRED_MANUAL_ECN_FIELDS.has(field)} value={manualEcn[field]} onChange={(event) => setManualEcn({ ...manualEcn, [field]: event.target.value })} />
+                        ) : (
+                          <input id={`manual-ecn-${field}`} type={field === "date" ? "date" : "text"} required={REQUIRED_MANUAL_ECN_FIELDS.has(field)} value={manualEcn[field]} onChange={(event) => setManualEcn({ ...manualEcn, [field]: event.target.value })} />
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset className="manual-fieldset">
+                  <legend>BOM rows</legend>
+                                    <p className="manual-help">BOM details are optional. Add rows when the ECN includes a bill of materials; each entered quantity must be greater than zero.</p>
+                  {manualBomRows.map((row, index) => (
+                    <div className="manual-bom-row" key={index}>
+                      <strong>Row {index + 1}</strong>
+                      <label>Part number <span className="required-mark">Required</span><input required value={row.part_number} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, part_number: event.target.value } : item))} /></label>
+                      <label>Description<input value={row.description} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, description: event.target.value } : item))} /></label>
+                      <label>Quantity <span className="required-mark">Required</span><input type="number" min="0.000001" step="any" required value={row.quantity} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, quantity: event.target.value } : item))} /></label>
+                      <label>Unit<input value={row.unit} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, unit: event.target.value } : item))} /></label>
+                      <label>Action<input value={row.action} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, action: event.target.value } : item))} /></label>
+                      <label>Parent part number<input value={row.parent_part_no} onChange={(event) => setManualBomRows(manualBomRows.map((item, rowIndex) => rowIndex === index ? { ...item, parent_part_no: event.target.value } : item))} /></label>
+                                            <button className="remove-row-button" type="button" onClick={() => setManualBomRows(manualBomRows.filter((_, rowIndex) => rowIndex !== index))}>Remove row</button>
+                    </div>
+                  ))}
+                  <button className="secondary-button add-row-button" type="button" onClick={() => setManualBomRows([...manualBomRows, { ...EMPTY_MANUAL_BOM_ROW }])}>Add BOM row</button>
+                </fieldset>
+              </div>
+            )}
+            <label htmlFor="source-status">Source status</label>
+            <select id="source-status" value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value as "DRAFT" | "COMPLETED")}>
+              <option value="DRAFT">DRAFT — still being prepared</option>
+              <option value="COMPLETED">COMPLETED — ready for review</option>
+            </select>
+            {requestError && <p className="form-error" role="alert">{requestError}</p>}
+            <button className="primary-button" type="submit" disabled={submitting || apiReady === false}>
+              {submitting ? "Running Pre-check…" : "Run Pre-check"}
+            </button>
+          </form>
+        </section>
+
+        {result && (
+          <section id="results" className="results-section" aria-live="polite">
+            <div className={`decision-card ${isPass ? "pass" : "fail"}`}>
+              <div>
+                <p className="eyebrow">Pre-check result</p>
+                <h2>{isPass ? "PASS — ready for the next checker" : "FAIL — action needed"}</h2>
+                <p>
+                  {isPass
+                    ? "No blocking issues were found. Review any warnings before sharing the result."
+                    : "Resolve the blocking issues below, then run the pre-check again."}
+                </p>
+              </div>
+              <div className="result-actions">
+                <button className="secondary-button" type="button" onClick={downloadReport}>Download report</button>
+                {result.persistence.saved && (isPass ? (
+                  <div className="next-checker-action">
+                    <label htmlFor="next-checker-email">Next checker email</label>
+                    <input
+                      id="next-checker-email"
+                      type="email"
+                      value={nextCheckerEmail}
+                      onChange={(event) => setNextCheckerEmail(event.target.value)}
+                      placeholder="checker@example.com"
+                    />
+                    <button className="secondary-button" type="button" onClick={() => void sendReport()}>
+                      Send to next checker
+                    </button>
+                  </div>
+                ) : (
+                  <button className="secondary-button" type="button" onClick={() => void sendReport()}>
+                    Email result to me
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {!result.persistence.saved && <p className="form-error" role="status">{result.persistence.message ?? "The result is available, but the evaluation was not saved."}</p>}
+            {result.persistence.saved && <p className="empty-state">Evaluation saved for reviewer follow-up.</p>}
+            {notificationStatus && <p className="empty-state" role="status">{notificationStatus}</p>}
+            {result.persistence.saved && result.persistence.attempt_id && <TesterJudgement result={result} findings={findings} />}
+
+            <div className="metric-grid" aria-label="Pre-check summary">
+              <Metric label="Files checked" value={String(result.summary.total_files)} />
+              <Metric label="Blocking issues" value={String(result.summary.errors)} tone={result.summary.errors ? "danger" : "success"} />
+              <Metric label="Warnings" value={String(result.summary.warnings)} />
+              <Metric label="Findings" value={String(result.summary.total_issues)} />
+            </div>
+
+            <div className="findings-layout">
+              <section className="finding-list" aria-labelledby="findings-heading">
+                <div className="section-heading compact">
+                  <div><p className="step">Step 2</p><h2 id="findings-heading">Review findings</h2></div>
+                  <p>{findings.length} item{findings.length === 1 ? "" : "s"}</p>
+                </div>
+                {findings.length === 0 ? (
+                  <p className="empty-state">No findings. This pre-check is ready to share.</p>
+                ) : findings.map((finding, index) => (
+                  <button
+                    className={`finding-row ${finding.severity} ${selectedFinding === finding ? "selected" : ""}`}
+                    type="button"
+                    key={`${finding.rule}-${index}`}
+                    onClick={() => setSelectedFinding(finding)}
+                  >
+                    <span className="severity-dot" />
+                    <span><strong>{formatRule(finding.rule)}</strong><small>{finding.message}</small></span>
+                  </button>
+                ))}
+              </section>
+              <section className="finding-detail" aria-labelledby="detail-heading">
+                <p className="step">Selected finding</p>
+                {selectedFinding ? (
+                  <>
+                    <h2 id="detail-heading">{formatRule(selectedFinding.rule)}</h2>
+                    <span className={`pill ${selectedFinding.severity}`}>{selectedFinding.severity}</span>
+                    <h3>What happened</h3>
+                    <p>{selectedFinding.message}</p>
+                    <h3>What to do next</h3>
+                    <p>{FIX_HINTS[selectedFinding.rule] ?? "Review the source file, correct the issue, and run the pre-check again."}</p>
+                  </>
+                ) : <p id="detail-heading" className="empty-state">Select a finding to see its explanation.</p>}
+              </section>
+            </div>
+          </section>
+                )}
+        <TesterAttempts refreshKey={attemptRefreshKey} />
+        </>}
+
+      </section>
+    </main>
+  );
+}
+
+function TesterAttempts({ refreshKey }: { refreshKey: number }) {
+  const [ecnNumber, setEcnNumber] = useState("");
+  const [sourceStatus, setSourceStatus] = useState("ALL");
+  const [decision, setDecision] = useState("ALL");
+    const [attempts, setAttempts] = useState<EvaluationAttempt[]>([]);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedAttempt, setSelectedAttempt] = useState<AttemptDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  async function openAttempt(attemptId: number) {
+    setSelectedAttempt(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const response = await fetch(`/api/tester/attempts/${attemptId}`);
+      const payload = await readJson<AttemptDetail & { error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error ?? "The evaluation result could not be opened.");
+      setSelectedAttempt({ ...payload, findings: payload.findings ?? [], files: payload.files ?? [] });
+    } catch (reason) {
+      setDetailError(reason instanceof Error ? reason.message : "The evaluation result could not be opened.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+          useEffect(() => {
+    setPage(1);
+  }, [ecnNumber, sourceStatus, decision, refreshKey]);
+
+  useEffect(() => {
+    let active = true;
+    const params = buildAttemptFilterParams({
+      ecn_number: ecnNumber,
+      source_status: sourceStatus,
+      decision,
+    });
+    setLoading(true);
+    setError(null);
+    void fetch(`/api/tester/evaluation-attempts?${params}`)
+      .then(async (response) => {
+        const payload = await readJson<{ attempts?: EvaluationAttempt[]; error?: string }>(response);
+        if (!response.ok) throw new Error(payload.error ?? "Your evaluation attempts could not be loaded.");
+        if (active) setAttempts(payload.attempts ?? []);
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(reason instanceof Error ? reason.message : "Your evaluation attempts could not be loaded.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+      }, [ecnNumber, sourceStatus, decision, refreshKey]);
+
+      const visibleAttempts = attempts.slice(
+    (page - 1) * RECORDS_PER_PAGE,
+    page * RECORDS_PER_PAGE,
+  );
+
+  return (
+    <section className="dashboard-card evaluation-attempts" aria-labelledby="tester-attempts-heading">
+      <div className="section-heading compact">
+        <div><p className="step">Evaluation records</p><h2 id="tester-attempts-heading">Your Pre-check Attempts</h2></div>
+        <p>{attempts.length} matching attempts</p>
+      </div>
+      <div className="dashboard-filters" aria-label="Your attempt filters">
+        <label>Source Status<select value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value)}><option value="ALL">All Source Statuses</option><option value="DRAFT">DRAFT</option><option value="COMPLETED">COMPLETED</option></select></label>
+        <label>Decision<select value={decision} onChange={(event) => setDecision(event.target.value)}><option value="ALL">All decisions</option><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select></label>
+        <label>ECN Number<input value={ecnNumber} onChange={(event) => setEcnNumber(event.target.value)} placeholder="Search ECN Number" /></label>
+      </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {loading ? <p className="empty-state">Loading attempts…</p> : attempts.length === 0 ? <p className="empty-state">No attempts match these filters.</p> : (
+        <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Source Status</th><th>Decision</th><th>Checking time</th><th>Started</th><th>Attempt ID</th></tr></thead><tbody>
+                                      {visibleAttempts.map((attempt) => {
+            const label = attempt.ecn_number || attempt.attempt_name || `Attempt ${attempt.attempt_id}`;
+            return <tr key={attempt.attempt_id}><td><button className="attempt-result-link" type="button" aria-label={`View results for ECN ${label}`} onClick={() => void openAttempt(attempt.attempt_id)}>{label}</button></td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision || "—"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td><td>{attempt.attempt_id}</td></tr>;
+          })}
+        </tbody></table></div>
+      )}
+      {!loading && attempts.length > 0 && <RecordPagination page={page} pageSize={RECORDS_PER_PAGE} totalItems={attempts.length} label="Your evaluation record pages" onPageChange={setPage} />}
+      {detailError && <p className="form-error" role="alert">{detailError}</p>}
+      {detailLoading && <p className="empty-state" role="status">Loading saved result…</p>}
+      {selectedAttempt && <TesterAttemptDetails detail={selectedAttempt} onClose={() => setSelectedAttempt(null)} />}
+    </section>
+  );
+}
+
+function displayAttemptValue(value: unknown, fallback = "—"): string {
+  if (value == null || value === "") return fallback;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function TesterAttemptDetails({ detail, onClose }: { detail: AttemptDetail; onClose: () => void }) {
+  const [sourceTab, setSourceTab] = useState<"evidence" | "ecn" | "bom">("evidence");
+  const payload = detail.payload ?? {};
+  const packet = payload.packet && typeof payload.packet === "object" ? payload.packet as Record<string, unknown> : {};
+  const header = packet.header && typeof packet.header === "object" ? packet.header as Record<string, unknown> : {};
+  const bomRows = Array.isArray(packet.bom) ? packet.bom.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object")) : [];
+  const findings = detail.findings ?? [];
+  const passed = detail.system_decision === "PASS";
+
+  return <section className="review-detail-card tester-attempt-detail" aria-label="Saved pre-check result">
+    <div className="section-heading compact"><div><p className="step">ECN {detail.ecn_number || "number unavailable"} · Attempt ID {detail.attempt_id}</p><h2>System result: {detail.system_decision}</h2></div><button className="secondary-button" type="button" onClick={onClose}>Close result</button></div>
+    <div className="tester-result-summary">
+      <span className={`pill ${passed ? "success" : "error"}`}>{detail.system_decision}</span>
+      <span>Checking time: {detail.duration_seconds == null ? "—" : `${Number(detail.duration_seconds).toFixed(2)} seconds`}</span>
+      <span>Tester judgement: {detail.tester_judgement ?? "Not submitted"}</span>
+    </div>
+    {detail.judgement_explanation && <p className="dashboard-note">Your judgement: {detail.judgement_explanation}</p>}
+    <h3>Source and rule results</h3>
+    <div className="source-tabs" role="tablist" aria-label="Saved attempt details">
+      <button type="button" role="tab" aria-selected={sourceTab === "evidence"} className={sourceTab === "evidence" ? "active" : ""} onClick={() => setSourceTab("evidence")}>Rule results</button>
+      <button type="button" role="tab" aria-selected={sourceTab === "ecn"} className={sourceTab === "ecn" ? "active" : ""} onClick={() => setSourceTab("ecn")}>ECN content</button>
+      <button type="button" role="tab" aria-selected={sourceTab === "bom"} className={sourceTab === "bom" ? "active" : ""} onClick={() => setSourceTab("bom")}>BOM content</button>
+    </div>
+    {sourceTab === "evidence" && (findings.length === 0 ? <p className="empty-state">No rule findings were recorded.</p> : <div className="review-findings">{findings.map((finding, index) => <article className="review-finding" key={`${finding.rule_id ?? finding.category}-${index}`}><strong>{finding.rule_id ?? finding.category ?? "Finding"}</strong><span className={`pill ${(finding.severity ?? "advisory").toLowerCase()}`}>{finding.severity ?? "Advisory"}</span><p>{displayAttemptValue(finding.message, "No explanation provided.")}</p>{finding.location != null && <small>Location: {displayAttemptValue(finding.location)}</small>}{finding.evidence != null && <small>Evidence: {displayAttemptValue(finding.evidence)}</small>}</article>)}</div>)}
+    {sourceTab === "ecn" && (Object.keys(header).length === 0 ? <p className="empty-state">No normalized ECN content was recorded.</p> : <dl className="source-fields">{Object.entries(header).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{displayAttemptValue(value)}</dd></div>)}</dl>)}
+    {sourceTab === "bom" && (bomRows.length === 0 ? <p className="empty-state">No normalized BOM content was recorded.</p> : <div className="source-table-wrap"><table className="source-table"><thead><tr>{Array.from(new Set(bomRows.flatMap((row) => Object.keys(row)))).map((column) => <th key={column}>{column.replaceAll("_", " ")}</th>)}</tr></thead><tbody>{bomRows.map((row, index) => <tr key={String(row.line_number ?? index)}>{Array.from(new Set(bomRows.flatMap((item) => Object.keys(item)))).map((column) => <td key={column}>{displayAttemptValue(row[column])}</td>)}</tr>)}</tbody></table></div>)}
+    <p className="source-file-note">Source files: {(detail.files ?? []).map((file) => `${file.filename} (${file.role}, ${file.mime_type})`).join(", ") || "not recorded"}.</p>
+  </section>;
+}
+
+
+
+type FileInputProps = {
+
+  id: string;
+  label: string;
+  required?: boolean;
+  accept: string;
+  file: File | null;
+  onChange: (file: File | null) => void;
+};
+
+function FileInput({ id, label, required = false, accept, file, onChange }: FileInputProps) {
+  return (
+    <label className="file-input" htmlFor={id}>
+      <span className="file-label">{label} {required && <em>Required</em>}</span>
+      <span className="file-description">{file ? file.name : "Choose a file or drag it here"}</span>
+      <span className="file-action">Browse files</span>
+      <input id={id} type="file" required={required} accept={accept} onChange={(event) => onChange(event.target.files?.[0] ?? null)} />
+    </label>
+  );
+}
+
+function TesterJudgement({ result, findings }: { result: PrecheckResponse; findings: Finding[] }) {
+  const [judgement, setJudgement] = useState<"PASS" | "FAIL">(result.decision === "PASS" ? "PASS" : "FAIL");
+  const [explanation, setExplanation] = useState("");
+  const [ruleJudgements, setRuleJudgements] = useState<Record<string, { judgement: string; comment: string }>>({});
+  const [status, setStatus] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setStatus(null);
+    try {
+      const response = await fetch(`/api/tester/attempts/${result.persistence.attempt_id}/judgement`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ judgement, explanation, rule_judgements: ruleJudgements }),
+      });
+      const payload = await readJson<{ error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error ?? "The judgement could not be saved.");
+      setStatus("Your judgement was saved for evaluation.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "The judgement could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return <form className="tester-judgement" onSubmit={submit}>
+    <h3>Was this result correct?</h3>
+    <label htmlFor="tester-judgement">Your overall judgement</label>
+    <select id="tester-judgement" value={judgement} onChange={(event) => setJudgement(event.target.value as "PASS" | "FAIL")}><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select>
+    <label htmlFor="tester-explanation">Explanation</label>
+    <textarea id="tester-explanation" value={explanation} onChange={(event) => setExplanation(event.target.value)} placeholder="Explain whether the system result was correct" />
+    {findings.map((finding, index) => { const id = finding.rule || `finding-${index}`; const value = ruleJudgements[id] ?? { judgement: "CORRECT", comment: "" }; return <div className="rule-judgement" key={id}><label htmlFor={`tester-rule-${id}`}>{id}</label><select id={`tester-rule-${id}`} value={value.judgement} onChange={(event) => setRuleJudgements({ ...ruleJudgements, [id]: { ...value, judgement: event.target.value } })}><option value="CORRECT">CORRECT</option><option value="INCORRECT">INCORRECT</option><option value="UNCLEAR">UNCLEAR</option><option value="NOT_APPLICABLE">NOT_APPLICABLE</option></select><input value={value.comment} onChange={(event) => setRuleJudgements({ ...ruleJudgements, [id]: { ...value, comment: event.target.value } })} placeholder="Rule comment (optional)" /></div>; })}
+    <button className="secondary-button" type="submit" disabled={saving}>{saving ? "Saving…" : "Submit tester judgement"}</button>
+    {status && <p className="empty-state" role="status">{status}</p>}
+  </form>;
+}
+
+function Metric({ label, value, tone }: { label: string; value: string; tone?: "danger" | "success" }) {
+  return <div className={`metric ${tone ?? ""}`}><span>{label}</span><strong>{value}</strong></div>;
+}
+
+export default App;

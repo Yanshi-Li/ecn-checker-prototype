@@ -1,0 +1,234 @@
+import { useEffect, useState } from "react";
+import { buildAttemptFilterParams } from "./evaluationAttemptFilters";
+import RecordPagination, { RECORDS_PER_PAGE } from "./RecordPagination";
+
+
+type Reviewer = { id: number; email: string; display_name: string };
+type Attempt = { attempt_id: number; attempt_name?: string; ecn_number?: string; source_status?: string; system_decision: string; decision?: string; started_at?: string; completed_at?: string; duration_seconds?: number; tester_judgement?: string | null; agreement?: boolean; tester_email?: string; tester_name?: string; review_status?: string };
+
+type Dispute = Attempt;
+type Comparison = { attempt: Attempt; submissions: Array<{ submission_id: number; display_name: string; email: string; overall_judgement: string; comment?: string; rule_judgements?: Array<{ rule_id: string; judgement: string; comment?: string }> }> };
+
+type Summary = {
+  total_attempts: number;
+  pass_count: number;
+  pass_percentage: number;
+  fail_count: number;
+  fail_percentage: number;
+  judged_count: number;
+  agreement_count: number;
+  agreement_percentage: number;
+  average_duration_seconds: number;
+};
+
+async function readJson<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  if (!text.trim()) return {} as T;
+  return JSON.parse(text) as T;
+}
+
+export default function AdminDashboard() {
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [decision, setDecision] = useState("ALL");
+  const [sourceStatus, setSourceStatus] = useState("ALL");
+  const [tester, setTester] = useState("");
+  const [ecn, setEcn] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reviewers, setReviewers] = useState<Reviewer[]>([]);
+  const [assignable, setAssignable] = useState<Attempt[]>([]);
+    const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [page, setPage] = useState(1);
+
+    const [disputes, setDisputes] = useState<Dispute[]>([]);
+  const [selectedAttempt, setSelectedAttempt] = useState("");
+  const [selectedReviewer, setSelectedReviewer] = useState("");
+  const [comparison, setComparison] = useState<Comparison | null>(null);
+  const [resolutionComment, setResolutionComment] = useState("");
+  const [toolStatus, setToolStatus] = useState<string | null>(null);
+
+  const [newUser, setNewUser] = useState({ display_name: "", email: "", role: "TESTER", password: "" });
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [reviewReport, setReviewReport] = useState<{ rule_group_count: number; rule_disagreement_count: number; rule_disagreement_percentage: number; disputed_attempt_count: number } | null>(null);
+
+
+  async function loadSummary() {
+    setLoading(true);
+    setError(null);
+        try {
+      const params = buildAttemptFilterParams({
+        decision,
+        source_status: sourceStatus,
+        ecn_number: ecn,
+      });
+      params.set("tester", tester);
+
+      const [summaryResponse, attemptsResponse] = await Promise.all([
+
+        fetch(`/api/admin/evaluation-summary?${params}`),
+        fetch(`/api/admin/evaluation-attempts?${params}`),
+      ]);
+      const payload = await readJson<Summary & { error?: string }>(summaryResponse);
+      const attemptPayload = await readJson<{ attempts?: Attempt[]; error?: string }>(attemptsResponse);
+      if (!summaryResponse.ok) throw new Error(payload.error ?? "The dashboard could not be loaded.");
+      if (!attemptsResponse.ok) throw new Error(attemptPayload.error ?? "Evaluation attempts could not be loaded.");
+      setSummary(payload);
+      setAttempts(attemptPayload.attempts ?? []);
+
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "The dashboard could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadAdminTools() {
+    try {
+      const [reviewerResponse, attemptResponse, disputeResponse, reportResponse] = await Promise.all([
+        fetch("/api/admin/reviewers"), fetch("/api/admin/assignable-attempts"), fetch("/api/admin/disputes"), fetch("/api/admin/review-report"),
+      ]);
+      const reviewerPayload = await readJson<{ reviewers?: Reviewer[] }>(reviewerResponse);
+      const attemptPayload = await readJson<{ attempts?: Attempt[] }>(attemptResponse);
+      const disputePayload = await readJson<{ attempts?: Dispute[] }>(disputeResponse);
+      const reportPayload = await readJson<{ rule_group_count?: number; rule_disagreement_count?: number; rule_disagreement_percentage?: number; disputed_attempt_count?: number }>(reportResponse);
+      setReviewers(reviewerPayload.reviewers ?? []); setAssignable(attemptPayload.attempts ?? []); setDisputes(disputePayload.attempts ?? []);
+            setReviewReport({ rule_group_count: reportPayload.rule_group_count ?? 0, rule_disagreement_count: reportPayload.rule_disagreement_count ?? 0, rule_disagreement_percentage: reportPayload.rule_disagreement_percentage ?? 0, disputed_attempt_count: reportPayload.disputed_attempt_count ?? 0 });
+    } catch { setToolStatus("Administrator tools could not be loaded."); }
+  }
+
+  useEffect(() => { setPage(1); void loadSummary(); void loadAdminTools(); }, [decision, sourceStatus, tester, ecn]);
+
+  async function createAccount() {
+    setCreatingUser(true);
+    setToolStatus(null);
+    try {
+      const response = await fetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(newUser),
+      });
+      const payload = await readJson<{ user?: { email: string }; error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error ?? "The account could not be created.");
+      setToolStatus(`Account created for ${payload.user?.email ?? newUser.email}.`);
+      setNewUser({ display_name: "", email: "", role: "TESTER", password: "" });
+      void loadAdminTools();
+    } catch (reason) {
+      setToolStatus(reason instanceof Error ? reason.message : "The account could not be created.");
+    } finally {
+      setCreatingUser(false);
+    }
+  }
+
+  async function assignReviewer() {
+
+    if (!selectedAttempt || !selectedReviewer) return;
+    const response = await fetch("/api/admin/assignments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ attempt_id: selectedAttempt, reviewer_id: selectedReviewer }) });
+    const payload = await readJson<{ error?: string }>(response);
+    setToolStatus(response.ok ? "Reviewer assigned." : payload.error ?? "Assignment failed.");
+    if (response.ok) void loadAdminTools();
+  }
+
+  async function openComparison(attemptId: string) {
+    const response = await fetch(`/api/admin/attempts/${attemptId}/comparison`);
+    const payload = await readJson<Comparison & { error?: string }>(response);
+    if (!response.ok) { setToolStatus(payload.error ?? "Comparison could not be loaded."); return; }
+    setComparison(payload);
+  }
+
+  async function resolveDispute(attemptId: number) {
+    const response = await fetch(`/api/admin/attempts/${attemptId}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ comment: resolutionComment }) });
+    const payload = await readJson<{ error?: string }>(response);
+    setToolStatus(response.ok ? "Dispute resolved." : payload.error ?? "Dispute could not be resolved.");
+    if (response.ok) { setResolutionComment(""); void loadAdminTools(); }
+  }
+
+    function exportEvaluation() {
+    const params = buildAttemptFilterParams({
+      decision,
+      source_status: sourceStatus,
+      ecn_number: ecn,
+    });
+    params.set("tester", tester);
+    window.location.href = `/api/admin/evaluation-export?${params.toString()}`;
+  }
+
+
+      const visibleAttempts = attempts.slice(
+    (page - 1) * RECORDS_PER_PAGE,
+    page * RECORDS_PER_PAGE,
+  );
+
+  return (
+    <section className="dashboard-section" aria-labelledby="dashboard-heading">
+      <div className="page-header">
+        <div>
+          <p className="eyebrow">Administrator</p>
+          <h1 id="dashboard-heading">Evaluation Dashboard</h1>
+          <p className="lede">Monitor system outcomes, checking time, and agreement with tester judgements.</p>
+        </div>
+        <button className="secondary-button" type="button" onClick={() => void loadSummary()}>Refresh Dashboard</button>
+      </div>
+      <div className="dashboard-filters" aria-label="Dashboard filters">
+        <label>Decision<select value={decision} onChange={(event) => setDecision(event.target.value)}><option value="ALL">All decisions</option><option value="PASS">PASS</option><option value="FAIL">FAIL</option></select></label>
+        <label>Source Status<select value={sourceStatus} onChange={(event) => setSourceStatus(event.target.value)}><option value="ALL">All Source Statuses</option><option value="DRAFT">DRAFT</option><option value="COMPLETED">COMPLETED</option></select></label>
+        <label>Tester<input value={tester} onChange={(event) => setTester(event.target.value)} placeholder="Name or email" /></label>
+        <label>ECN<input value={ecn} onChange={(event) => setEcn(event.target.value)} placeholder="ECN Number" /></label>
+      </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {loading && <p className="empty-state">Loading dashboard…</p>}
+      {!loading && summary && <>
+        <div className="dashboard-metrics">
+          <Metric label="Completed attempts" value={String(summary.total_attempts)} />
+          <Metric label="PASS" value={`${summary.pass_percentage}%`} detail={`${summary.pass_count} attempts`} tone="success" />
+          <Metric label="FAIL" value={`${summary.fail_percentage}%`} detail={`${summary.fail_count} attempts`} tone="danger" />
+          <Metric label="Agreement" value={`${summary.agreement_percentage}%`} detail={`${summary.agreement_count}/${summary.judged_count} judged`} />
+          <Metric label="Average checking" value={`${summary.average_duration_seconds}s`} detail="Pre-check start to completion" />
+        </div>
+        <section className="dashboard-card" aria-label="Pass and fail distribution">
+          <div className="section-heading compact"><div><p className="step">System decisions</p><h2>PASS versus FAIL</h2></div><p>{summary.total_attempts} completed attempts</p></div>
+          <div className="decision-bar" aria-label={`${summary.pass_percentage}% pass and ${summary.fail_percentage}% fail`}>
+            <span className="decision-bar-pass" style={{ width: `${summary.pass_percentage}%` }} />
+            <span className="decision-bar-fail" style={{ width: `${summary.fail_percentage}%` }} />
+          </div>
+          <div className="decision-legend"><span><i className="legend-dot pass-dot" />PASS {summary.pass_percentage}%</span><span><i className="legend-dot fail-dot" />FAIL {summary.fail_percentage}%</span></div>
+        </section>
+        <p className="dashboard-note">PASS and FAIL percentages use all completed attempts. Agreement uses only attempts where a tester judgement was submitted; {summary.total_attempts - summary.judged_count} judgement{summary.total_attempts - summary.judged_count === 1 ? " is" : "s are"} pending.</p>
+      </>}
+                  <section className="dashboard-card evaluation-attempts" aria-labelledby="attempts-heading">
+
+        <div className="section-heading compact"><div><p className="step">Evaluation records</p><h2 id="attempts-heading">Pre-check attempts</h2></div><p>{attempts.length} matching attempts</p></div>
+        {attempts.length === 0 ? <p className="empty-state">No completed attempts match these filters.</p> : (
+          <div className="attempt-table-wrap"><table className="attempt-table"><thead><tr><th>ECN Number</th><th>Attempt ID</th><th>Source Status</th><th>Decision</th><th>Tester judgement</th><th>Agreement</th><th>Checking time</th><th>Started</th></tr></thead><tbody>
+            {visibleAttempts.map((attempt) => <tr key={attempt.attempt_id}><td>{attempt.ecn_number || attempt.attempt_name || "—"}</td><td>{attempt.attempt_id}</td><td>{attempt.source_status || "—"}</td><td>{attempt.decision || attempt.system_decision}</td><td>{attempt.tester_judgement || "Pending"}</td><td>{attempt.tester_judgement ? (attempt.agreement ? "Agreed" : "Disagreed") : "Pending"}</td><td>{attempt.duration_seconds == null ? "—" : `${Number(attempt.duration_seconds).toFixed(2)} s`}</td><td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : "—"}</td></tr>)}
+          </tbody></table></div>
+                        )}
+        <RecordPagination page={page} pageSize={RECORDS_PER_PAGE} totalItems={attempts.length} label="Evaluation record pages" onPageChange={setPage} />
+      </section>
+      <section className="admin-tools" aria-label="Administrator tools">
+        <div className="section-heading compact"><div><p className="step">Administration</p><h2>Assignments and reviews</h2></div><button className="secondary-button" type="button" onClick={exportEvaluation}>Export evaluation CSV</button></div>
+
+                {reviewReport && <div className="dashboard-metrics review-report"><Metric label="Rule groups reviewed" value={String(reviewReport.rule_group_count)} /><Metric label="Rule disagreements" value={`${reviewReport.rule_disagreement_percentage}%`} detail={`${reviewReport.rule_disagreement_count} groups`} tone="danger" /><Metric label="Disputed attempts" value={String(reviewReport.disputed_attempt_count)} tone="danger" /></div>}
+        <div className="dashboard-card account-creation-card">
+          <h3>Create an account</h3>
+          <form onSubmit={(event) => { event.preventDefault(); void createAccount(); }}>
+            <label>Name<input autoComplete="name" value={newUser.display_name} onChange={(event) => setNewUser({ ...newUser, display_name: event.target.value })} required /></label>
+            <label>Email<input type="email" autoComplete="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} required /></label>
+            <label>Role<select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value })}><option value="TESTER">Tester</option><option value="REVIEWER">Reviewer</option><option value="ADMINISTRATOR">Administrator</option></select></label>
+            <label>Initial password<input type="password" autoComplete="new-password" value={newUser.password} onChange={(event) => setNewUser({ ...newUser, password: event.target.value })} required /></label>
+            <button className="primary-button" type="submit" disabled={creatingUser}>{creatingUser ? "Creating account…" : "Create account"}</button>
+          </form>
+        </div>
+        <div className="admin-tool-grid">
+                    <div className="dashboard-card"><h3>Assign reviewers</h3><label>ECN to assign<select aria-label="ECN to assign" value={selectedAttempt} onChange={(event) => setSelectedAttempt(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>{attempt.ecn_number || attempt.attempt_name || "ECN not identified"} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label><label>Reviewer<select value={selectedReviewer} onChange={(event) => setSelectedReviewer(event.target.value)}><option value="">Choose a reviewer</option>{reviewers.map((reviewer) => <option key={reviewer.id} value={reviewer.id}>{reviewer.display_name} ({reviewer.email})</option>)}</select></label><button className="primary-button" type="button" onClick={() => void assignReviewer()}>Assign reviewer</button></div>
+          <div className="dashboard-card"><h3>Reviewer comparison</h3><label>ECN for comparison<select aria-label="ECN for comparison" value={comparison?.attempt.attempt_id ?? ""} onChange={(event) => void openComparison(event.target.value)}><option value="">Choose an attempt</option>{assignable.map((attempt) => <option key={attempt.attempt_id} value={attempt.attempt_id}>{attempt.ecn_number || attempt.attempt_name || "ECN not identified"} — {attempt.system_decision} — {attempt.tester_email}</option>)}</select></label>{comparison ? <div className="comparison-table">{comparison.submissions.map((submission) => <article key={submission.submission_id}><strong>{submission.display_name}</strong><span>{submission.overall_judgement}</span><p>{submission.comment || "No comment"}</p>{submission.rule_judgements?.map((rule) => <small key={rule.rule_id}>{rule.rule_id}: {rule.judgement}</small>)}</article>)}</div> : <p className="empty-state">Compare independent reviewer judgements for one attempt.</p>}</div>
+          <div className="dashboard-card"><h3>Dispute resolution</h3>{disputes.length === 0 ? <p className="empty-state">No disputed attempts.</p> : disputes.map((dispute) => <article className="dispute-row" key={dispute.attempt_id}><strong>{dispute.ecn_number || dispute.attempt_name || "ECN not identified"} — {dispute.system_decision}</strong><span>{dispute.tester_email}</span><button className="evidence-link" type="button" onClick={() => void openComparison(String(dispute.attempt_id))}>Compare</button><textarea value={resolutionComment} onChange={(event) => setResolutionComment(event.target.value)} placeholder="Resolution comment" /><button className="secondary-button" type="button" onClick={() => void resolveDispute(dispute.attempt_id)}>Resolve dispute</button></article>)}</div>
+        </div>
+        {toolStatus && <p className="empty-state" role="status">{toolStatus}</p>}
+      </section>
+    </section>
+  );
+}
+
+function Metric({ label, value, detail, tone }: { label: string; value: string; detail?: string; tone?: "success" | "danger" }) {
+  return <div className={`dashboard-metric ${tone ?? ""}`}><span>{label}</span><strong>{value}</strong>{detail && <small>{detail}</small>}</div>;
+}

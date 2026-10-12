@@ -1,0 +1,534 @@
+import pytest
+from pathlib import Path
+
+from scripts.stages.intake import (
+    REQUIRED_ECN_FIELDS,
+    build_ecn_packet,
+    load_excel,
+    load_file,
+    run_intake,
+    validate_ecn_header,
+)
+
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+HTML_ECN_PATH = DATA_DIR / "ECN 4078575 DD PH12 Motor Controller - PCB 519123 rev B1 Modules Update.html"
+PDF_BOM_PATH = DATA_DIR / "4078575-MBOM_xlsx.pdf"
+STRUCTURE_PDF_BOM_PATH = DATA_DIR / "4079086-MBOM_xlsx.pdf"
+
+
+
+
+
+
+def test_load_excel_mbom_template(tmp_path):
+    path = tmp_path / "MBOM_Mocked.xlsx"
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "MBOM Spreadsheet"
+    ws.append(["Help", "BILLS OF MATERIAL CHANGES TEMPLATE"])
+    ws.append(["PART MASTER CHANGES (Part Details)"])
+    ws.append([
+        "Select BOM Database", "Select Action", "Part Number",
+        "Part Description (max. 30 characters)", "Part Issue",
+        "Select Unit of Measure", "Select Primary Role", "Part Class",
+        "Drawing Number", "Drawing Issue", "Select Part Status",
+        "If required Intro Date", "ECN number", "Additional info",
+    ])
+    ws.append([
+        "MBOM", "ADD", "1001234", "Induction Cooktop Glass Top", "A", "EA",
+        "Primary", "Electrical", "DRW-10012", "A", "Active", "2026-08-01",
+        "ECN-4000012", "New glass spec applied",
+    ])
+    ws.append([
+        "MBOM", "DELETE", "1001239", "Legacy Ignition Module", "B", "EA",
+        "Primary", "Electrical", "DRW-10017", "B", "Obsolete", "2026-08-03",
+        "ECN-4000014", "Replaced by 1001245",
+    ])
+
+    wb.save(path)
+
+    if True:
+        rows = load_excel(str(path))
+    assert len(rows) == 2
+    assert rows[0]["part_number"] == "1001234"
+    assert rows[1]["quantity"] == "1"
+
+
+def test_load_sample_4079755_part_master_carries_forward_database_and_action():
+        rows = load_file(str(DATA_DIR / "bom_draft" / "4079755-MBOM.xlsx"), role="bom")
+        assert len(rows) == 12
+        assert all(row["source"] == "Thailand" for row in rows)
+        assert sum(row["action"] == "UPDATE" for row in rows) == 4
+        assert sum(row["action"] == "ADD" for row in rows) == 8
+        assert [row["part_number"] for row in rows[:4]] == ["433540", "433767", "433780", "433898"]
+
+
+
+
+
+def test_load_excel_mbom_structure_parent_part_headers(tmp_path):
+
+    path = tmp_path / "MBOM_Structure.xlsx"
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append([
+        "Select BOM Database", "", "Parent Part", "", "Task Number",
+        "Select Action", "Existing Child Part", "", "New Child Part", "", "", "Qty",
+    ])
+    worksheet.append([
+        "", "", "Number", "Description", "", "", "Number", "Description",
+        "Number", "Description", "", "",
+    ])
+    worksheet.append([
+        "MBOM", "", "123456", "Parent assembly", "TASK-1", "ADD", "", "",
+        "654321", "Replacement child", "", "2",
+    ])
+    workbook.save(path)
+
+    rows = load_excel(str(path))
+
+    assert rows == [{
+        "part_number": "654321",
+        "description": "Replacement child",
+        "parent_part_no": "123456",
+        "parent_part_description": "Parent assembly",
+        "quantity": "2",
+        "unit": "EA",
+                "action": "ADD",
+        "source": "MBOM",
+
+        "line_number": "1",
+        "change_section": "BOM_STRUCTURE",
+    }]
+
+
+
+
+
+def test_load_excel_extracts_actions_from_both_same_sheet_change_sections(tmp_path):
+    path = tmp_path / "MBOM_Both_Change_Sections.xlsx"
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(["PART MASTER CHANGES (Part Details)"])
+    worksheet.append([
+        "Select BOM Database", "Select Action", "Part Number",
+        "Part Description (max. 30 characters)", "Select Unit of Measure",
+    ])
+    worksheet.append(["MBOM", "ADD", "1001234", "New part", "EA"])
+    worksheet.append([])
+    worksheet.append(["BILLS OF MATERIAL STRUCTURE CHANGES"])
+    worksheet.append([
+        "Select BOM Database", "", "Parent Part", "", "Task Number",
+        "Select Action", "Existing Child Part", "", "New Child Part", "", "", "Qty",
+    ])
+    worksheet.append([
+        "", "", "123456", "Parent assembly", "TASK-1", "REPLACE", "", "",
+        "654321", "Replacement child", "", "2",
+    ])
+    workbook.save(path)
+
+    rows = load_excel(str(path))
+
+    assert [(row["part_number"], row["action"]) for row in rows] == [
+        ("1001234", "ADD"),
+        ("654321", "REPLACE"),
+    ]
+
+
+def test_load_xls_converts_before_excel_loading(tmp_path, monkeypatch):
+
+    source = tmp_path / "legacy.xls"
+    converted = tmp_path / "converted.xlsx"
+    source.write_bytes(b"legacy workbook")
+    converted.write_bytes(b"xlsx workbook")
+    calls = []
+
+    import scripts.stages.intake as intake
+
+    monkeypatch.setattr(
+        intake,
+        "_convert_xls_to_xlsx",
+        lambda filepath: calls.append(filepath) or str(converted),
+    )
+    monkeypatch.setattr(
+        intake,
+        "load_excel",
+        lambda filepath, role: calls.append((filepath, role)) or {"loaded": True},
+    )
+
+    assert intake.load_file(str(source), role="ecn") == {"loaded": True}
+    assert calls == [str(source), (str(converted), "ecn")]
+
+
+def test_load_misnamed_legacy_xlsx_converts_before_openpyxl(tmp_path, monkeypatch):
+    source = tmp_path / "legacy.xlsx"
+    converted = tmp_path / "converted.xlsx"
+    source.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1legacy")
+    converted.write_bytes(b"xlsx workbook")
+    calls = []
+
+    import scripts.stages.intake as intake
+
+    monkeypatch.setattr(
+        intake,
+        "_convert_xls_to_xlsx",
+        lambda filepath: calls.append(filepath) or str(converted),
+    )
+    monkeypatch.setattr(
+        intake,
+        "load_excel",
+        lambda filepath, role: calls.append((filepath, role)) or {"loaded": True},
+    )
+
+    assert intake.load_file(str(source), role="bom") == {"loaded": True}
+    assert calls == [str(source), (str(converted), "bom")]
+
+
+def test_load_csv_ecn_maps_common_export_columns(tmp_path):
+
+    path = tmp_path / "ECN4002659.csv"
+    path.write_text(
+        "ecnId,ecn_number,date_initiated,initiator,title,description,status,affectedAssembly,effectiveDate,qualityApproval,reasonForChange,changeActions\n"
+        "ECN-4002659,4002659,2026-08-10,Lily,Controller update,Replace the controller,DRAFT,PH12,2026-09-01,FALSE,Reliability,Update BOM\n",
+        encoding="utf-8",
+    )
+
+    header = load_file(str(path), role="ecn")
+
+    assert header["change_notice_number"] == "ECN-4002659"
+    assert header["name_of_change"] == "Controller update"
+    assert header["description_of_change"] == "Replace the controller"
+    assert header["reason_for_change"] == "Reliability"
+    assert validate_ecn_header(header)["validation"]["missing_fields"] == []
+
+
+def test_load_csv_bom_normalizes_rows(tmp_path):
+    path = tmp_path / "4002659-MBOM.csv"
+    path.write_text(
+        "lineNumber,Part_Number,Description,Qty,UOM,Action,ParentPartNumber\n"
+        "1,AB-1002,Replacement bracket,2,EA,ADD,DW900\n",
+        encoding="utf-8",
+    )
+
+    rows = load_file(str(path), role="bom")
+
+    assert len(rows) == 1
+
+
+
+
+    assert rows[0]["line_number"] == "1"
+    assert rows[0]["part_number"] == "AB-1002"
+    assert rows[0]["description"] == "Replacement bracket"
+    assert rows[0]["quantity"] == "2"
+    assert rows[0]["unit"] == "EA"
+    assert rows[0]["action"] == "ADD"
+    assert rows[0]["parent_part_no"] == "DW900"
+
+
+
+def test_load_excel_ecn_form(tmp_path):
+
+
+    path = tmp_path / "ECN.xlsx"
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append([
+        "A3 Number", "Associated A3", "Change Actions", "Cost Impact",
+        "Description Of Change", "Name", "Number", "Products Affected",
+        "Reason for Change",
+    ])
+    worksheet.append([
+        "A3-100", "No", "Update BOM", "No cost impact", "Update the controller",
+        "Controller update", "ECN-100", "PH12", "Reliability",
+    ])
+    workbook.save(path)
+
+    header = load_file(str(path), role="ecn")
+
+    assert header["a3_number"] == "A3-100"
+    assert header["name_of_change"] == "Controller update"
+    assert header["change_notice_number"] == "ECN-100"
+    assert validate_ecn_header(header)["validation"]["missing_fields"] == []
+
+
+def _make_header(**kwargs):
+    base = {f: "val" for f in REQUIRED_ECN_FIELDS}
+    base.update(kwargs)
+    return base
+
+
+def test_packet_structure():
+    header = _make_header()
+    packet = build_ecn_packet([header], [])
+
+    assert "header" in packet
+    assert "bom" in packet
+    assert "validation" in packet
+    assert not {"effective_date", "ecn_title", "affected_assembly"} & packet["header"].keys()
+
+
+
+
+
+
+def test_missing_fields_detected():
+    header = {"Change Notice Number": "E001"}  # missing most fields
+    packet = build_ecn_packet([header], [])
+    assert len(packet["validation"]["missing_fields"]) > 0
+
+
+def test_complete_header_no_missing():
+    header = _make_header()
+    packet = build_ecn_packet([header], [])
+    assert packet["validation"]["missing_fields"] == []
+
+
+def test_pdf_dict_input():
+    header = _make_header()
+    packet = build_ecn_packet(header, [])  # dict, not list
+    for field in REQUIRED_ECN_FIELDS:
+        assert packet["header"][field] == "val"
+
+
+def test_form_header_aliases_are_normalized():
+    form_header = {
+        "Engineering Change Number": "ECN-100",
+        "Name": "Motor controller update",
+        "A3 Number": "A3-100",
+        "Associated A3": "Yes",
+        "Change Actions": "Update BOM",
+        "Cost Impact": "No cost impact",
+        "Description Of Change": "Replace controller.",
+        "Products Affected": "PH12",
+        "Reason for Change": "Reliability",
+        "Implementation Date": "not checked",
+    }
+
+    packet = build_ecn_packet(form_header, [])
+
+    assert packet["validation"]["missing_fields"] == []
+    assert packet["header"]["change_notice_number"] == "ECN-100"
+    assert packet["header"]["name_of_change"] == "Motor controller update"
+    assert "date" not in packet["validation"]["missing_fields"]
+
+
+
+def test_load_email_into_header_dict(tmp_path):
+    eml_path = tmp_path / "sample_ecn.eml"
+    eml_path.write_bytes(
+        b"Subject: ECN-2026-007 Sample email update\n"
+        b"From: coordinator@example.com\n"
+        b"Date: 2026-08-10\n"
+        b"\n"
+        b"Change Notice Number: ECN-2026-007\n"
+        b"Title: Sample email intake\n"
+        b"Affected assembly: A-100\n"
+        b"Change type: modify\n"
+        b"Description: Replace the obsolete capacitor with an approved alternative and update the documentation.\n"
+        b"Requested by: Jane Reviewer\n"
+    )
+
+    data = __import__("scripts.stages.intake", fromlist=["load_file"]).load_file(str(eml_path))
+    assert data["change_notice_number"] == "ECN-2026-007"
+    assert data["title"] == "Sample email intake"
+    assert "obsolete capacitor" in data["description"].lower()
+    assert data["change_type"] == "modify"
+
+
+def test_load_sample_html_ecn_form():
+    data = load_file(str(HTML_ECN_PATH), role="ecn")
+
+    assert data["change_notice_number"] == "4078575"
+    assert data["name_of_change"] == "DD PH12 Motor Controller - PCB 519123 rev B1 Modules Update"
+    for field in (
+        "reason_for_change",
+        "description_of_change",
+        "products_affected",
+        "change_actions",
+    ):
+        assert data[field]
+    assert validate_ecn_header(data)["validation"]["missing_fields"] == []
+
+
+
+def test_load_sample_pdf_bom():
+    rows = load_file(str(PDF_BOM_PATH), role="bom")
+
+    assert len(rows) == 4
+    assert [row["line_number"] for row in rows] == ["1", "2", "3", "4"]
+    assert rows[0] == {
+        "part_number": "567953",
+        "description": "MOD MC DD RX24T PH12J 230V DBL",
+        "parent_part_no": "",
+        "parent_part_description": "",
+        "quantity": "1",
+        "unit": "EA",
+        "action": "ADD",
+        "source": "Thailand",
+        "line_number": "1",
+    }
+    assert [(row["action"], row["source"]) for row in rows] == [
+        ("ADD", "Thailand"),
+        ("ADD", "Thailand"),
+        ("ADD", "Thailand"),
+        ("ADD", "Thailand"),
+    ]
+
+
+
+
+def test_load_pdf_bom_includes_part_master_and_structure_changes():
+    rows = load_file(str(STRUCTURE_PDF_BOM_PATH), role="bom")
+
+    structure_rows = [
+        row for row in rows if row.get("change_section") == "BOM_STRUCTURE"
+    ]
+
+                
+
+    assert structure_rows == [
+
+        {
+            "part_number": "276078",
+
+
+            "description": "MS M5X0.8 6MM TX SS",
+            "parent_part_no": "275695",
+            "parent_part_description": "FORECASTING FASTENERS KIT",
+            "quantity": "3",
+            "unit": "EA",
+            "action": "ADD",
+            "source": "Thailand",
+            "line_number": "10",
+            "line_reference": "90",
+            "change_section": "BOM_STRUCTURE",
+        },
+        {
+            "part_number": "276079",
+            "description": "MS M5X0.8 25MM TX SS",
+            "parent_part_no": "275695",
+            "parent_part_description": "FORECASTING FASTENERS KIT",
+            "quantity": "2",
+            "unit": "EA",
+            "action": "ADD",
+            "source": "Thailand",
+            "line_number": "11",
+            "line_reference": "100",
+            "change_section": "BOM_STRUCTURE",
+        },
+        {
+            "part_number": "276024",
+            "description": "MS M5X0.8 12MM LOW PROF TX SS",
+            "parent_part_no": "275695",
+            "parent_part_description": "FORECASTING FASTENERS KIT",
+            "quantity": "4",
+            "unit": "EA",
+            "action": "ADD",
+            "source": "Thailand",
+            "line_number": "12",
+            "line_reference": "110",
+            "change_section": "BOM_STRUCTURE",
+        },
+        {
+            "part_number": "276025",
+            "description": "NUT KEPS M5 SS",
+            "parent_part_no": "275695",
+            "parent_part_description": "FORECASTING FASTENERS KIT",
+            "quantity": "5",
+            "unit": "EA",
+            "action": "ADD",
+            "source": "Thailand",
+            "line_number": "13",
+            "line_reference": "120",
+            "change_section": "BOM_STRUCTURE",
+        },
+    ]
+
+
+def test_pdf_loading_is_role_aware():
+    assert isinstance(load_file(str(PDF_BOM_PATH), role="ecn"), dict)
+    assert isinstance(load_file(str(PDF_BOM_PATH), role="bom"), list)
+
+
+
+
+
+def test_load_file_rejects_unknown_role():
+    with pytest.raises(ValueError, match="Unsupported file role"):
+        load_file(str(HTML_ECN_PATH), role="review")
+
+
+def test_run_intake_with_sample_html_ecn_and_pdf_bom():
+    packet = run_intake(str(HTML_ECN_PATH), str(PDF_BOM_PATH))
+
+    assert packet["validation"]["missing_fields"] == []
+    assert len(packet["bom"]) == 4
+    assert packet["source_files"] == {
+        "ecn": str(HTML_ECN_PATH),
+        "boms": [str(PDF_BOM_PATH)],
+    }
+    assert packet["validation"]["bom_supplied"] is True
+    assert packet["bom"][0]["bom_type"] == "MBOM"
+    assert packet["bom"][0]["source_file"] == str(PDF_BOM_PATH)
+
+
+def test_run_intake_without_bom_is_valid():
+    packet = run_intake(str(HTML_ECN_PATH))
+
+    assert packet["bom"] == []
+    assert packet["source_files"]["boms"] == []
+    assert packet["validation"]["bom_supplied"] is False
+    assert packet["validation"]["bom_warnings"] == []
+
+
+def test_run_intake_warns_when_bom_filename_has_different_ecn(tmp_path):
+    bom_path = tmp_path / "4009999-MBOM.csv"
+    bom_path.write_text(
+        "part_number,quantity,action\n123456,1,ADD\n",
+        encoding="utf-8",
+    )
+
+    packet = run_intake(str(HTML_ECN_PATH), str(bom_path))
+
+    assert len(packet["validation"]["bom_warnings"]) == 1
+    assert packet["validation"]["bom_warnings"][0]["type"] == "SOURCE_FILE_MISMATCH"
+    assert "Please check the file name" in packet["validation"]["bom_warnings"][0]["message"]
+
+
+def test_load_html_email_body(tmp_path):
+
+    eml_path = tmp_path / "html_email.eml"
+    eml_path.write_bytes(
+        b"Content-Type: multipart/alternative; boundary=abc\n"
+        b"From: coordinator@example.com\n"
+        b"Subject: ECN-2026-008\n"
+        b"Date: Tue, 12 Aug 2026 13:00:00 +1200\n"
+        b"\n"
+        b"--abc\n"
+        b"Content-Type: text/html; charset=utf-8\n"
+        b"\n"
+        b"<html><body><p><strong>Change Notice Number:</strong> ECN-2026-008</p>"
+        b"<p><strong>Title:</strong> HTML Email Intake</p>"
+        b"<p><strong>Affected assembly:</strong> A-100</p>"
+        b"<p><strong>Change type:</strong> replace</p>"
+        b"<p><strong>Description:</strong> Replace the legacy voltage regulator with an approved variant.</p>"
+        b"<p><strong>Requested by:</strong> Sam Tester</p></body></html>\n"
+        b"--abc--\n"
+    )
+
+    data = __import__("scripts.stages.intake", fromlist=["load_file"]).load_file(str(eml_path))
+    assert data["change_notice_number"] == "ECN-2026-008"
+    assert data["title"] == "HTML Email Intake"
+    assert data["change_type"] == "replace"
+    assert data["date"] == "2026-08-12"
+    assert "legacy voltage regulator" in data["description"].lower()

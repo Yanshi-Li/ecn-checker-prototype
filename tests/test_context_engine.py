@@ -1,0 +1,275 @@
+import csv
+from pathlib import Path
+
+from scripts.stages.context_engine import (
+    check_part_status,
+    log_approved_change,
+    run_context_engine,
+)
+from scripts.stages.context_engine import (
+    _check_missing_supplier,
+    _check_uom_mismatch,
+    _load_parts_db,
+)
+
+
+
+MOCK_PARTS = {
+    "AB-1001": {"status": "OBSOLETE", "lifecycle_state": "End-of-Life", "revision": "C",
+                "description": "Cap 10uF", "part_number": "AB-1001"},
+    "AB-1002": {"status": "ACTIVE", "lifecycle_state": "Production", "revision": "A",
+                "description": "Cap 25V", "part_number": "AB-1002"},
+    # New parts from ECN-2026-002 and ECN-2026-003
+    "C-350": {"status": "ACTIVE", "lifecycle_state": "Production", "revision": "A",
+              "description": "Resistor 100 Ohm Low-Cost", "part_number": "C-350"},
+    "C-260": {"status": "ACTIVE", "lifecycle_state": "Production", "revision": "A",
+              "description": "Capacitor 10uF Alternate", "part_number": "C-260"},
+    "C-300": {"status": "ACTIVE", "lifecycle_state": "Production", "revision": "B",
+              "description": "Resistor 100 Ohm", "part_number": "C-300"},
+    "C-200": {"status": "ACTIVE", "lifecycle_state": "Production", "revision": "A",
+              "description": "Capacitor 10uF", "part_number": "C-200"},
+}
+
+
+
+
+def test_obsolete_part_detected():
+    result = check_part_status("AB-1001", MOCK_PARTS)
+    assert result["status"] == "OBSOLETE"
+    assert result["found"] is True
+
+
+def test_active_part_ok():
+    result = check_part_status("AB-1002", MOCK_PARTS)
+    assert result["status"] == "ACTIVE"
+
+
+def test_part_not_found():
+    result = check_part_status("ZZ-9999", MOCK_PARTS)
+    assert result["found"] is False
+    assert result["status"] == "NOT_FOUND"
+
+
+
+
+
+# ── Tests for new ECN-2026-002 parts ────────────────────────────────────────
+
+def test_c350_active_part_ok():
+    result = check_part_status("C-350", MOCK_PARTS)
+    assert result["status"] == "ACTIVE"
+    assert result["found"] is True
+
+
+def test_c260_active_part_ok():
+    result = check_part_status("C-260", MOCK_PARTS)
+    assert result["status"] == "ACTIVE"
+    assert result["found"] is True
+
+
+
+
+
+def test_missing_supplier_is_flagged_for_known_ebom_part():
+    bom = [{"line_number": "7", "part_number": "P-100", "bom_type": "EBOM"}]
+    parts_db = {"P-100": {"supplier": ""}}
+
+
+    flags = _check_missing_supplier(bom, parts_db)
+
+    assert flags == [{
+        "flag_type": "MISSING_SUPPLIER",
+        "rule_id": "D03",
+        "severity": "ERROR",
+        "part_number": "P-100",
+        "line_number": "7",
+        "message": "Part 'P-100' has no supplier recorded in the Parts Master DB.",
+    }]
+
+
+
+
+
+
+def test_missing_supplier_skips_mbom_and_unknown_bom_types():
+    bom = [
+        {"line_number": "1", "part_number": "P-100", "bom_type": "MBOM"},
+        {"line_number": "2", "part_number": "P-100", "bom_type": "UNKNOWN"},
+    ]
+    parts_db = {"P-100": {"supplier": ""}}
+
+    assert _check_missing_supplier(bom, parts_db) == []
+
+
+def test_missing_supplier_skips_known_part_with_supplier_and_unknown_part():
+
+    bom = [
+        {"line_number": "1", "part_number": "P-100"},
+        {"line_number": "2", "part_number": "P-999"},
+    ]
+    parts_db = {"P-100": {"supplier": "Approved Supplier"}}
+
+    assert _check_missing_supplier(bom, parts_db) == []
+
+
+def test_uom_mismatch_is_flagged_case_insensitively():
+    bom = [{"line_number": "4", "part_number": "P-200", "unit": "EA"}]
+    parts_db = {"P-200": {"unit_of_measure": "BOX"}}
+
+    flags = _check_uom_mismatch(bom, parts_db)
+
+    assert flags == [{
+        "flag_type": "UOM_MISMATCH",
+        "severity": "ERROR",
+        "part_number": "P-200",
+        "line_number": "4",
+        "message": "Part 'P-200' unit 'EA' does not match Parts Master DB unit 'BOX'.",
+    }]
+
+
+def test_uom_mismatch_skips_matching_or_blank_units_and_unknown_parts():
+    bom = [
+        {"line_number": "1", "part_number": "P-200", "unit": "ea"},
+        {"line_number": "2", "part_number": "P-300", "unit": ""},
+        {"line_number": "3", "part_number": "P-999", "unit": "EA"},
+    ]
+    parts_db = {
+        "P-200": {"unit_of_measure": "EA"},
+        "P-300": {"unit_of_measure": "EA"},
+    }
+
+    assert _check_uom_mismatch(bom, parts_db) == []
+
+
+def _csv_rows(path: Path) -> list[dict]:
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _packet() -> dict:
+    return {
+        "header": {
+            "change_notice_number": "ECN-NEW-CTX-001",
+            "change_type": "replace",
+            "date": "2026-12-01",
+        },
+        "bom": [
+            {
+                "line_number": "1",
+                "part_number": "C-300",
+                "description": "Resistor 100 Ohm",
+                "quantity": "1",
+                "unit": "EA",
+                "action": "REPLACE",
+                "parent_part_no": "DW900",
+            },
+            {
+                "line_number": "2",
+                "part_number": "C-350",
+                "description": "Resistor 100 Ohm Low-Cost",
+                "quantity": "1",
+                "unit": "EA",
+                "action": "ADD",
+                "parent_part_no": "DW900",
+            },
+        ],
+        "validation": {
+            "missing_fields": [],
+            "rule_violations": [],
+            "ai_flags": [],
+            "context_flags": [],
+        },
+    }
+
+
+def test_context_engine_does_not_emit_historical_conflicts(tmp_path):
+    packet = _packet()
+    parts_db_path = tmp_path / "parts.csv"
+    parts_db_path.write_text(
+        "part_number,supplier\nC-300,Approved Supplier\nC-350,Approved Supplier\n",
+        encoding="utf-8",
+    )
+    history_db_path = tmp_path / "history.csv"
+    history_db_path.write_text(
+        "change_notice_number,part_number,change_type,date,status\n"
+        "ECN-OLD-001,C-300,replace,2025-01-01,APPROVED\n",
+        encoding="utf-8",
+    )
+
+    result = run_context_engine(
+        packet,
+        parts_db_path=parts_db_path,
+        history_db_path=history_db_path,
+        context_db_dir=tmp_path / "context_db",
+    )
+
+
+    historical_conflicts = [
+        flag
+        for flag in result["validation"]["context_flags"]
+        if flag["flag_type"] == "HISTORICAL_CONFLICT"
+        ]
+    assert historical_conflicts == []
+
+
+    artifacts = result["validation"]["context_artifacts"]
+    parts_source_path = Path(artifacts["parts_master_source"])
+    conflict_log_path = Path(artifacts["ecn_conflict_log"])
+    bom_records_path = Path(artifacts["bom_structure_records"])
+
+    assert parts_source_path == parts_db_path
+    assert conflict_log_path.exists()
+    assert bom_records_path.exists()
+    assert not (tmp_path / "context_db" / "parts_master_database.csv").exists()
+    assert len(_csv_rows(conflict_log_path)) == 1  # history seed only; no unapproved run rows
+    assert len(_csv_rows(bom_records_path)) == 2
+
+
+
+
+
+
+def test_context_engine_defaults_to_direct_part_master_source(tmp_path):
+    root = Path(__file__).parent.parent
+    result = run_context_engine(_packet(), context_db_dir=tmp_path / "context_db")
+
+    artifacts = result["validation"]["context_artifacts"]
+    parts_master_path = root / "data" / "Part_Master.csv"
+    assert Path(artifacts["parts_master_source"]) == parts_master_path
+    assert parts_master_path.exists()
+    assert "015000627" in _load_parts_db(parts_master_path)
+    assert not (tmp_path / "context_db" / "parts_master_database.csv").exists()
+
+
+
+def test_fail_gate_does_not_write_to_conflict_log(tmp_path):
+    root = Path(__file__).parent.parent
+    context_dir = tmp_path / "context_db"
+    packet = run_context_engine(
+        _packet(),
+        parts_db_path=root / "data" / "parts_master.csv",
+        history_db_path=root / "data" / "ecn_history.csv",
+        context_db_dir=context_dir,
+    )
+    packet["gate"] = {"decision": "FAIL"}
+
+    assert log_approved_change(packet) is False
+    assert len(_csv_rows(context_dir / "change_notice_log.csv")) == 4
+
+
+def test_pass_gate_writes_passed_rows_to_conflict_log(tmp_path):
+    root = Path(__file__).parent.parent
+    context_dir = tmp_path / "context_db"
+    packet = run_context_engine(
+        _packet(),
+        parts_db_path=root / "data" / "parts_master.csv",
+        history_db_path=root / "data" / "ecn_history.csv",
+        context_db_dir=context_dir,
+    )
+    packet["gate"] = {"decision": "PASS"}
+
+    assert log_approved_change(packet) is True
+    conflict_log_rows = _csv_rows(context_dir / "change_notice_log.csv")
+    passed_rows = [row for row in conflict_log_rows if row["source"] == "approved_change"]
+    assert len(passed_rows) == 2
+    assert {row["status"] for row in passed_rows} == {"PASSED"}

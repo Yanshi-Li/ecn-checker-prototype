@@ -1,0 +1,344 @@
+"""Behaviour tests for the reviewer query seam."""
+from datetime import datetime, timezone
+
+import pytest
+
+from scripts import evaluation_queries as queries
+
+
+class Cursor:
+    def __init__(self, columns, rows):
+        self.description = [(column,) for column in columns]
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class Connection:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.statements = []
+
+    def execute(self, statement, params=None):
+        self.statements.append((statement, params))
+        response = self.responses.pop(0)
+        return response if isinstance(response, Cursor) else Cursor([], [])
+
+    class Tx:
+        def __init__(self, owner): self.owner = owner
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+
+    def transaction(self): return self.Tx(self)
+
+
+ATTEMPT_COLUMNS = [
+    "attempt_id", "system_decision", "started_at", "completed_at", "duration_seconds",
+    "case_identifier", "tester_email", "tester_name", "tester_judgement", "agreement",
+]
+
+
+def attempt(attempt_id, decision, judgement=None, case="ECN-1", tester="a@example.com"):
+    return (attempt_id, decision, datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 1, 0, 0, 2, tzinfo=timezone.utc), 2.0, case,
+            tester, "Tester", judgement, judgement == decision if judgement else False)
+
+
+def test_summary_counts_percentages_and_excludes_unjudged_agreement_denominator():
+    rows = [attempt(1, "PASS", "PASS"), attempt(2, "FAIL", "PASS"), attempt(3, "FAIL")]
+    summary = queries.get_evaluation_summary(Connection([Cursor(ATTEMPT_COLUMNS, rows)]))
+    assert summary == {
+        "total_attempts": 3, "pass_count": 1, "pass_percentage": 33.3,
+        "fail_count": 2, "fail_percentage": 66.7,         "judged_count": 2,
+        "agreement_count": 1, "agreement_percentage": 50.0,
+        "average_duration_seconds": 2.0,
+    }
+
+
+
+def test_list_attempts_builds_observable_pass_case_and_tester_filters():
+    connection = Connection([Cursor(ATTEMPT_COLUMNS, [])])
+    queries.list_attempts(connection, {"decision": "PASS", "ecn_number": "407", "tester": "lee"    })
+
+    sql, params = connection.statements[0]
+
+
+    assert "a.system_decision = %s" in sql
+    assert "ILIKE %s" in sql
+    assert "s.tester_email ILIKE %s" in sql
+    assert params[:3] == ["PASS", "%407%", "%lee%"]
+
+
+def test_list_attempts_rejects_invalid_decision_or_source_status():
+    with pytest.raises(ValueError, match="decision"):
+        queries.list_attempts(Connection([]), {"decision": "MAYBE"})
+    with pytest.raises(ValueError, match="source_status"):
+        queries.list_attempts(Connection([]), {"source_status": "ARCHIVED"})
+
+
+def test_list_attempts_applies_canonical_filters_with_and_logic_and_shapes_business_fields():
+    columns = ["attempt_id", "attempt_name", "source_status", "attempt_number", "system_decision",
+               "started_at", "completed_at", "duration_seconds", "case_identifier", "tester_email",
+               "tester_name", "tester_judgement", "agreement"]
+    row = (4, "4079118_MBOM_COMPLETED", None, 1, "PASS", None, None, 1.0, "4079118",
+           "tester@example.com", "Tester", None, False)
+    connection = Connection([Cursor(columns, [row])])
+
+    attempts = queries.list_attempts(connection, {
+        "ecn_number": "4079", "source_status": "COMPLETED", "decision": "PASS",
+    })
+
+    sql, params = connection.statements[0]
+
+
+    assert "a.system_decision = %s" in sql
+    assert "COALESCE(NULLIF(a.source_status, ''), CASE" in sql
+
+
+
+
+    assert "ILIKE %s" in sql
+    assert params == ["PASS", "COMPLETED", "%4079%"]
+    assert attempts[0]["ecn_number"] == "4079118"
+    assert attempts[0]["source_status"] == "COMPLETED"
+    assert attempts[0]["decision"] == "PASS"
+
+
+
+def test_detail_contains_payload_findings_and_files():
+    detail_row = (9, 4, 3, "4079118_MBOM_COMPLETED", "4079118", "COMPLETED", 1, "FAIL",
+                  datetime(2026, 1, 1, tzinfo=timezone.utc),
+                  datetime(2026, 1, 1, 0, 0, 2, tzinfo=timezone.utc), 2.0,
+                  {"packet": {"gate": {"blockers": [{"rule_id": "H01", "severity": "ERROR", "message": "Missing", "location": "header", "evidence": "x", "gate_effect": "FAIL"}], "warnings": [], "part_issues": [], "conflict_alerts": [], "ai_notes": {"flags": []}}}},
+                  "a@example.com", "Tester", "ECN", None, None, None)
+    columns = ["attempt_id", "session_id", "case_id", "attempt_name", "ecn_number", "source_status", "attempt_number", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
+    files = Cursor(["id", "role", "filename", "mime_type", "size_bytes", "sha256", "captured_at"], [(1, "ecn", "input.csv", "text/csv", 3, "a" * 64, datetime.now(timezone.utc))])
+    detail = queries.get_attempt_detail(
+        Connection([Cursor([], [(1,)]), Cursor(columns, [detail_row]), files]),
+        9,
+        {"id": 4, "role": "REVIEWER"},
+    )
+    assert detail["ecn_number"] == "4079118"
+    assert detail["payload"]["packet"]["gate"]["blockers"][0]["rule_id"] == "H01"
+    assert detail["findings"][0]["evidence"] == "x"
+    assert detail["files"][0]["filename"] == "input.csv"
+
+
+def test_tester_judgement_supports_independent_per_rule_comments():
+    connection = Connection([Cursor([], []), Cursor([], []), Cursor([], [])])
+    queries.save_tester_judgement(
+        connection,
+        9,
+        "pass",
+        "Overall explanation",
+        "tester@example.com",
+        {"H01": ("CORRECT", "The required field is present.")},
+    )
+    assert "tester_rule_judgements" in connection.statements[1][0]
+    assert connection.statements[1][1] == (9, "H01", "CORRECT", "The required field is present.")
+    assert "tester_judgement_recorded" in connection.statements[2][0]
+
+
+def test_judgement_and_file_retrieval_preserve_separate_system_decision():
+    connection = Connection([Cursor([], []), Cursor([], [])])
+    queries.save_tester_judgement(connection, 9, "pass", "Looks correct", "reviewer@example.com")
+    assert "UPDATE precheck_attempts" not in connection.statements[0][0]
+    assert "tester_judgement_recorded" in connection.statements[1][0]
+
+    file_connection = Connection([
+        Cursor([], [(1,)]),
+        Cursor(["filename", "mime_type", "size_bytes", "sha256", "captured_at", "content"], [("ecn.csv", "text/csv", 3, "a" * 64, None, b"ecn")]),
+    ])
+    assert queries.get_original_file(
+        file_connection, 9, "ecn", {"id": 4, "role": "REVIEWER"}
+    )["content"] == b"ecn"
+
+
+def test_admin_assignment_dispute_and_comparison_records_include_ecn_numbers():
+    attempt_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "completed_at", "tester_email", "tester_name"]
+    row = (17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", None, "tester@example.com", "Tester")
+
+    assignable_connection = Connection([Cursor(attempt_columns, [row])])
+    assignable = queries.list_assignable_attempts(assignable_connection)
+    assert assignable[0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in assignable_connection.statements[0][0]
+
+    dispute_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "review_status", "resolution_comment", "tester_email", "tester_name"]
+    dispute_row = (17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", "DISPUTED", None, "tester@example.com", "Tester")
+    disputes_connection = Connection([Cursor(dispute_columns, [dispute_row])])
+    disputes = queries.list_disputed_attempts(disputes_connection)
+    assert disputes[0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in disputes_connection.statements[0][0]
+
+    comparison_columns = ["attempt_id", "attempt_name", "ecn_number", "system_decision", "review_status"]
+    comparison_connection = Connection([
+        Cursor(comparison_columns, [(17, "ECN-4079118_MBOM_COMPLETED", "4079118", "PASS", "DISPUTED")]),
+        Cursor([], []),
+        Cursor([], []),
+    ])
+    comparison = queries.get_reviewer_comparison(comparison_connection, 17)
+    assert comparison["attempt"]["ecn_number"] == "4079118"
+    assert "logical_ecns" in comparison_connection.statements[0][0]
+
+
+def test_reviewer_queue_queries_include_ecn_numbers():
+    user = {"id": 4, "role": "REVIEWER"}
+    columns = ["attempt_id", "ecn_number", "system_decision", "started_at", "completed_at", "duration_seconds", "assignment_status", "reviewer_id", "review_status", "tester_email", "tester_name"]
+    queue_row = (17, "4079118", "FAIL", None, None, None, "ASSIGNED", 4, "READY_FOR_REVIEW", "tester@example.com", "Tester")
+
+    queue_connection = Connection([Cursor(columns, [queue_row])])
+    queue = queries.list_review_queue(queue_connection, user)
+    assert queue[0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in queue_connection.statements[0][0]
+
+    page_connection = Connection([Cursor(["count"], [(1,)]), Cursor(columns, [queue_row])])
+    page = queries.list_review_queue_page(page_connection, user)
+    assert page["attempts"][0]["ecn_number"] == "4079118"
+    assert "logical_ecns" in page_connection.statements[1][0]
+
+
+def test_admin_queries_list_users_and_assign_attempts():
+    user_columns = ["id", "email", "display_name", "role", "active", "created_at"]
+    connection = Connection([Cursor(user_columns, [(4, "reviewer@example.com", "Reviewer", "REVIEWER", True, None)]), Cursor([], []), Cursor([], []), Cursor(["status", "assigned_count", "submitted_count", "judgement_count"], [("READY_FOR_REVIEW", 1, 0, 0)]), Cursor([], [])])
+    users = queries.list_users(connection)
+    assert users[0]["role"] == "REVIEWER"
+    queries.assign_reviewer(connection, 9, 4, 1)
+    assert "review_assignments" in connection.statements[1][0]
+    assert "reviewer_assigned" in connection.statements[2][0]
+    assert connection.statements[4][1] == (9, "READY_FOR_REVIEW")
+
+
+def test_refresh_review_status_transitions_to_disputed_when_reviewers_disagree():
+    columns = ["status", "assigned_count", "submitted_count", "judgement_count"]
+    connection = Connection([
+        Cursor(columns, [("IN_REVIEW", 2, 2, 2)]),
+        Cursor([], []),
+    ])
+    assert queries.refresh_review_status(connection, 9) == "DISPUTED"
+    assert "evaluation_review_status" in connection.statements[1][0]
+    assert connection.statements[1][1] == (9, "DISPUTED")
+
+
+def test_refresh_review_status_marks_single_completed_review_as_reviewed():
+    columns = ["status", "assigned_count", "submitted_count", "judgement_count"]
+    connection = Connection([
+        Cursor(columns, [("IN_REVIEW", 1, 1, 1)]),
+        Cursor([], []),
+    ])
+    assert queries.refresh_review_status(connection, 12) == "REVIEWED"
+    assert connection.statements[1][1] == (12, "REVIEWED")
+
+
+def test_resolve_review_dispute_requires_admin_and_keeps_audit_event():
+    admin = {"id": 7, "role": "ADMINISTRATOR"}
+    connection = Connection([Cursor([], []), Cursor([], [])])
+    queries.resolve_review_dispute(connection, 9, admin, "Administrator selected FAIL after source review.")
+    assert "resolution_comment" in connection.statements[0][0]
+    assert "review_dispute_resolved" in connection.statements[1][0]
+
+
+def test_reviewer_submission_lookup_is_scoped_to_the_current_reviewer():
+    columns = ["id", "overall_judgement", "comment", "submitted_at"]
+    connection = Connection([Cursor(columns, [(12, "PASS", "Looks correct", None)])])
+    submission = queries.get_reviewer_submission(connection, 9, 4)
+    assert submission["overall_judgement"] == "PASS"
+    assert connection.statements[0][1] == (9, 4)
+    assert "reviewer_id = %s" in connection.statements[0][0]
+
+
+def test_rule_judgement_report_summarizes_disagreement_counts():
+    columns = [
+        "rule_id", "judgement_count", "distinct_judgement_count", "correct_count",
+        "incorrect_count", "unclear_count", "not_applicable_count", "disagreement",
+    ]
+    connection = Connection([Cursor(columns, [("H01", 2, 2, 1, 1, 0, 0, True)])])
+    report = queries.get_rule_judgement_report(connection, 9)
+    assert report == [{
+        "rule_id": "H01", "judgement_count": 2, "distinct_judgement_count": 2,
+        "correct_count": 1, "incorrect_count": 1, "unclear_count": 0,
+        "not_applicable_count": 0, "disagreement": True,
+    }]
+    assert connection.statements[0][1] == (9,)
+    assert "GROUP BY rr.rule_id" in connection.statements[0][0]
+
+
+def test_cross_attempt_review_report_calculates_agreement_and_rule_disagreement():
+    columns = [
+        "reviewed_attempt_count", "reviewer_submission_count", "overall_agreement_count",
+        "overall_disagreement_count", "disputed_attempt_count", "rule_judgement_count",
+        "unclear_count", "not_applicable_count", "rule_group_count", "rule_disagreement_count",
+    ]
+    row = (3, 4, 3, 1, 1, 6, 2, 1, 4, 2)
+    report = queries.get_cross_attempt_review_report(Connection([Cursor(columns, [row])]))
+    assert report == {
+        "reviewed_attempt_count": 3, "reviewer_submission_count": 4,
+        "overall_agreement_count": 3, "overall_disagreement_count": 1,
+        "overall_agreement_percentage": 75.0,         "disputed_attempt_count": 1,
+        "rule_judgement_count": 6, "unclear_count": 2, "not_applicable_count": 1,
+        "rule_group_count": 4,
+        "rule_disagreement_count": 2, "rule_disagreement_percentage": 50.0,
+
+    }
+
+
+def test_query_layer_denies_unassigned_reviewer_details_and_files():
+    connection = Connection([Cursor([], [])])
+    reviewer = {"id": 4, "role": "REVIEWER"}
+    try:
+        queries.get_attempt_detail(connection, 9, reviewer)
+    except PermissionError as exc:
+        assert "assigned" in str(exc)
+    else:
+        raise AssertionError("unassigned reviewer accessed attempt details")
+
+    connection = Connection([Cursor([], [])])
+    try:
+        queries.get_original_file(connection, 9, "ecn", reviewer)
+    except PermissionError as exc:
+        assert "assigned" in str(exc)
+    else:
+        raise AssertionError("unassigned reviewer accessed original file")
+
+
+def test_administrator_can_access_details_without_assignment_lookup():
+    detail_row = (9, 4, 3, "4079118_MBOM_COMPLETED", "4079118", "COMPLETED", 1, "PASS", None, None, None, {}, "a@example.com", "Tester", "ECN", None, None, None)
+    columns = ["attempt_id", "session_id", "case_id", "attempt_name", "ecn_number", "source_status", "attempt_number", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
+    connection = Connection([Cursor(columns, [detail_row]), Cursor([], [])])
+    detail = queries.get_attempt_detail(connection, 9, {"id": 1, "role": "ADMINISTRATOR"})
+    assert detail["attempt_id"] == 9
+    assert "review_assignments" not in connection.statements[0][0]
+
+
+def test_tester_can_access_only_owned_attempt_details_and_files():
+    detail_row = (9, 4, 3, "4079118_MBOM_COMPLETED", "4079118", "COMPLETED", 1, "PASS", None, None, None, {}, "tester@example.com", "Tester", "ECN", None, None, None)
+    columns = ["attempt_id", "session_id", "case_id", "attempt_name", "ecn_number", "source_status", "attempt_number", "system_decision", "started_at", "completed_at", "duration_seconds", "result_payload", "tester_email", "tester_name", "task_name", "tester_judgement", "judgement_explanation", "judgement_recorded_at"]
+    connection = Connection([
+        Cursor([], [(1,)]),
+        Cursor(columns, [detail_row]),
+        Cursor([], []),
+    ])
+    detail = queries.get_attempt_detail(
+        connection, 9, {"id": 8, "email": "tester@example.com", "role": "TESTER"}
+    )
+    assert detail["attempt_id"] == 9
+    assert "tester_email" in connection.statements[0][0]
+    assert connection.statements[0][1] == (9, "tester@example.com")
+
+    denied = Connection([Cursor([], [])])
+    with pytest.raises(PermissionError, match="owned"):
+        queries.get_attempt_detail(
+            denied, 9, {"id": 8, "email": "other@example.com", "role": "TESTER"}
+        )
+
+
+def test_invalid_judgement_and_missing_configuration_are_safe():
+    try:
+        queries.save_tester_judgement(Connection([]), 1, "MAYBE")
+    except ValueError as exc:
+        assert "judgement" in str(exc)
+    else:
+        raise AssertionError("invalid judgement accepted")

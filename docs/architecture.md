@@ -1,0 +1,267 @@
+# AI ECN Checker — Architecture
+
+## Prototype workflow scope
+
+The prototype is designed to handle a mix of intake sources commonly seen in ECN and BOM workflows:
+
+- email-based ECN submissions (.eml / plain-text messages)
+- form-style ECN text captured from a web form or internal intake template
+- uploaded document files such as PDF and text exports
+- CSV / Excel BOM or parts data supplied alongside the ECN
+
+The intake layer normalises these inputs into a common ECN packet before the rule engine runs.
+
+## User-interface direction and current status
+
+React is the supported browser interface for tester intake and pre-checks, reviewer queues and judgements, and administrator assignments and evaluation reporting. Flask remains responsible for authentication, authorization, and HTTP request validation; the authenticated pre-check route delegates upload staging, validation, evaluation persistence, timing, and response shaping to the `precheck_workflow` module. PostgreSQL credentials and direct database access stay server-side. Batch testing is a separate command-line workflow through `scripts/run_batch.py`, not a browser workflow. No Streamlit application is maintained.
+
+
+
+## Pipeline Overview
+
+
+Engineer submits ECN + BOM File from email / form / upload
+        │
+        ▼
+┌─────────────────────┐
+│  Stage 1: Intake    │  Email / PDF / Form / CSV → Structured ECN Packet
+└────────┬────────────┘
+         │ Structured Data
+         ▼
+┌─────────────────────┐
+│  Stage 2: Rule      │  Catalogue-driven H01/H03 required fields,
+│  Engine             │  H11 quantity, H12 duplicates, and H24 part-number format
+└────────┬────────────┘
+         │ Errors Found → Real-Time Warning shown to Engineer
+         ▼
+┌─────────────────────┐
+│  Stage 3: AI        │  ECN Description vs BOM Changes
+│  Advisory           │  Vague / Contradicting Text Detection
+└────────┬────────────┘  Fallback: rule-based if AI unavailable
+         │ Part Numbers for Lookup
+         ▼
+┌─────────────────────┐
+│  Stage 4: Context   │  Parts Master: Active / Obsolete / Phase-Out
+│  Engine (RAG)       │  Part-master status and data checks
+└────────┬────────────┘
+         │
+         ▼
+┌─────────────────────┐
+│  Stage 5: Dashboard │  Engineer View: validation and gate results
+│  (HTML)             │  Audit package and advisory context
+└────────┬────────────┘
+         │ Gate decision
+         ▼
+┌─────────────────────┐
+│  Stage 6: Email     │  FAIL → Engineer: fix and resubmit
+│  Notification       │  PASS → Engineer + CE: ready for CE review
+└─────────────────────┘
+
+
+## Rule policy and current runtime checks
+
+The versioned policy catalogue is [`docs/rules_list.json`](rules_list.json). It
+contains 32 approved rules with stable IDs: hard rules `H01`–`H23`, semantic
+rules `S01`–`S05`, and data rules `D01`–`D04`. Each definition declares its
+scope, evaluator, severity, gate effect, message, and evidence inputs. The
+human-readable policy source is [`docs/rules_origin.txt`](rules_origin.txt),
+and the full schema and target finding contract are in
+[`docs/rules_schema.md`](rules_schema.md).
+
+`scripts/rule_catalogue.py` validates the catalogue at stage startup and maps
+rules to their intended owners:
+
+| Intended owner | Evaluators | Policy IDs |
+|---|---|---|
+| Rule Engine | `deterministic` | H01–H03, H06–H08, H11–H12, H14–H22 |
+| Context Engine | `reference_lookup` | H09–H10, H13, D01–D04 |
+| AI Advisory | `semantic_heuristic`, `llm_advisory` | H04–H05, H23, S01–S05 |
+
+### Implementation status
+
+The catalogue is both policy source of truth and runtime selection registry. Entries
+with `runtime_status: "active"` are dispatched by their `check` through the Rule
+Engine registry. The active deterministic migration is:
+
+| Catalogue ID | Implemented check | Legacy compatibility |
+|---|---|---|
+| H01, H03 | Required name and description | none; canonical IDs are emitted |
+| H11 | Positive decimal quantity, including catalogue applicability and precision | none; canonical ID is emitted |
+| H12 | Duplicate BOM change lines | none; canonical ID is emitted |
+| H24 | Part-number format | none; canonical ID is emitted |
+
+Unmigrated catalogue entries are explicitly marked `runtime_status: "planned"`
+and are not executed by this incremental change. The part-number format policy is represented by the approved H24 catalogue
+entry and emits the unified finding contract; no Rxx compatibility finding is
+emitted by the staged rule engine.
+
+Context checks emit flag types such as `DISCONTINUED_PART`,
+`MISSING_SUPPLIER`, and `UOM_MISMATCH`. `MISSING_SUPPLIER` is the D03
+supplier check and applies only to normalized `EBOM` rows; MBOM and unknown
+BOM types do not emit D03. Historical ECN records are retained as
+
+context artifacts but are not evaluated or emitted as `HISTORICAL_CONFLICT`
+findings, so they do not add review work or affect the PASS/FAIL decision. The
+merge step uses the remaining context `ERROR` values and configured flag types
+for the current PASS/FAIL decision. The AI Advisory prompt is generated from active
+
+catalogue definitions for S01–S05, and its flags carry canonical rule IDs plus
+catalogue metadata and evidence. Legacy A rule IDs are not emitted. S01 and
+S05 are LLM-owned; when the provider is unavailable the fallback reports them
+as `NOT_EVALUATED` and evaluates only the semantic-heuristic rules S02–S04.
+AI findings remain advisory and do not close the gate.
+
+
+## Batch intake and filename matching
+
+`scripts/batch_intake.py` is the raw-file adapter for batch testing. It accepts
+files or directories, recursively discovers supported ECN/BOM files, and
+extracts exactly one seven-digit identifier from each filename. A BOM is matched
+to an ECN only when those filename identifiers are equal. Missing identifiers,
+ambiguous filenames, unsupported formats, and duplicate ECN identifiers are
+reported as intake errors before execution. Each ECN must also come from a
+folder named `ecn_draft` or `ecn_completed`; its `DRAFT`/`COMPLETED` source
+status is copied into batch metadata, and unknown source folders stop the batch
+before validation. BOMs with no matching ECN are skipped because they cannot
+form a validation case; matched ECNs continue and ECNs without a BOM become
+ECN-only cases.
+
+
+
+A matched BOM with no normalized rows is represented as `EMPTY`; a matched BOM
+with rows is `PRESENT`. Original paths and filename identifiers remain in
+metadata. The adapter delegates parsing to the existing staged `load_file()`
+implementation and does not duplicate file-format logic.
+
+## Command-line batch testing
+
+Batch testing is intentionally performed through `scripts/run_batch.py`, not through a browser interface. The CLI accepts files or directories, prepares ECN/BOM mappings, executes independent cases, reports per-case outcomes, and can persist results or export an offline evaluation bundle. The batch parsing and orchestration modules are shared backend logic; no browser batch workflow is required.
+
+
+## Batch orchestration
+
+`scripts/batch_orchestration.py` is the pure execution seam for normalized batch
+
+inputs. It validates ECN/BOM mappings before any case runs, creates one
+independent case for each ECN/BOM assignment (or one ECN-only case), preserves
+`ABSENT`, `EMPTY`, and `PRESENT` BOM states, and invokes the existing single-case
+validator supplied by the caller. An executor failure becomes an `ERROR` case;
+other cases continue. Progress callbacks expose completed, remaining, current
+case, and outcome counts without coupling the module to a frontend.
+
+
+The module does not read files, persist data, send email, or duplicate rule
+logic. Its `BatchResult.rerun()` operation appends a new attempt for an existing
+case, leaving earlier attempts available for evaluation metrics. Persistence is
+an optional observer of completed cases, so a database outage never changes a
+validation decision.
+
+## Evaluation persistence and offline bundles
+
+`evaluation_store.py` stores the complete result packet in `precheck_attempts.result_payload`
+and stores original uploaded bytes, filename, MIME type, byte size, capture time,
+and SHA-256 in `evaluation_files`. Counts are indexes; they do not replace the
+findings or extracted data shown to the tester. The command-line batch path uses this store when `ECN_DB_PASSWORD` is configured and otherwise continues in memory; persistence belongs to the shared backend, not to a frontend.
+
+
+`evaluation_bundle.py` provides a versioned ZIP export for offline runs. A bundle
+contains a manifest, one complete JSON result per case, and the original files.
+Import verifies every file's hash and size before calling the destination store;
+re-importing the same verified bundle is idempotent. The CLI writes one with
+`py scripts/run_batch.py ... --export-bundle out/evaluation.zip`. With PostgreSQL
+configured, the same CLI run also persists each completed case with its source
+status, canonical `{ecn_number}_MBOM_{DRAFT|COMPLETED}` attempt name, full result,
+and original input bytes. A database outage is reported as a persistence warning
+and does not change validation outcomes.
+
+
+`scripts/evaluation_queries.py` provides query and judgement operations used by the Flask API. It lists persisted attempts, calculates PASS/FAIL and tester-system agreement metrics, returns the complete result payload and rule findings for one attempt, downloads original ECN/BOM evidence, and records separate tester and reviewer judgements. Testers can open an attempt from their evaluation-record list to inspect the saved system decision, checking duration, rule findings and explanations, normalized ECN/BOM content, and source-file metadata; the detail route enforces tester ownership. Reviewers use the same persisted finding and evidence model through their assigned-attempt view. React consumes these operations through role-protected Flask routes.
+
+Testers can submit one overall PASS/FAIL judgement plus per-rule CORRECT,
+INCORRECT, UNCLEAR, or NOT_APPLICABLE comments in
+
+`tester_rule_judgements`; these records never overwrite the system decision.
+Reviewer access uses `app_users`, salted PBKDF2 password
+
+records, `review_assignments`, and independent `reviewer_submissions` rows.
+Reviewers can only see assigned attempts; before submitting, a reviewer
+cannot see aggregate judgements from other reviewers, while administrators can
+inspect the full population. The `evaluation_review_status` table derives the lifecycle
+
+`ACTIVE`, `READY_FOR_REVIEW`, `IN_REVIEW`, `REVIEWED`, or `DISPUTED` from
+assignments and independent submissions. Conflicting overall judgements become
+`DISPUTED`; an administrator can record an explanation to resolve the dispute
+without changing the original submissions, and the action is audited. The administrator dashboard reports PASS/FAIL percentages, average checking duration, tester-system agreement, aggregate reviewer agreement, disagreement, disputed attempts, and rule-level disagreement across completed attempts. It also reports UNCLEAR and NOT_APPLICABLE per-rule judgement counts. These workflows are exposed through the React interface. Configure `REVIEWER_ADMIN_EMAIL` and `REVIEWER_ADMIN_PASSWORD` to bootstrap the first administrator.
+
+
+
+
+
+## Key Files
+
+
+
+| File                          | Role                          |
+|-------------------------------|-------------------------------|
+| `scripts/run_hybrid.py`       | Main orchestrator / CLI       |
+| `scripts/stages/intake.py` | Stage 1: Parse ECN + BOM |
+| `scripts/stages/rule_engine.py` | Stage 2: Deterministic rules |
+| `scripts/stages/ai_advisory.py` | Stage 3: AI / fallback checks |
+| `scripts/rule_catalogue.py` | Validates the rule catalogue and returns rules by intended stage owner |
+| `scripts/stages/context_engine.py` | Stage 4: Parts/reference-data checks |
+| `scripts/stages/dashboard.py` | Stage 5: HTML dashboard |
+| `scripts/stages/email_notification.py` | Stage 6: gate-driven SendGrid email |
+| `scripts/batch_intake.py` | Raw-file batch preparation and filename matching |
+| `scripts/batch_orchestration.py` | Independent normalized batch case execution |
+| `scripts/run_batch.py` | Batch command-line runner and persistence/export entry point |
+| `scripts/evaluation_store.py` | PostgreSQL configuration, schema setup, and snapshot persistence |
+| `scripts/precheck_workflow.py` | Upload staging, validation orchestration, persistence, and pre-check response shaping |
+
+| `scripts/evaluation_bundle.py` | Integrity-checked offline evaluation bundle export/import |
+| `scripts/evaluation_queries.py` | Reviewer dashboard query, judgement, and evidence operations |
+| `frontend/` | React browser interface for testers, reviewers, and administrators |
+
+| `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
+| `data/ecn_intake.csv`         | Sample ECN input              |
+| `data/bom.csv`                | Sample BOM input              |
+
+## Environment Variables
+
+| Variable         | Purpose                                                         |
+|------------------|-----------------------------------------------------------------|
+| `GEMINI_API_KEY` | Enables AI Advisory (Stage 3) via Gemini OpenAI-compatible API |
+| `GEMINI_MODEL`   | Optional Gemini model override (default: `gemini-2.5-flash`)   |
+| `OPENAI_API_KEY` | Enables AI Advisory (Stage 3) via OpenAI API                   |
+| `OPENAI_MODEL`   | Optional OpenAI model override (default: `gpt-4o-mini`)        |
+| `SENDGRID_API_KEY` | Enables SendGrid notification delivery (Stage 6)              |
+| `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address for Stage 6 notifications   |
+| `DRY_RUN` | Defaults to `true`; set explicitly false only to send email          |
+| `ECN_DB_HOST` / `ECN_DB_PORT` | Local PostgreSQL connection settings |
+| `ECN_DB_NAME` / `ECN_DB_USER` / `ECN_DB_PASSWORD` | Evaluation database credentials |
+| `REVIEWER_ADMIN_EMAIL` | Email for the bootstrap administrator |
+| `REVIEWER_ADMIN_PASSWORD` | Private bootstrap administrator password |
+
+
+
+## AI advisory response contract
+
+Stage 3 stores an advisory object with `overall_risk`, `description_quality`,
+`flags`, `recommendation`, `ai_available`, and `response_status`. A provider may
+return an empty `flags` list only for a `LOW` / `CLEAR` assessment. Every model
+flag must identify one of S01–S05; invalid or missing rule IDs produce an
+`AI_RESPONSE_INCOMPLETE` advisory flag and set `response_status` to
+`INCOMPLETE`. If a provider returns `MEDIUM` or `HIGH` risk, or `VAGUE` or
+`CONTRADICTING` quality, without supporting flags, the same integrity flag is
+added. This is advisory only; it makes missing evidence visible and requires
+manual review rather than silently showing “No AI flags.”
+
+## Key design decisions
+
+- ECN Conflict Log is not available in the current implementation.
+
+
+                                
+                                
+                                
+                                
+                                
