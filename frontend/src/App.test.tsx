@@ -32,9 +32,13 @@ describe("tester pre-check workflow", () => {
               decision: "FAIL",
               summary: { total_files: 2, total_issues: 1, errors: 1, warnings: 0 },
               findings: [{ rule: "ECN-H-001", severity: "error", message: "Missing reason for change." }],
-              persistence: { saved: true, attempt_id: 82, duration_seconds: 3.2 },
+                            persistence: { saved: true, attempt_id: 82, duration_seconds: 3.2 },
+              notification: { sent: false, status: "not_configured", message: "Proofpoint delivery is not configured." },
             });
+          case "/api/notification":
+            return jsonResponse({ notifications: [{ sent: false, status: "not_configured", message: "Proofpoint delivery is not configured." }] });
           case "/api/tester/attempts/82/judgement":
+
             return jsonResponse({ saved: true });
           default:
             return jsonResponse({ attempts: [] });
@@ -58,10 +62,13 @@ describe("tester pre-check workflow", () => {
     expect(fetch).toHaveBeenCalledWith("/api/precheck", expect.objectContaining({ method: "POST" }));
     expect(await screen.findByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
     expect(screen.getAllByText("Missing reason for change.")).toHaveLength(2);
-    expect(screen.getByText("Add the required fields to the ECN header.")).toBeInTheDocument();
+        expect(screen.getByText("Add the required fields to the ECN header.")).toBeInTheDocument();
     expect(screen.getByText("Evaluation saved for reviewer follow-up.")).toBeInTheDocument();
+    expect(screen.getByText("Proofpoint delivery is not configured.")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/recipient|next checker/i)).not.toBeInTheDocument();
 
     const precheckRequest = vi.mocked(fetch).mock.calls.find(([input]) => input === "/api/precheck");
+
     expect(precheckRequest?.[1]?.method).toBe("POST");
     expect(precheckRequest?.[1]?.body).toBeInstanceOf(FormData);
     const submittedFiles = precheckRequest?.[1]?.body as FormData;
@@ -69,7 +76,52 @@ describe("tester pre-check workflow", () => {
     expect((submittedFiles.get("bom") as File).name).toBe("parts.csv");
   });
 
-  it("serializes manual ECN and BOM entry to the same pre-check upload endpoint", async () => {
+    it("retries a saved FAIL notification using only the attempt identifier", async () => {
+      const user = userEvent.setup();
+      render(<App />);
+
+      expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
+      await user.upload(screen.getByLabelText(/ECN file/), new File(["ecn data"], "change.csv", { type: "text/csv" }));
+    fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
+    expect(await screen.findByText("Proofpoint delivery is not configured.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry notification" }));
+
+    const retryRequest = vi.mocked(fetch).mock.calls.find(([input]) => input === "/api/notification");
+    expect(retryRequest?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(retryRequest?.[1]?.body))).toEqual({ attempt_id: 82 });
+    expect(JSON.parse(String(retryRequest?.[1]?.body))).not.toHaveProperty("recipient");
+  });
+
+    it("explains PASS result email is separate from the reviewer task reminder", async () => {
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/health") return jsonResponse({ status: "ok" });
+      if (String(input) === "/api/auth/session") return jsonResponse({ user: tester });
+      if (String(input) === "/api/precheck") return jsonResponse({
+                decision: "PASS",
+        summary: { total_files: 1, total_issues: 0, errors: 0, warnings: 0 },
+        findings: [],
+        notification: { sent: true, status: "sent", message: "Validation result notification sent." },
+        persistence: { saved: true, attempt_id: 83, duration_seconds: 1.2 },
+
+      });
+      return jsonResponse({ attempts: [] });
+    }));
+        const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Check an ECN before submission" })).toBeInTheDocument();
+    await user.upload(screen.getByLabelText(/ECN file/), new File(["ecn data"], "change.csv", { type: "text/csv" }));
+    fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
+
+        expect(await screen.findByText(/The result is emailed to the configured checker/)).toBeInTheDocument();
+    expect(screen.getByText("Validation result notification sent.")).toBeInTheDocument();
+
+    expect(screen.queryByLabelText(/recipient|next checker email/i)).not.toBeInTheDocument();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => input === "/api/notification")).toBe(false);
+  });
+
+    it("serializes manual ECN and BOM entry to the same pre-check upload endpoint", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -221,7 +273,7 @@ describe("tester pre-check workflow", () => {
     await user.type(screen.getByLabelText("Explanation"), "The required reason is present in the source document.");
     fireEvent.submit(screen.getByRole("button", { name: "Submit tester judgement" }).closest("form")!);
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Your judgement was saved for evaluation.");
+    expect(await screen.findByText("Your judgement was saved for evaluation.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "FAIL — action needed" })).toBeInTheDocument();
     expect(screen.getByLabelText("Your overall judgement")).toHaveValue("PASS");
 

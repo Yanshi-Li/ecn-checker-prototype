@@ -187,33 +187,20 @@ For each rule, use the available judgement value that best describes your assess
 
 Do not change the system decision to make it match your judgement. The purpose of this test is to measure agreement and disagreement.
 
-### Step 7: Test email behavior when required
+### Step 7: Observe automatic email behavior when required
 
-Email testing must be performed only when the test scenario requests it and the application owner has enabled a safe test mail configuration.
+The app controls recipients; testers do not enter an email address or manually send the result.
 
 #### Failed result
 
-For a `FAIL` result:
-
-1. Confirm that the result is shown as `FAIL`.
-2. Enter the identified tester's email address as the recipient.
-3. Send the validation report if the button is available.
-4. Record whether the application reports `sent`, unavailable, or failed.
-5. Confirm that the email contains the decision, blockers, and relevant findings.
-
-A failed result is restricted to the tester's email address in the current workflow.
+For a saved `FAIL` result, the app automatically attempts to email the signed-in tester. Record whether the status is `sent`, `failed`, or `not_configured`. If delivery failed and the retry action is available, use it only when the test scenario requests a retry. Do not rerun the pre-check just to retry email.
 
 #### Passed result
 
-For a `PASS` result:
+A `PASS` result does not send email immediately. An administrator must assign the saved attempt to a reviewer; the app then attempts delivery to that assigned reviewer's internal account. Record the assignment outcome and separate email-delivery status. A delivery failure must not be reported as an assignment failure.
 
-1. Confirm that the result is shown as `PASS`.
-2. Enter the approved next-checker email address.
-3. Send the validation report if the scenario requires it.
-4. Record whether the application reports `sent`, unavailable, or failed.
-5. Confirm that the email identifies the result as a report and does not claim to be an approval.
+Emails are reports, not approval decisions, and do not attach the submitted ECN or BOM. Real delivery remains unavailable until the application owner supplies the Proofpoint send and authentication contract through approved backend configuration. Never test with an external recipient.
 
-Never use a real customer's or external person's email address for a test unless the test owner has approved it.
 
 ### Step 8: Record completion
 
@@ -323,6 +310,7 @@ Also review rule-level disagreements. A rule with frequent `INCORRECT` or `UNCLE
 - [ ] I reviewed every rule, explanation, and evidence item.
 - [ ] I recorded my independent tester judgement.
 - [ ] I recorded whether I agreed with the system.
-- [ ] I tested email only when requested and used an approved test recipient.
+- [ ] I recorded automatic email status only when the scenario requested it; for PASS, I verified reviewer assignment separately from delivery status.
+
 - [ ] I reported confusing, missing, incorrect, or unsafe behavior.
 - [ ] I did not include credentials or confidential data in my notes.

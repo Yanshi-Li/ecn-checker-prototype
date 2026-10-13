@@ -23,7 +23,6 @@ class _FakeConnection:
         self.rows = iter(rows)
 
     class _Transaction:
-
         def __init__(self, connection):
             self.connection = connection
 
@@ -39,11 +38,14 @@ class _FakeConnection:
 
     def execute(self, statement, params=None):
         self.executed.append((statement, params))
-        if "RETURNING id" in statement:
+        if "RETURNING id" in statement or "SELECT id, status, recipient, notification_kind" in statement:
             return _FakeCursor(next(self.rows))
         if "RETURNING EXTRACT(EPOCH" in statement:
             return _FakeCursor((4.0,))
         return _FakeCursor((1,))
+
+
+
 
 
 def test_connect_uses_dedicated_local_database_configuration(monkeypatch):
@@ -249,6 +251,56 @@ def test_record_notification_rejects_unsafe_status_and_recipient():
     connection = _FakeConnection()
     with pytest.raises(ValueError, match="notification status"):
         evaluation_store.record_notification_attempt(connection, 1, "report", "tester@example.com", "unknown")
+
+
+def test_claim_notification_attempt_starts_a_new_delivery_and_uses_idempotency_key():
+    connection = _FakeConnection(rows=[(81,)])
+
+    claimed, status = evaluation_store.claim_notification_attempt(
+        connection, 81, "validation_report", "tester@fisherpaykel.com", "stable-key",
+    )
+
+    assert (claimed, status) == (True, "requested")
+    statement, params = connection.executed[0]
+    assert "ON CONFLICT (idempotency_key)" in statement
+    assert params == (81, "validation_report", "tester@fisherpaykel.com", "stable-key")
+
+
+def test_claim_notification_attempt_skips_duplicate_sent_delivery():
+    connection = _FakeConnection(rows=[None, (81, "sent", "tester@fisherpaykel.com", "validation_report")])
+
+    claimed, status = evaluation_store.claim_notification_attempt(
+        connection, 81, "validation_report", "tester@fisherpaykel.com", "stable-key",
+    )
+
+    assert (claimed, status) == (False, "sent")
+    assert not any("UPDATE notification_attempts" in statement for statement, _ in connection.executed)
+
+
+def test_failed_notification_can_be_retried_and_completion_records_safe_event():
+    claim_connection = _FakeConnection(rows=[None, (81, "failed", "tester@fisherpaykel.com", "validation_report")])
+
+    claimed, status = evaluation_store.claim_notification_attempt(
+        claim_connection, 81, "validation_report", "tester@fisherpaykel.com", "stable-key",
+    )
+
+    assert (claimed, status) == (True, "requested")
+    assert any("SET status = 'requested'" in statement for statement, _ in claim_connection.executed)
+
+    completion_connection = _FakeConnection()
+    evaluation_store.complete_notification_attempt(
+        completion_connection, 81, "validation_report", "tester@fisherpaykel.com",
+        "stable-key", "failed", "token=<REDACTED> provider response",
+    )
+
+    completion = next(params for statement, params in completion_connection.executed if "UPDATE notification_attempts" in statement)
+    event = next(params for statement, params in completion_connection.executed if "INSERT INTO evaluation_events" in statement)
+    assert completion[0] == "failed"
+    assert completion[1] == "token=<REDACTED> provider response"
+    assert event[0] == "notification_failed"
+
+
+
 
 
 

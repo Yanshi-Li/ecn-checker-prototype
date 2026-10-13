@@ -15,7 +15,7 @@ import re
 
 
 NOTIFICATION_STATUSES = frozenset({"requested", "sent", "failed"})
-NOTIFICATION_KINDS = frozenset({"validation_report", "gate_notification", "other"})
+NOTIFICATION_KINDS = frozenset({"validation_report", "review_assignment_reminder", "gate_notification", "other"})
 SOURCE_STATUSES = frozenset({"DRAFT", "COMPLETED"})
 
 
@@ -214,7 +214,74 @@ def record_notification_attempt(
         _insert_notification(connection, attempt_id, notification)
 
 
+def claim_notification_attempt(
+    connection,
+    attempt_id: int,
+    notification_kind: str,
+    recipient: str,
+    idempotency_key: str,
+) -> tuple[bool, str]:
+    """Claim a delivery, skip sent/in-flight duplicates, and permit failed retries."""
+    kind, safe_recipient, _ = _normalise_notification(notification_kind, recipient, "requested")
+    with connection.transaction():
+        cursor = connection.execute(
+            """INSERT INTO notification_attempts
+               (precheck_attempt_id, notification_kind, recipient, status, idempotency_key)
+               VALUES (%s, %s, %s, 'requested', %s)
+               ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+               RETURNING id""",
+            (attempt_id, kind, safe_recipient, idempotency_key),
+        )
+        row = cursor.fetchone()
+        if row is not None:
+            return True, "requested"
+        existing = connection.execute(
+            """SELECT id, status, recipient, notification_kind
+               FROM notification_attempts WHERE idempotency_key = %s FOR UPDATE""",
+            (idempotency_key,),
+        ).fetchone()
+        if existing is None:
+            return False, "requested"
+        _, status, existing_recipient, existing_kind = existing
+        if existing_recipient.casefold() != safe_recipient.casefold() or existing_kind != kind:
+            raise ValueError("notification idempotency key does not match delivery")
+        if status != "failed":
+            return False, str(status)
+        connection.execute(
+            """UPDATE notification_attempts SET status = 'requested', requested_at = CURRENT_TIMESTAMP,
+               completed_at = NULL, error_message = NULL WHERE id = %s""",
+            (existing[0],),
+        )
+        return True, "requested"
+
+
+def complete_notification_attempt(
+    connection,
+    attempt_id: int,
+    notification_kind: str,
+    recipient: str,
+    idempotency_key: str,
+    status: str,
+    error: object = None,
+) -> None:
+    """Persist a delivery outcome and its evaluation event without provider data."""
+    kind, safe_recipient, normalized_status = _normalise_notification(notification_kind, recipient, status)
+    with connection.transaction():
+        connection.execute(
+            """UPDATE notification_attempts
+               SET status = %s, completed_at = CURRENT_TIMESTAMP, error_message = %s
+               WHERE precheck_attempt_id = %s AND notification_kind = %s AND idempotency_key = %s""",
+            (normalized_status, _safe_error_message(error), attempt_id, kind, idempotency_key),
+        )
+        connection.execute(
+            """INSERT INTO evaluation_events (session_id, precheck_attempt_id, event_type, metadata)
+               SELECT session_id, id, %s, %s FROM precheck_attempts WHERE id = %s""",
+            (f"notification_{normalized_status}", Jsonb({"kind": kind, "recipient": safe_recipient}), attempt_id),
+        )
+
+
 def connect_evaluation_db(environ: Mapping[str, str] | None = None):
+
     """Open the local evaluation database using environment configuration."""
     environment = environ if environ is not None else os.environ
     password = environment.get("ECN_DB_PASSWORD")

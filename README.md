@@ -131,7 +131,16 @@ For local use, the AI advisory and Flask backend read environment variables; the
 | `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. | CLI and Flask | `https://gateway.aitools.corp.fisherpaykel.com` |
 | `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Flask | `your-sendgrid-api-key` |
 | `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address. Required only when live email is enabled. | CLI and Flask | `verified-sender@example.com` |
-| `DRY_RUN` | Controls whether notifications are only logged rather than sent. | CLI and Flask | `true` (default); set `false`, `0`, `no`, or `off` to enable delivery |
+| `DRY_RUN` | Controls the existing CLI/Stage 6 SendGrid path. It does not enable Proofpoint web-app delivery. | CLI and Flask | `true` (default) |
+| `PROOFPOINT_TOKEN_URL` | Proofpoint OAuth token URL. | Flask web app | `https://mail-us.ser.proofpoint.com/v1/token` |
+| `PROOFPOINT_SEND_URL` | Proofpoint send-email URL; must be supplied by IT. | Flask web app | Unset until confirmed |
+| `PROOFPOINT_SENDER_ADDRESS` | Approved internal sender. | Flask web app | `ai-ecn-notifications@fisherpaykel.com` |
+| `PROOFPOINT_CLIENT_ID` / `PROOFPOINT_CLIENT_SECRET` | Backend credentials; secret supplied through approved secret configuration. | Flask web app | No defaults |
+| `PROOFPOINT_TOKEN_*` / `PROOFPOINT_SEND_*` | Grant/scope or audience, request formats, field mappings, and token response field; exact values must come from IT. | Flask web app | Unset until confirmed |
+| `ECN_PASS_RESULT_RECIPIENT` | Fixed internal recipient for saved PASS result reports. | Flask web app | `yanshi.li@fisherpaykel.com` |
+| `ECN_APP_URL` | Optional safe application URL included in notification email. | Flask web app | No default |
+
+
 | `ECN_DB_HOST` | Local evaluation database host. | Evaluation store | `localhost` |
 | `ECN_DB_PORT` | Local evaluation database port. | Evaluation store | `5432` |
 | `ECN_DB_NAME` | Evaluation database name. | Evaluation store | `ecn_prechecker_evaluation` |
@@ -153,9 +162,23 @@ python -m pytest -q
 
 The backend suite covers intake (including sample HTML ECN and PDF MBOM extraction), the validated rule catalogue and stage ownership mapping, deterministic rules, AI fallback/configuration, part-master checks, merge/gate behavior, notification rendering, evaluation persistence, reviewer/admin operations, the hybrid pipeline, and the legacy CSV checker. React behavior tests cover tester pre-checks, independent judgements, and administrator account creation; run them from `frontend/` with `npm test`.
 
-## Email notifications
+## Web-app email notifications
 
-Node **6a** is the `FAIL` path: it notifies only the engineer with blockers and part issues so the ECN can be fixed and resubmitted. Node **6b** is the `PASS` path: it notifies the engineer and Chief Engineer that the ECN is ready for CE review, including advisory warnings and AI notes. `DRY_RUN` defaults to `true`, so no email is sent unless it is explicitly disabled and valid SendGrid credentials plus a verified sender address are configured.
+The React/Flask web-app notification flow uses Proofpoint. After a saved `FAIL`, Flask attempts to email the signed-in tester. After a saved `PASS`, Flask attempts to email the configured `ECN_PASS_RESULT_RECIPIENT` (default: `yanshi.li@fisherpaykel.com`). When an administrator assigns a reviewer, Flask sends that reviewer a separate task reminder that does not include the validation decision or findings. Recipients are derived server-side; the browser cannot choose an arbitrary address. Delivery failures do not undo a saved result or reviewer assignment. Outcomes are recorded in `notification_attempts`, and an authorized tester can retry a failed result notification without rerunning the pre-check.
+
+
+Known Proofpoint configuration:
+
+- Host: `https://mail-us.ser.proofpoint.com`
+- Token URL: `https://mail-us.ser.proofpoint.com/v1/token`
+- Sender: `ai-ecn-notifications@fisherpaykel.com`
+- Recipient domain: `fisherpaykel.com` (enforced case-insensitively by Flask)
+- Client secret: provide only through approved backend secret configuration; never place it in browser code, PostgreSQL, docs, tests, or source control.
+
+**Production delivery is not configured or verified.** IT must provide the send-email URL, token request contract (grant type and required scope or audience), token response field, and email-send request contract (format and field names). Until those exact values are supplied, leave the corresponding `PROOFPOINT_*` settings unset: the app reports `not_configured` and makes no external request. The backend supports explicit configuration for these values; it does not guess the Proofpoint contract or fall back to SMTP/SendGrid. `ECN_APP_URL` is optional and is included in the email only when configured as a safe URL.
+
+This web-app integration is separate from the CLI/Stage 6 notification path, which retains its existing SendGrid behavior and `DRY_RUN` policy.
+
 
 ## Known limitations / TODO
 
@@ -175,7 +198,8 @@ Node **6a** is the `FAIL` path: it notifies only the engineer with blockers and 
 | `scripts/app.py` | Flask backend — authenticated API, pre-checks, evaluation storage, and notifications |
 | `scripts/ecn_checker.py` | Core validation rule engine |
 | `scripts/run_hybrid.py` | End-to-end CLI pipeline |
-| `scripts/stages/validation_notification.py` | Validation report email builder and SMTP sender |
+| `scripts/stages/validation_notification.py` | Proofpoint validation-report and reviewer-task email builders/senders |
+
 | `frontend/` | React browser interface for testers, reviewers, and administrators |
 
 | `data/` | Sample CSV inputs used by the prototype |

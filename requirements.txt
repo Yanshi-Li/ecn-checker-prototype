@@ -1,9 +1,8 @@
-
-
+httpx>=0.27.0
+truststore>=0.9.0
 pandas
 openpyxl
 pdfplumber
-httpx
 openai
 sendgrid
 psycopg[binary]
