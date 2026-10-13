@@ -137,7 +137,9 @@ For local use, the AI advisory and Flask backend read environment variables; the
 | `PROOFPOINT_SENDER_ADDRESS` | Approved internal sender. | Flask web app | `ai-ecn-notifications@fisherpaykel.com` |
 | `PROOFPOINT_CLIENT_ID` / `PROOFPOINT_CLIENT_SECRET` | Backend credentials; secret supplied through approved secret configuration. | Flask web app | No defaults |
 | `PROOFPOINT_TOKEN_*` / `PROOFPOINT_SEND_*` | Grant/scope or audience, request formats, field mappings, and token response field; exact values must come from IT. | Flask web app | Unset until confirmed |
+| `ECN_PASS_RESULT_RECIPIENT` | Fixed internal recipient for saved PASS result reports. | Flask web app | `yanshi.li@fisherpaykel.com` |
 | `ECN_APP_URL` | Optional safe application URL included in notification email. | Flask web app | No default |
+
 
 | `ECN_DB_HOST` | Local evaluation database host. | Evaluation store | `localhost` |
 | `ECN_DB_PORT` | Local evaluation database port. | Evaluation store | `5432` |
@@ -162,7 +164,8 @@ The backend suite covers intake (including sample HTML ECN and PDF MBOM extracti
 
 ## Web-app email notifications
 
-The React/Flask web-app notification flow uses Proofpoint. After a `FAIL` result is saved, Flask automatically attempts to email the signed-in tester. For `PASS`, Flask attempts delivery to the reviewer selected by an administrator, after the reviewer assignment is saved. Recipients are derived and checked on the backend; the browser cannot choose an arbitrary address. Delivery failures do not undo a saved result or reviewer assignment. The outcome is recorded in `notification_attempts`, and an authorized user can retry a failed delivery without rerunning the pre-check.
+The React/Flask web-app notification flow uses Proofpoint. After a saved `FAIL`, Flask attempts to email the signed-in tester. After a saved `PASS`, Flask attempts to email the configured `ECN_PASS_RESULT_RECIPIENT` (default: `yanshi.li@fisherpaykel.com`). When an administrator assigns a reviewer, Flask sends that reviewer a separate task reminder that does not include the validation decision or findings. Recipients are derived server-side; the browser cannot choose an arbitrary address. Delivery failures do not undo a saved result or reviewer assignment. Outcomes are recorded in `notification_attempts`, and an authorized tester can retry a failed result notification without rerunning the pre-check.
+
 
 Known Proofpoint configuration:
 
@@ -195,7 +198,8 @@ This web-app integration is separate from the CLI/Stage 6 notification path, whi
 | `scripts/app.py` | Flask backend — authenticated API, pre-checks, evaluation storage, and notifications |
 | `scripts/ecn_checker.py` | Core validation rule engine |
 | `scripts/run_hybrid.py` | End-to-end CLI pipeline |
-| `scripts/stages/validation_notification.py` | Validation report email builder and SMTP sender |
+| `scripts/stages/validation_notification.py` | Proofpoint validation-report and reviewer-task email builders/senders |
+
 | `frontend/` | React browser interface for testers, reviewers, and administrators |
 
 | `data/` | Sample CSV inputs used by the prototype |

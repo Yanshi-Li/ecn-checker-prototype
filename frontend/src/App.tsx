@@ -259,8 +259,9 @@ function App() {
     }
   }
 
-  async function retryNotification() {
-    if (!result?.persistence.attempt_id || isPass) return;
+    async function retryNotification() {
+    if (!result?.persistence.attempt_id) return;
+
     setNotificationStatus("Retrying notification…");
 
     try {
@@ -451,7 +452,8 @@ function App() {
               </div>
               <div className="result-actions">
                                 <button className="secondary-button" type="button" onClick={downloadReport}>Download report</button>
-                {result.persistence.saved && isPass && <p className="empty-state">An administrator assigns the next checker; the result is emailed to that assigned reviewer.</p>}
+                                {result.persistence.saved && isPass && <p className="empty-state">The result is emailed to the configured checker. When an administrator assigns a reviewer, that reviewer receives a separate task reminder.</p>}
+
 
               </div>
             </div>
@@ -460,7 +462,8 @@ function App() {
 
             {result.persistence.saved && <p className="empty-state">Evaluation saved for reviewer follow-up.</p>}
             {notificationStatus && <p className="empty-state" role="status">{notificationStatus}</p>}
-            {result.persistence.saved && !isPass && result.notification?.status !== "sent" && <button className="secondary-button" type="button" onClick={() => void retryNotification()}>Retry notification</button>}
+                        {result.persistence.saved && result.notification?.status !== "sent" && <button className="secondary-button" type="button" onClick={() => void retryNotification()}>Retry notification</button>}
+
 
             {result.persistence.saved && result.persistence.attempt_id && <TesterJudgement result={result} findings={findings} />}
 

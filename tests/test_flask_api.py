@@ -201,7 +201,36 @@ def test_saved_fail_precheck_automatically_notifies_the_signed_in_tester(monkeyp
     assert delivered[0][0:3] == (81, "validation_report", "tester@fisherpaykel.com")
 
 
+def test_saved_pass_precheck_automatically_sends_result_to_fixed_checker(monkeypatch):
+    delivered = []
+    monkeypatch.setattr(flask_app.precheck_workflow, "run_precheck", lambda *_: {
+        "header": {"change_notice_number": "ECN-4079118"},
+        "gate": {"decision": "PASS", "blockers": [], "part_issues": [], "conflict_alerts": [], "warnings": []},
+    })
+    monkeypatch.setattr(flask_app.precheck_workflow, "_persist_precheck", lambda *_args, **_kwargs: {
+        "saved": True, "attempt_id": 82, "ecn_number": "ECN-4079118",
+    })
+    monkeypatch.setattr(flask_app, "_deliver_notification", lambda *args: delivered.append(args) or {
+        "sent": True, "status": "sent", "message": "Validation result notification sent.",
+    })
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"id": 4, "email": "tester@fisherpaykel.com", "role": "TESTER"}
+
+    response = client.post(
+        "/api/precheck",
+        data={"ecn": (BytesIO(b"change_notice_number\\nECN-4079118\\n"), "ECN_4079118.csv")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert delivered[0][0:3] == (82, "validation_report", "yanshi.li@fisherpaykel.com")
+    assert delivered[0][3]["gate"]["decision"] == "PASS"
+    assert response.get_json()["notification"]["status"] == "sent"
+
+
 def test_unsaved_precheck_does_not_send_a_notification(monkeypatch):
+
     monkeypatch.setattr(flask_app.precheck_workflow, "run_precheck", lambda *_: {
         "gate": {"decision": "FAIL", "blockers": []},
     })
@@ -569,7 +598,7 @@ def test_failed_result_retry_uses_the_authenticated_tester_as_recipient(monkeypa
     assert response.get_json()["sent"] is True
 
 
-def test_pass_result_is_emailed_to_the_assigned_checker(monkeypatch):
+def test_reviewer_assignment_sends_task_reminder_without_validation_result(monkeypatch):
     connection = object()
     delivered = []
     monkeypatch.setattr(flask_app, "connect_evaluation_db", lambda: _ConnectionContext(connection))
@@ -579,10 +608,11 @@ def test_pass_result_is_emailed_to_the_assigned_checker(monkeypatch):
         {"reviewer_id": 9, "email": "checker@fisherpaykel.com", "status": "ASSIGNED"},
     ])
     monkeypatch.setattr(flask_app.evaluation_queries, "get_attempt_detail", lambda *_: {
-        "system_decision": "PASS", "payload": {"packet": {"gate": {"decision": "PASS"}}},
+        "system_decision": "FAIL", "ecn_number": "ECN-4079118",
+        "payload": {"packet": {"gate": {"decision": "FAIL", "blockers": [{"rule_id": "H01"}]}}},
     })
     monkeypatch.setattr(flask_app, "_deliver_notification", lambda *args: delivered.append(args) or {
-        "sent": True, "status": "sent", "message": "Validation result notification sent.",
+        "sent": True, "status": "sent", "message": "Reviewer task reminder sent.",
     })
     client = app.test_client()
     with client.session_transaction() as session:
@@ -591,8 +621,10 @@ def test_pass_result_is_emailed_to_the_assigned_checker(monkeypatch):
     response = client.post("/api/admin/assignments", json={"attempt_id": 17, "reviewer_id": 9})
 
     assert response.status_code == 200
-    assert delivered[0][0:3] == (17, "validation_report", "checker@fisherpaykel.com")
+    assert delivered[0][0:3] == (17, "review_assignment_reminder", "checker@fisherpaykel.com")
+    assert delivered[0][3] == {"header": {"change_notice_number": "ECN-4079118"}}
     assert response.get_json()["notification"]["sent"] is True
+
 
 
 
@@ -607,9 +639,13 @@ def test_email_failure_does_not_fail_reviewer_assignment(monkeypatch):
         {"reviewer_id": 9, "email": "checker@fisherpaykel.com", "status": "ASSIGNED"},
     ])
     monkeypatch.setattr(flask_app.evaluation_queries, "get_attempt_detail", lambda *_: {
-        "system_decision": "PASS", "payload": {"packet": {"gate": {"decision": "PASS"}}},
+
+        "system_decision": "PASS", "ecn_number": "ECN-4079118",
+        "payload": {"packet": {"gate": {"decision": "PASS"}}},
     })
+
     monkeypatch.setattr(flask_app, "_deliver_notification", lambda *_: {
+
         "sent": False, "status": "failed", "message": "Email could not be sent; the saved pre-check is unchanged.",
     })
     client = app.test_client()

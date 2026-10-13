@@ -1,6 +1,7 @@
 
 from __future__ import annotations
-
+from dotenv import load_dotenv
+load_dotenv()
 import io
 import os
 import sys
@@ -32,7 +33,8 @@ from scripts.evaluation_store import (
 )
 
 
-from scripts.stages.validation_notification import send_validation_email
+from scripts.stages.validation_notification import send_reviewer_task_reminder, send_validation_email
+
 from scripts.evaluation_auth import can_test, normalise_role
 
 
@@ -142,38 +144,58 @@ def api_precheck():
 
     if user is None:
         return jsonify({"error": "Sign in before running a pre-check."}), 401
+
     if not can_test(user["role"]):
         return jsonify({"error": "Tester access is required to run a pre-check."}), 403
     if ecn_file is None or not ecn_file.filename:
+
+
         return jsonify({"error": "An ECN file is required."}), 400
 
     source_status = str(request.form.get("source_status", "DRAFT")).strip().upper()
+
     if source_status not in {"DRAFT", "COMPLETED"}:
+
+
         return jsonify({"error": "source_status must be DRAFT or COMPLETED."}), 400
 
     try:
         result = precheck_workflow.run_precheck_workflow(
+
             ecn_file,
             bom_file,
             tester_email=str(user["email"]),
             tester_name=str(user.get("display_name", "")),
             source_status=source_status,
         )
+
         persistence = result.get("persistence", {})
-        if result.get("decision") == "FAIL" and persistence.get("saved") and persistence.get("attempt_id"):
+
+
+
+        decision = str(result.get("decision", "")).upper()
+
+
+        if decision in {"PASS", "FAIL"} and persistence.get("saved") and persistence.get("attempt_id"):
             packet = {
                 "header": {"change_notice_number": persistence.get("ecn_number") or "N/A"},
                 "gate": {
-                    "decision": "FAIL",
+                    "decision": decision,
                     "blockers": [
                         {"rule_id": item.get("rule"), "severity": item.get("severity")}
                         for item in result.get("findings", [])
                     ],
                 },
             }
-            result["notification"] = _deliver_notification(
-                int(persistence["attempt_id"]), "validation_report", str(user["email"]), packet,
+            recipient = (
+                str(user["email"])
+                if decision == "FAIL"
+                else os.environ.get("ECN_PASS_RESULT_RECIPIENT", "yanshi.li@fisherpaykel.com").strip()
             )
+            result["notification"] = _deliver_notification(
+                int(persistence["attempt_id"]), "validation_report", recipient, packet,
+            )
+
         return jsonify(result)
     except Exception as exc:
         return jsonify({"error": f"The pre-check could not be completed: {type(exc).__name__}."}), 422
@@ -289,26 +311,36 @@ def api_admin_assign_reviewer():
         return error
 
     body = request.get_json(silent=True) or {}
+
     try:
         attempt_id = int(body.get("attempt_id"))
         reviewer_id = int(body.get("reviewer_id"))
+
+
         with connect_evaluation_db() as connection:
             initialise_schema(connection)
             evaluation_queries.assign_reviewer(connection, attempt_id, reviewer_id, int(user["id"]))
             assignments = evaluation_queries.list_assignments(connection, attempt_id)
             detail = evaluation_queries.get_attempt_detail(connection, attempt_id, user)
+
         notification = None
-        if detail and str(detail.get("system_decision", "")).upper() == "PASS":
+
+
+        if detail:
+
             assigned = next((
                 item for item in assignments
                 if int(item.get("reviewer_id", -1)) == reviewer_id and item.get("status") != "REVOKED"
             ), None)
-            payload = detail.get("payload", {})
-            packet = payload.get("packet", {}) if isinstance(payload, dict) else {}
             if assigned:
                 notification = _deliver_notification(
-                    attempt_id, "validation_report", str(assigned.get("email", "")), packet,
+
+                    attempt_id,
+                    "review_assignment_reminder",
+                    str(assigned.get("email", "")),
+                    {"header": {"change_notice_number": detail.get("ecn_number") or "N/A"}},
                 )
+
         return jsonify({"saved": True, "assignments": assignments, "notification": notification})
     except (TypeError, ValueError):
         return jsonify({"error": "attempt_id and reviewer_id are required."}), 400
@@ -716,6 +748,7 @@ def _deliver_notification(attempt_id: int, kind: str, recipient: str, packet: di
     from hashlib import sha256
 
     normalized_recipient = recipient.strip().casefold()
+
     key = sha256(f"{attempt_id}|{kind}|{normalized_recipient}".encode("utf-8")).hexdigest()
     try:
         with connect_evaluation_db() as connection:
@@ -723,12 +756,19 @@ def _deliver_notification(attempt_id: int, kind: str, recipient: str, packet: di
             claimed, existing_status = claim_notification_attempt(
                 connection, attempt_id, kind, recipient, key,
             )
+
         if not claimed:
             if existing_status == "sent":
-                return {"sent": True, "status": "sent", "message": "Validation result notification was already sent."}
-            return {"sent": False, "status": existing_status, "message": "A notification for this result is already in progress."}
+                return {"sent": True, "status": "sent", "message": "Notification was already sent."}
+            return {"sent": False, "status": existing_status, "message": "A notification is already in progress."}
 
-        result = send_validation_email(packet, recipient)
+        sender = send_reviewer_task_reminder if kind == "review_assignment_reminder" else send_validation_email
+
+
+        result = sender(packet, recipient)
+
+
+
         status = "sent" if result.get("sent") else "failed"
         with connect_evaluation_db() as connection:
             complete_notification_attempt(
@@ -752,32 +792,43 @@ def api_notification():
         return jsonify({"error": "Sign in before retrying a notification."}), 401
     body = request.get_json(silent=True) or {}
     try:
+
         attempt_id = int(body.get("attempt_id"))
     except (TypeError, ValueError):
+
         return jsonify({"error": "attempt_id is required."}), 400
 
     try:
         with connect_evaluation_db() as connection:
+
             detail = evaluation_queries.get_attempt_detail(connection, attempt_id, user)
             if detail is None:
                 return jsonify({"error": "Evaluation attempt was not found."}), 404
             packet_payload = detail.get("payload", {})
+
+
+
             packet = packet_payload.get("packet", {}) if isinstance(packet_payload, dict) else {}
             decision = str(packet.get("gate", {}).get("decision", "")).upper()
+
+
+
             if decision == "FAIL":
                 if user.get("role") != "TESTER":
                     return jsonify({"error": "Only the submitting tester can retry a failed-result notification."}), 403
-                recipient = str(user.get("email", ""))
-                recipients = [recipient]
+                recipients = [str(user.get("email", ""))]
             elif decision == "PASS":
-                if user.get("role") != "ADMINISTRATOR":
-                    return jsonify({"error": "Administrator access is required to retry a passed-result notification."}), 403
-                assignments = evaluation_queries.list_assignments(connection, attempt_id)
-                recipients = [str(item.get("email", "")) for item in assignments if item.get("status") != "REVOKED"]
+                if user.get("role") not in {"TESTER", "ADMINISTRATOR"}:
+                    return jsonify({"error": "Tester or administrator access is required to retry a passed-result notification."}), 403
+                recipients = [os.environ.get(
+                    "ECN_PASS_RESULT_RECIPIENT", "yanshi.li@fisherpaykel.com",
+                ).strip()]
             else:
                 return jsonify({"error": "The saved result has no emailable decision."}), 422
-        if not recipients:
-            return jsonify({"error": "Assign an active next checker before retrying this notification."}), 409
+            if not recipients or not recipients[0]:
+                return jsonify({"error": "No notification recipient is configured."}), 409
+
+
         outcomes = [_deliver_notification(attempt_id, "validation_report", recipient, packet) for recipient in recipients]
         return jsonify({"notifications": outcomes, "sent": all(item["sent"] for item in outcomes)})
     except PermissionError:

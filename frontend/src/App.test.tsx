@@ -92,15 +92,18 @@ describe("tester pre-check workflow", () => {
     expect(JSON.parse(String(retryRequest?.[1]?.body))).not.toHaveProperty("recipient");
   });
 
-  it("explains PASS notification follows administrator reviewer assignment", async () => {
+    it("explains PASS result email is separate from the reviewer task reminder", async () => {
+
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === "/api/health") return jsonResponse({ status: "ok" });
       if (String(input) === "/api/auth/session") return jsonResponse({ user: tester });
       if (String(input) === "/api/precheck") return jsonResponse({
-        decision: "PASS",
+                decision: "PASS",
         summary: { total_files: 1, total_issues: 0, errors: 0, warnings: 0 },
         findings: [],
+        notification: { sent: true, status: "sent", message: "Validation result notification sent." },
         persistence: { saved: true, attempt_id: 83, duration_seconds: 1.2 },
+
       });
       return jsonResponse({ attempts: [] });
     }));
@@ -111,7 +114,9 @@ describe("tester pre-check workflow", () => {
     await user.upload(screen.getByLabelText(/ECN file/), new File(["ecn data"], "change.csv", { type: "text/csv" }));
     fireEvent.submit(screen.getByRole("button", { name: "Run Pre-check" }).closest("form")!);
 
-    expect(await screen.findByText(/An administrator assigns the next checker/)).toBeInTheDocument();
+        expect(await screen.findByText(/The result is emailed to the configured checker/)).toBeInTheDocument();
+    expect(screen.getByText("Validation result notification sent.")).toBeInTheDocument();
+
     expect(screen.queryByLabelText(/recipient|next checker email/i)).not.toBeInTheDocument();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => input === "/api/notification")).toBe(false);
   });

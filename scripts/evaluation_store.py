@@ -15,7 +15,7 @@ import re
 
 
 NOTIFICATION_STATUSES = frozenset({"requested", "sent", "failed"})
-NOTIFICATION_KINDS = frozenset({"validation_report", "gate_notification", "other"})
+NOTIFICATION_KINDS = frozenset({"validation_report", "review_assignment_reminder", "gate_notification", "other"})
 SOURCE_STATUSES = frozenset({"DRAFT", "COMPLETED"})
 
 

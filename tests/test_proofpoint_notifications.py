@@ -1,4 +1,9 @@
-from scripts.stages.validation_notification import build_validation_email, send_validation_email
+from scripts.stages.validation_notification import (
+    build_reviewer_task_reminder,
+    build_validation_email,
+    send_reviewer_task_reminder,
+    send_validation_email,
+)
 
 
 PACKET = {
@@ -25,6 +30,18 @@ def test_validation_email_contains_only_ec_identifier_decision_and_rule_summary(
     assert "private evidence" not in body
     assert "Sensitive title" not in body
     assert "private recommendation" not in body
+
+
+def test_reviewer_task_reminder_contains_no_validation_decision_or_findings():
+    subject, body = build_reviewer_task_reminder(PACKET)
+
+    assert subject == "ECN review task assigned — ECN-1234567"
+    assert "ECN-1234567" in body
+    assert "review task has been assigned" in body
+    assert "FAIL" not in subject + body
+    assert "H01" not in body
+    assert "private evidence" not in body
+    assert "Sensitive title" not in body
 
 
 def test_email_headers_and_rule_summary_remove_untrusted_newlines():
@@ -59,6 +76,48 @@ def test_proofpoint_rejects_non_internal_recipients_before_http_request():
     assert result["sent"] is False
     assert result["status"] == "failed"
     assert calls == []
+
+
+def test_task_reminder_uses_proofpoint_transport_with_non_result_content():
+    environ = {
+        "PROOFPOINT_SEND_URL": "https://mail.example.test/send",
+        "PROOFPOINT_SENDER_ADDRESS": "ai-ecn-notifications@fisherpaykel.com",
+        "PROOFPOINT_CLIENT_ID": "client-id",
+        "PROOFPOINT_CLIENT_SECRET": "private-secret",
+        "PROOFPOINT_TOKEN_GRANT_TYPE": "client_credentials",
+        "PROOFPOINT_TOKEN_RESPONSE_FIELD": "access_token",
+        "PROOFPOINT_TOKEN_CLIENT_ID_FIELD": "client_id",
+        "PROOFPOINT_TOKEN_CLIENT_SECRET_FIELD": "client_secret",
+        "PROOFPOINT_TOKEN_GRANT_TYPE_FIELD": "grant_type",
+        "PROOFPOINT_TOKEN_REQUEST_FORMAT": "json",
+        "PROOFPOINT_SEND_REQUEST_FORMAT": "json",
+    }
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response({"access_token": "token"}) if url.endswith("/token") else Response({})
+
+    result = send_reviewer_task_reminder(
+        PACKET, "reviewer@fisherpaykel.com", environ=environ, http_post=fake_post,
+    )
+
+    assert result["sent"] is True
+    assert len(calls) == 2
+    message = calls[1][1]["json"]
+    assert "review task has been assigned" in message["content"][0]["body"]
+    assert "FAIL" not in message["subject"] + message["content"][0]["body"]
+    assert "H01" not in message["content"][0]["body"]
 
 
 def test_proofpoint_uses_configured_token_and_send_contract_with_fake_transport():

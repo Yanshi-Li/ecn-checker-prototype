@@ -126,7 +126,8 @@ export default function AdminDashboard() {
         const payload = await readJson<{ error?: string; notification?: { sent: boolean; message: string } | null }>(response);
     const status = payload.notification
       ? payload.notification.message
-      : "No email was sent for this result.";
+            : "Reviewer assignment saved; no task reminder was sent.";
+
     setToolStatus(response.ok ? `Reviewer assigned. ${status}` : payload.error ?? "Assignment failed.");
 
     if (response.ok) void loadAdminTools();
