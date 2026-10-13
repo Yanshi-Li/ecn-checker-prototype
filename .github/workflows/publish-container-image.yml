@@ -1,0 +1,50 @@
+name: Build and publish container image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to publish (for example, sandbox-v1)
+        required: true
+        default: sandbox
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman
+
+      - name: Validate image tag and set image name
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid OCI image tag." >&2
+            exit 1
+          fi
+          echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+
+      - name: Sign in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | sudo podman login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Build image with Podman
+        run: sudo podman build --file Containerfile --tag "$IMAGE_NAME:$IMAGE_TAG" .
+
+      - name: Publish image to GHCR
+        run: sudo podman push "$IMAGE_NAME:$IMAGE_TAG"
