@@ -1,6 +1,10 @@
 httpx>=0.27.0
 truststore>=0.9.0
+Flask>=3.0,<4
+python-dotenv>=1.0,<2
+gunicorn>=23,<24
 pandas
+
 openpyxl
 pdfplumber
 openai
