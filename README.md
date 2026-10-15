@@ -18,7 +18,7 @@ The end-to-end CLI pipeline is implemented by `scripts/run_hybrid.py`; the curre
 5. **Merge Step / Gate Decision** — combines findings into a `PASS` or `FAIL`; rule errors and selected part issues close the gate, while warnings and AI notes remain advisory.
 6. **Results and user interface** — the CLI produces `out/dashboard.html` and `out/ai_summary.md`; React provides the interactive browser interface for testers, reviewers, and administrators.
 
-7. **Email Notification** — sends or dry-runs a gate-specific notification through SendGrid.
+7. **Email Notification** — sends or dry-runs gate-specific notifications through the Secure Email Relay (SER) adapter. The CLI and web-app notification paths share this provider integration; live delivery remains unavailable until IT confirms the required send and authentication contract.
 
 ### Rule policy catalogue
 
@@ -84,7 +84,7 @@ Batch testing is command-line only. Run `py scripts/run_batch.py --help` for opt
    copy .env.example .env
    ```
 
-   On macOS/Linux, use `cp .env.example .env`. An LLM key is optional because the pipeline falls back to rule-based advisory checks. SendGrid settings are only needed for live email delivery.
+   On macOS/Linux, use `cp .env.example .env`. An LLM key is optional because the pipeline falls back to rule-based advisory checks. Email delivery uses Secure Email Relay (SER); live delivery remains disabled until the required provider settings are confirmed by IT.
 
 5. Run the CLI pipeline. Provide the ECN explicitly; BOM input is optional. Repeat `--bom` up to four times to process each ECN/BOM pair separately.
 
@@ -109,7 +109,7 @@ Batch testing is command-line only. Run `py scripts/run_batch.py --help` for opt
 
 ### Dependencies
 
-`requirements.txt` currently installs the backend and CLI dependencies: `pandas`, `openpyxl`, `pdfplumber`, `httpx`, `openai`, `sendgrid`, `psycopg[binary]`, and `pytest` (for the test suite).
+`requirements.txt` currently installs the backend and CLI dependencies: `pandas`, `openpyxl`, `pdfplumber`, `httpx`, `openai`, `psycopg[binary]`, and `pytest` (for the test suite). Email delivery uses the existing HTTP client and Secure Email Relay adapter.
 
 ## Container image and deployment
 
@@ -153,14 +153,12 @@ For local use, the AI advisory and Flask backend read environment variables; the
 | `OPENAI_API_KEY` | Enables OpenAI-compatible AI advisory; preferred when both AI keys are set. | CLI and Flask | `your-openai-api-key` |
 | `OPENAI_MODEL` | OpenAI model override. | CLI and Flask | `gpt-4o-mini` |
 | `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. | CLI and Flask | `https://gateway.aitools.corp.fisherpaykel.com` |
-| `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Flask | `your-sendgrid-api-key` |
-| `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address. Required only when live email is enabled. | CLI and Flask | `verified-sender@example.com` |
-| `DRY_RUN` | Controls the existing CLI/Stage 6 SendGrid path. It does not enable Secure Email Relay (SER) web-app delivery. | CLI and Flask | `true` (default) |
-| `PROOFPOINT_TOKEN_URL` | Secure Email Relay (SER) token URL (the currently known endpoint is Proofpoint-hosted). | Flask web app | `https://mail-us.ser.proofpoint.com/v1/token` |
-| `PROOFPOINT_SEND_URL` | Secure Email Relay send-email URL; must be supplied by IT. | Flask web app | Unset until confirmed |
-| `PROOFPOINT_SENDER_ADDRESS` | Approved internal sender. | Flask web app | `ai-ecn-notifications@fisherpaykel.com` |
-| `PROOFPOINT_CLIENT_ID` / `PROOFPOINT_CLIENT_SECRET` | Backend credentials; secret supplied through approved secret configuration. | Flask web app | No defaults |
-| `PROOFPOINT_TOKEN_*` / `PROOFPOINT_SEND_*` | Grant/scope or audience, request formats, field mappings, and token response field; exact values must come from IT. | Flask web app | Unset until confirmed |
+| `DRY_RUN` | Controls whether CLI/Stage 6 email notifications are sent or only logged. It does not control the saved-result web-app notification flow. | CLI | `true` (default) |
+| `PROOFPOINT_TOKEN_URL` | Secure Email Relay (SER) token URL (the currently known endpoint is Proofpoint-hosted). | CLI and Flask | `https://mail-us.ser.proofpoint.com/v1/token` |
+| `PROOFPOINT_SEND_URL` | Secure Email Relay send-email URL; must be supplied by IT. | CLI and Flask | Unset until confirmed |
+| `PROOFPOINT_SENDER_ADDRESS` | Approved internal sender. | CLI and Flask | `ai-ecn-notifications@fisherpaykel.com` |
+| `PROOFPOINT_CLIENT_ID` / `PROOFPOINT_CLIENT_SECRET` | Backend credentials; secret supplied through approved secret configuration. | CLI and Flask | No defaults |
+| `PROOFPOINT_TOKEN_*` / `PROOFPOINT_SEND_*` | Grant/scope or audience, request formats, field mappings, and token response field; exact values must come from IT. | CLI and Flask | Unset until confirmed |
 | `ECN_PASS_RESULT_RECIPIENT` | Fixed internal recipient for saved PASS result reports. | Flask web app | `yanshi.li@fisherpaykel.com` |
 | `ECN_APP_URL` | Optional safe application URL included in notification email. | Flask web app | No default |
 
@@ -200,9 +198,9 @@ Known Secure Email Relay (SER) configuration:
 - Recipient domain: `fisherpaykel.com` (enforced case-insensitively by Flask)
 - Client secret: provide only through approved backend secret configuration; never place it in browser code, PostgreSQL, docs, tests, or source control.
 
-**Secure Email Relay production delivery is not configured or verified.** IT must provide the send-email URL, token request contract (grant type and required scope or audience), token response field, and email-send request contract (format and field names). Until those exact values are supplied, leave the corresponding `PROOFPOINT_*` implementation settings unset: the app reports `not_configured` and makes no external request. The backend supports explicit configuration for these values; it does not guess the SER contract or fall back to SMTP/SendGrid. `ECN_APP_URL` is optional and is included in the email only when configured as a safe URL.
+**Secure Email Relay production delivery is not configured or verified.** IT must provide the send-email URL, token request contract (grant type and required scope or audience), token response field, and email-send request contract (format and field names). Until those exact values are supplied, leave the corresponding `PROOFPOINT_*` implementation settings unset: the app reports `not_configured` and makes no external request. The backend supports explicit configuration for these values; it does not guess the SER contract or fall back to SMTP or another email provider. `ECN_APP_URL` is optional and is included in the email only when configured as a safe URL.
 
-This web-app integration is separate from the CLI/Stage 6 notification path, which retains its existing SendGrid behavior and `DRY_RUN` policy.
+The CLI/Stage 6 and saved-result web-app notification paths both use the Secure Email Relay adapter. `DRY_RUN` controls the CLI/Stage 6 path; it does not control web-app notifications.
 
 
 ## Known limitations / TODO

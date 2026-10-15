@@ -8,7 +8,6 @@ pandas
 openpyxl
 pdfplumber
 openai
-sendgrid
 psycopg[binary]
 pytest
 
