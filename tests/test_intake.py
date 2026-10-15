@@ -57,13 +57,18 @@ def test_load_excel_mbom_template(tmp_path):
     assert rows[1]["quantity"] == "1"
 
 
-def test_load_sample_4079755_part_master_carries_forward_database_and_action():
-        rows = load_file(str(DATA_DIR / "bom_draft" / "4079755-MBOM.xlsx"), role="bom")
-        assert len(rows) == 12
-        assert all(row["source"] == "Thailand" for row in rows)
-        assert sum(row["action"] == "UPDATE" for row in rows) == 4
-        assert sum(row["action"] == "ADD" for row in rows) == 8
-        assert [row["part_number"] for row in rows[:4]] == ["433540", "433767", "433780", "433898"]
+def test_load_sample_bom_from_data_directory():
+    rows = load_file(str(DATA_DIR / "bom.csv"), role="bom")
+
+    assert len(rows) == 8
+    assert [row["part_number"] for row in rows] == [
+        "1001234", "1001235", "1001236", "1001237",
+        "1001238", "1001239", "1001240", "1001241",
+    ]
+    assert rows[0]["description"] == "Support bracket assembly"
+    assert rows[1]["description"] == "Stop bracket, revised"
+    assert [row["line_number"] for row in rows] == [str(i) for i in range(1, 9)]
+
 
 
 

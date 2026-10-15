@@ -25,6 +25,15 @@ graph TD
 
 The React frontend supports tester pre-checks, reviewer queues and judgements, and administrator management and reporting. Flask owns authentication, authorization, validation, persistence, and notifications. Batch testing runs through the command-line runner and is not part of the browser interface.
 
+### Container packaging (available; not a deployment)
+
+The repository now includes a multi-stage `Containerfile` that builds the React frontend, installs the Python backend dependencies, and serves both through Gunicorn on port `5000`. A manually triggered GitHub Actions workflow builds the image with Podman and pushes the requested tag to `ghcr.io/fisherpaykel/fpa-ai-ecn-checker`. The workflow does not provision infrastructure, configure a database, or deploy the image. Confirm GHCR package visibility and access permissions are private and limited to approved users before distributing the image.
+
+The container expects PostgreSQL and all secrets to be provided at runtime. PostgreSQL is not bundled. The image includes `/api/health` as a lightweight process check; it does not establish that PostgreSQL or external AI/email integrations are ready. See the root README for the publish workflow and local container-run example.
+
+Treat this as a packaging step toward the proposed staging/production architecture below. HTTPS termination, reverse proxy/load balancer, approved secrets, database hosting and backups, network policy, and monitoring remain responsibilities of the selected hosting environment.
+
+
 
 
 
@@ -51,9 +60,10 @@ Recommended production arrangement:
 - Internal DNS name, for example `ecn-checker.<internal-domain>`
 - HTTPS with an internally approved certificate
 - Reverse proxy or load balancer in front of the application
-- Flask application process managed by the hosting platform
-- Built React assets served by the application or approved web server
+- The published application container, or an equivalent deployment built from the same source
+- Built React assets served by the Flask/Gunicorn process in the container or an approved web server
 - No Streamlit runtime; deploy the React frontend and Flask backend as the supported application
+
 - PostgreSQL on an approved managed database service
 - Access restricted to authorised Fisher & Paykel users through the corporate network or VPN
 - Separate production secrets and database credentials
@@ -119,7 +129,8 @@ The preferred production design is an HTTPS call to an approved Fisher & Paykel 
 
 Email content should contain only the minimum necessary information, such as the ECN identifier, PASS/FAIL result, rule summary, and an internal application link. Sensitive ECN/BOM content should remain in protected server-side storage.
 
-The current prototype has notification behavior and SMTP-oriented configuration. Production deployment should use the approved HTTPS email adapter once IT provides its endpoint and authentication requirements.
+The web application sends through Secure Email Relay (SER). The current implementation uses `PROOFPOINT_*` configuration names and the Proofpoint-hosted SER endpoint; those implementation names do not change the user-facing integration's name. Production delivery remains unconfigured until IT confirms the send URL and token/send request requirements. The CLI notification path separately retains its existing SendGrid behavior.
+
 
 ## Security requirements
 
@@ -127,8 +138,9 @@ The current prototype has notification behavior and SMTP-oriented configuration.
 - Corporate authentication preferred over application-managed passwords
 - Role-based access for `TESTER`, `REVIEWER`, and `ADMINISTRATOR`
 - PostgreSQL accessible only from the application server or approved network
-- Secrets stored in the approved secret-management system
+- Secrets stored in the approved secret-management system and injected at runtime, not baked into the container image
 - No credentials committed to source control
+
 - Uploaded files treated as confidential engineering data
 - File-size and file-type restrictions enabled
 - Audit events retained for pre-checks, judgements, assignments, and notifications
@@ -166,7 +178,7 @@ IT should provide:
 
 1. Internal DNS name
 2. HTTPS certificate
-3. Hosting location and deployment method
+3. Hosting location and deployment method, including private GHCR pull access if using the published image
 4. Corporate authentication decision
 5. PostgreSQL host/database and backup policy
 6. Approved email API details
@@ -176,6 +188,7 @@ IT should provide:
 10. Staging environment for acceptance testing
 11. Production release and rollback procedure
 12. Data-retention and deletion policy
+
 
 ## Acceptance test
 

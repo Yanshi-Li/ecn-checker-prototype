@@ -199,7 +199,7 @@ For a saved `FAIL` result, the app automatically attempts to email the signed-in
 
 A `PASS` result does not send email immediately. An administrator must assign the saved attempt to a reviewer; the app then attempts delivery to that assigned reviewer's internal account. Record the assignment outcome and separate email-delivery status. A delivery failure must not be reported as an assignment failure.
 
-Emails are reports, not approval decisions, and do not attach the submitted ECN or BOM. Real delivery remains unavailable until the application owner supplies the Proofpoint send and authentication contract through approved backend configuration. Never test with an external recipient.
+Emails are reports, not approval decisions, and do not attach the submitted ECN or BOM. Real Secure Email Relay (SER) delivery remains unavailable until the application owner supplies the send and authentication contract through approved backend configuration. The current backend configuration uses `PROOFPOINT_*` setting names for this integration. Never test with an external recipient.
 
 
 ### Step 8: Record completion

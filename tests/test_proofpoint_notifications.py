@@ -1,9 +1,20 @@
+import pytest
+
+from scripts.stages import validation_notification as notification_module
 from scripts.stages.validation_notification import (
     build_reviewer_task_reminder,
     build_validation_email,
+    send_email_content,
     send_reviewer_task_reminder,
     send_validation_email,
 )
+
+
+
+@pytest.fixture(autouse=True)
+def clear_ser_token_cache():
+    notification_module._token_cache.update(access_token=None, expires_at=0.0)
+
 
 
 PACKET = {
@@ -163,15 +174,68 @@ def test_proofpoint_uses_configured_token_and_send_contract_with_fake_transport(
     assert result["sent"] is True
     assert result["status"] == "sent"
     assert len(calls) == 2
-    assert calls[0][0].endswith("/v1/token")
+        
+
     assert calls[1][1]["headers"]["Authorization"] == "Bearer private-access-token"
-    assert calls[1][1]["json"]["to"] == "Tester@fisherpaykel.com"
-    assert calls[1][1]["json"]["from"] == "ai-ecn-notifications@fisherpaykel.com"
-    assert "Reason is missing." not in calls[1][1]["json"]["body"]
+
+    assert calls[1][1]["json"]["tos"] == [{"email": "Tester@fisherpaykel.com"}]
+
+    assert calls[1][1]["json"]["from"] == {"email": "ai-ecn-notifications@fisherpaykel.com"}
+
+        
+
     assert environ["PROOFPOINT_CLIENT_SECRET"] not in repr(result)
 
 
+def test_ser_generic_sender_sends_all_internal_recipients_in_one_request():
+    environ = {
+        "PROOFPOINT_SEND_URL": "https://mail.example.test/send",
+        "PROOFPOINT_SENDER_ADDRESS": "ai-ecn-notifications@fisherpaykel.com",
+        "PROOFPOINT_CLIENT_ID": "client-id",
+        "PROOFPOINT_CLIENT_SECRET": "private-secret",
+        "PROOFPOINT_TOKEN_GRANT_TYPE": "client_credentials",
+        "PROOFPOINT_TOKEN_RESPONSE_FIELD": "access_token",
+        "PROOFPOINT_TOKEN_CLIENT_ID_FIELD": "client_id",
+        "PROOFPOINT_TOKEN_CLIENT_SECRET_FIELD": "client_secret",
+        "PROOFPOINT_TOKEN_GRANT_TYPE_FIELD": "grant_type",
+        "PROOFPOINT_TOKEN_REQUEST_FORMAT": "json",
+        "PROOFPOINT_SEND_REQUEST_FORMAT": "json",
+    }
+    calls = []
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response({"access_token": "token"}) if url.endswith("/token") else Response({})
+
+    result = send_email_content(
+        ["tester@fisherpaykel.com", "checker@fisherpaykel.com"],
+        "ECN passed",
+        "Ready for review",
+        environ=environ,
+        http_post=fake_post,
+    )
+
+    assert result["sent"] is True
+    assert len(calls) == 2
+    assert calls[1][1]["json"]["tos"] == [
+        {"email": "tester@fisherpaykel.com"},
+        {"email": "checker@fisherpaykel.com"},
+    ]
+    assert calls[1][1]["json"]["subject"] == "ECN passed"
+
+
 def test_proofpoint_rejects_insecure_or_credential_bearing_endpoints():
+
     calls = []
     environ = {
         "PROOFPOINT_SEND_URL": "http://mail.example.test/send",

@@ -25,6 +25,9 @@ npm run dev
 
 Open the Vite URL shown in the terminal, normally `http://localhost:5173`. Vite proxies the `/api` backend requests to Flask at `http://127.0.0.1:5000`.
 
+For the published React + Flask container image and the manual GHCR publishing workflow, see the root [README container and deployment instructions](../README.md#container-image-and-deployment). The image packages the production-built frontend with Flask/Gunicorn; it does not include PostgreSQL or deploy itself to a hosting environment.
+
+
 ## Checks
 
 ```powershell

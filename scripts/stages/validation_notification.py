@@ -148,18 +148,19 @@ def _build_ser_send_payload(
     *,
     sender: str,
     header_from: str,
-    recipient: str,
+    recipients: list[str],
     subject: str,
     body: str,
 ) -> dict:
-    """Proofpoint SER /v1/send JSON shape."""
+    """Build the Secure Email Relay /v1/send JSON payload."""
     return {
         "from": {"email": sender},
         "headers": {"from": {"email": header_from}},
-        "tos": [{"email": recipient}],
+        "tos": [{"email": recipient} for recipient in recipients],
         "subject": subject,
         "content": [{"type": "text/plain", "body": body}],
     }
+
 
 
 def _httpx_body_kwargs(fmt: str, body: dict) -> dict[str, object]:
@@ -228,23 +229,24 @@ def send_reviewer_task_reminder(
     return _send_email(packet, recipient, build_reviewer_task_reminder, environ, http_post)
 
 
-def _send_email(
-    packet: dict,
-    recipient: str,
-    content_builder,
+def send_email_content(
+    recipients: list[str],
+    subject: str,
+    body: str,
     environ: Mapping[str, str] | None = None,
     http_post=None,
 ) -> dict[str, object]:
-    """Send through Proofpoint SER; never expose provider secrets in responses/logs."""
-
+    """Send plain-text content to internal recipients through Secure Email Relay."""
     environment = environ if environ is not None else os.environ
     settings = _configuration(environment)
-
-    if not _internal_recipient(recipient):
+    normalized_recipients = [recipient.strip() for recipient in recipients]
+    if not normalized_recipients or any(
+        not _internal_recipient(recipient) for recipient in normalized_recipients
+    ):
         return {
             "sent": False,
             "status": "failed",
-            "message": "Recipient must be an internal Fisher & Paykel address.",
+            "message": "Recipients must be internal Fisher & Paykel addresses.",
         }
 
     # SER does not require scope/audience.
@@ -265,26 +267,24 @@ def _send_email(
         return {
             "sent": False,
             "status": "not_configured",
-            "message": "Proofpoint delivery is not configured.",
+            "message": "Secure Email Relay delivery is not configured.",
         }
-
     if settings["PROOFPOINT_TOKEN_SCOPE"] and not settings["PROOFPOINT_TOKEN_SCOPE_FIELD"]:
         return {
             "sent": False,
             "status": "not_configured",
-            "message": "Proofpoint delivery is not configured.",
+            "message": "Secure Email Relay delivery is not configured.",
         }
     if settings["PROOFPOINT_TOKEN_AUDIENCE"] and not settings["PROOFPOINT_TOKEN_AUDIENCE_FIELD"]:
         return {
             "sent": False,
             "status": "not_configured",
-            "message": "Proofpoint delivery is not configured.",
+            "message": "Secure Email Relay delivery is not configured.",
         }
 
     token_url = settings["PROOFPOINT_TOKEN_URL"] or PROOFPOINT_TOKEN_URL
     send_url = settings["PROOFPOINT_SEND_URL"] or PROOFPOINT_SEND_URL
     header_from = settings["PROOFPOINT_HEADER_FROM_EMAIL"] or settings["PROOFPOINT_SENDER_ADDRESS"]
-
     if (
         not _https_endpoint_ok(token_url)
         or not _https_endpoint_ok(send_url)
@@ -294,77 +294,75 @@ def _send_email(
         return {
             "sent": False,
             "status": "not_configured",
-            "message": "Proofpoint delivery is not configured.",
+            "message": "Secure Email Relay delivery is not configured.",
         }
 
-    token_format = settings["PROOFPOINT_TOKEN_REQUEST_FORMAT"].lower()
-    send_format = settings["PROOFPOINT_SEND_REQUEST_FORMAT"].lower()
-    if token_format not in {"json", "form"} or send_format != "json":
-        return {
-            "sent": False,
-            "status": "not_configured",
-            "message": "Proofpoint delivery is not configured.",
-        }
+        
+    
 
     token_fields = {
         settings["PROOFPOINT_TOKEN_CLIENT_ID_FIELD"]: settings["PROOFPOINT_CLIENT_ID"],
         settings["PROOFPOINT_TOKEN_CLIENT_SECRET_FIELD"]: settings["PROOFPOINT_CLIENT_SECRET"],
-                settings["PROOFPOINT_TOKEN_GRANT_TYPE_FIELD"]: settings["PROOFPOINT_TOKEN_GRANT_TYPE"],
+        settings["PROOFPOINT_TOKEN_GRANT_TYPE_FIELD"]: settings["PROOFPOINT_TOKEN_GRANT_TYPE"],
     }
     if settings["PROOFPOINT_TOKEN_SCOPE"]:
-
         token_fields[settings["PROOFPOINT_TOKEN_SCOPE_FIELD"]] = settings["PROOFPOINT_TOKEN_SCOPE"]
     if settings["PROOFPOINT_TOKEN_AUDIENCE"]:
         token_fields[settings["PROOFPOINT_TOKEN_AUDIENCE_FIELD"]] = settings["PROOFPOINT_TOKEN_AUDIENCE"]
 
-
-    subject, body = content_builder(packet, settings["ECN_APP_URL"])
-
-
-
     send_payload = _build_ser_send_payload(
         sender=settings["PROOFPOINT_SENDER_ADDRESS"],
         header_from=header_from,
-        recipient=recipient.strip(),
+        recipients=normalized_recipients,
         subject=subject,
         body=body,
     )
-
     post = http_post or httpx.post
     try:
         access_token = _fetch_access_token(
             token_url=token_url,
-            token_format=token_format,
+                        token_format=settings["PROOFPOINT_TOKEN_REQUEST_FORMAT"].lower(),
+
             token_fields=token_fields,
             response_field=settings["PROOFPOINT_TOKEN_RESPONSE_FIELD"],
             post=post,
         )
-        delivery_kwargs: dict[str, Any] = {
-            "json": send_payload,
-            "headers": {
+        response = post(
+            send_url,
+            json=send_payload,
+            headers={
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
-            "timeout": 10,
-            "verify": _SSL_VERIFY,
-        }
-        delivery_response = post(send_url, **delivery_kwargs)
-
-        delivery_response.raise_for_status()
+            timeout=10,
+            verify=_SSL_VERIFY,
+        )
+        response.raise_for_status()
     except Exception as exc:
         if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and exc.response.status_code == 401:
             _token_cache["access_token"] = None
             _token_cache["expires_at"] = 0.0
-
-        logger.error("Proofpoint delivery failed (%s)", type(exc).__name__)
+        logger.error("Secure Email Relay delivery failed (%s)", type(exc).__name__)
         return {"sent": False, "status": "failed", "message": "Email could not be sent."}
 
+    return {"sent": True, "status": "sent", "message": "Email sent."}
 
-    message = (
-        "Validation result notification sent."
-        if content_builder is build_validation_email
-        else "Reviewer task reminder sent."
-    )
 
-    return {"sent": True, "status": "sent", "message": message}
+def _send_email(
+    packet: dict,
+    recipient: str,
+    content_builder,
+    environ: Mapping[str, str] | None = None,
+    http_post=None,
+) -> dict[str, object]:
+    environment = environ if environ is not None else os.environ
+    subject, body = content_builder(packet, _configuration(environment)["ECN_APP_URL"])
+    result = send_email_content([recipient], subject, body, environment, http_post)
+    if result.get("sent"):
+        result["message"] = (
+            "Validation result notification sent."
+            if content_builder is build_validation_email
+            else "Reviewer task reminder sent."
+        )
+    return result

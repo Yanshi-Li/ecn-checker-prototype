@@ -3,6 +3,8 @@
 import logging
 import os
 
+from scripts.stages import validation_notification as validation_notification_mod
+
 logger = logging.getLogger(__name__)
 
 
@@ -12,46 +14,15 @@ def _get_config_value(key: str, default: str = "") -> str:
 
 
 
-def _resolve_email_config() -> dict:
-    """Resolve SendGrid credentials and sender identity for Stage 6."""
-    return {
-        "api_key": _get_config_value("SENDGRID_API_KEY"),
-        "from_email": _get_config_value("EMAIL_FROM_ADDRESS"),
-    }
-
-
 def _is_dry_run() -> bool:
     """Return whether notification delivery is disabled (the safe default)."""
     value = _get_config_value("DRY_RUN", "true").lower()
     return value not in {"0", "false", "no", "off"}
 
 
-def _send_via_sendgrid(recipients: list[str], subject: str, body: str) -> None:
-    """Send one plain-text email through SendGrid using resolved credentials."""
-
-    config = _resolve_email_config()
-    if not config["api_key"] or not config["from_email"]:
-        raise RuntimeError(
-            "SENDGRID_API_KEY and EMAIL_FROM_ADDRESS must be configured to send email."
-        )
-
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
-    except ImportError as exc:
-        raise RuntimeError("The sendgrid package is required to send email.") from exc
-
-    message = Mail(
-        from_email=config["from_email"],
-        to_emails=recipients,
-        subject=subject,
-        plain_text_content=body,
-    )
-    SendGridAPIClient(config["api_key"]).send(message)
-
-
 def _deliver_notification(recipients: list[str], subject: str, body: str) -> dict:
-    """Log a dry run or deliver a rendered notification through SendGrid."""
+    """Log a dry run or deliver a rendered notification through Secure Email Relay."""
+
     result = {
         "sent": False,
         "recipients": recipients,
@@ -69,15 +40,31 @@ def _deliver_notification(recipients: list[str], subject: str, body: str) -> dic
         return result
 
     try:
-        _send_via_sendgrid(recipients, subject, body)
+        delivery = validation_notification_mod.send_email_content(
+            recipients=recipients,
+            subject=subject,
+            body=body,
+        )
     except Exception as exc:
-        logger.exception("SendGrid notification failed for %s", ", ".join(recipients))
-        result["error"] = str(exc)
+        logger.error("Secure Email Relay notification failed (%s)", type(exc).__name__)
+        result.update(
+            status="failed",
+            error="Email could not be sent.",
+        )
         return result
 
-    result["sent"] = True
-    logger.info("SendGrid notification sent to %s — %s", ", ".join(recipients), subject)
+
+
+    result["sent"] = delivery.get("sent") is True
+    result["status"] = delivery.get("status", "failed")
+    if not result["sent"]:
+        result["error"] = delivery.get("message", "Email could not be sent.")
+        logger.warning("Secure Email Relay notification was not sent (%s)", result["status"])
+        return result
+
+    logger.info("Secure Email Relay notification sent — %s", subject)
     return result
+
 
 
 def _change_notice_number(packet: dict) -> str:
