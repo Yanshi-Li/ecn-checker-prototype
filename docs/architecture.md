@@ -213,7 +213,7 @@ without changing the original submissions, and the action is audited. The admini
 | `scripts/rule_catalogue.py` | Validates the rule catalogue and returns rules by intended stage owner |
 | `scripts/stages/context_engine.py` | Stage 4: Parts/reference-data checks |
 | `scripts/stages/dashboard.py` | Stage 5: HTML dashboard |
-| `scripts/stages/email_notification.py` | Stage 6: gate-driven SendGrid email |
+| `scripts/stages/email_notification.py` | Stage 6: gate-driven email notification through the shared Secure Email Relay (SER) adapter |
 | `scripts/batch_intake.py` | Raw-file batch preparation and filename matching |
 | `scripts/batch_orchestration.py` | Independent normalized batch case execution |
 | `scripts/run_batch.py` | Batch command-line runner and persistence/export entry point |
@@ -231,7 +231,12 @@ without changing the original submissions, and the action is audited. The admini
 | `data/ecn_intake.csv`         | Sample ECN input              |
 | `data/bom.csv`                | Sample BOM input              |
 
+## Email notification provider
+
+The CLI/Stage 6 and Flask web-app notification paths use the same Secure Email Relay (SER) adapter. Real delivery remains disabled until IT supplies the SER send URL, OAuth grant type and scope/audience, token response field, and email-send request format and field mappings. The adapter makes no provider request while required configuration is missing.
+
 ## Environment Variables
+
 
 | Variable         | Purpose                                                         |
 |------------------|-----------------------------------------------------------------|
@@ -239,9 +244,12 @@ without changing the original submissions, and the action is audited. The admini
 | `GEMINI_MODEL`   | Optional Gemini model override (default: `gemini-2.5-flash`)   |
 | `OPENAI_API_KEY` | Enables AI Advisory (Stage 3) via OpenAI API                   |
 | `OPENAI_MODEL`   | Optional OpenAI model override (default: `gpt-4o-mini`)        |
-| `SENDGRID_API_KEY` | Enables SendGrid notification delivery (Stage 6)              |
-| `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address for Stage 6 notifications   |
-| `DRY_RUN` | Defaults to `true`; set explicitly false only to send email          |
+| `PROOFPOINT_TOKEN_URL` | Known SER token endpoint; current endpoint is Proofpoint-hosted |
+| `PROOFPOINT_SEND_URL` | SER send endpoint; required from IT and currently unset |
+| `PROOFPOINT_CLIENT_ID` / `PROOFPOINT_CLIENT_SECRET` | SER credentials; supply through approved backend secret configuration |
+| `PROOFPOINT_TOKEN_*` / `PROOFPOINT_SEND_*` | OAuth grant/scope, request formats, token response field, and send field mappings; required from IT and currently unset |
+| `PROOFPOINT_SENDER_ADDRESS` | Approved internal sender address |
+| `DRY_RUN` | Defaults to `true`; controls CLI/Stage 6 email only. It does not control saved-result web-app notifications. |
 | `ECN_DB_HOST` / `ECN_DB_PORT` | PostgreSQL connection settings; use a reachable database host from the container network |
 
 | `ECN_DB_NAME` / `ECN_DB_USER` / `ECN_DB_PASSWORD` | Evaluation database credentials |

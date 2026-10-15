@@ -129,7 +129,7 @@ The preferred production design is an HTTPS call to an approved Fisher & Paykel 
 
 Email content should contain only the minimum necessary information, such as the ECN identifier, PASS/FAIL result, rule summary, and an internal application link. Sensitive ECN/BOM content should remain in protected server-side storage.
 
-The web application sends through Secure Email Relay (SER). The current implementation uses `PROOFPOINT_*` configuration names and the Proofpoint-hosted SER endpoint; those implementation names do not change the user-facing integration's name. Production delivery remains unconfigured until IT confirms the send URL and token/send request requirements. The CLI notification path separately retains its existing SendGrid behavior.
+The CLI/Stage 6 and web-app notification paths both use the Secure Email Relay (SER) adapter, configured through `PROOFPOINT_*` settings for the Proofpoint-hosted SER endpoint. Production delivery for either path remains unconfigured until IT confirms the send URL, OAuth grant type and scope/audience, token response field, and email-send request format and field mappings.
 
 
 ## Security requirements

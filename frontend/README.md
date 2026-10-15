@@ -60,7 +60,7 @@ The email path follows the gate decision and is controlled by Flask:
 - For a saved `PASS`, the interface explains that an administrator must assign a reviewer. Flask then attempts delivery to that assigned reviewer's internal account. Assignment success is reported separately from delivery status.
 - The browser never chooses the recipient. Flask restricts recipients and sender addresses to the approved internal email domain.
 
-Proofpoint production delivery remains disabled until IT supplies the exact send URL and token/send request contracts. The known token URL is `https://mail-us.ser.proofpoint.com/v1/token`; see the root README for the required backend settings and unresolved configuration. The existing CLI/Stage 6 SendGrid behavior is separate.
+Email notifications use the shared Secure Email Relay (SER) adapter for both the web app and CLI/Stage 6. Production delivery remains disabled until IT supplies the exact send URL, OAuth grant type and scope/audience, token response field, and email-send request format and field mappings. The known token URL is `https://mail-us.ser.proofpoint.com/v1/token`; see the root README for the required backend settings.
 
 Flask records the delivery outcome for either path. Reviewer authentication, review queues, and administrator workflows are available in React and use the same protected Flask backend.
 
