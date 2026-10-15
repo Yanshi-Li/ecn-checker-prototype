@@ -15,6 +15,9 @@ The intake layer normalises these inputs into a common ECN packet before the rul
 
 React is the supported browser interface for tester intake and pre-checks, reviewer queues and judgements, and administrator assignments and evaluation reporting. Flask remains responsible for authentication, authorization, and HTTP request validation; the authenticated pre-check route delegates upload staging, validation, evaluation persistence, timing, and response shaping to the `precheck_workflow` module. PostgreSQL credentials and direct database access stay server-side. Batch testing is a separate command-line workflow through `scripts/run_batch.py`, not a browser workflow. No Streamlit application is maintained.
 
+The repository now includes a multi-stage `Containerfile` that builds the React assets and packages them with Flask/Gunicorn, plus a manually dispatched GitHub Actions workflow that publishes tagged images to GHCR. This provides a build artifact only: it does not deploy the app or supply PostgreSQL, secrets, HTTPS, or hosting infrastructure. See [Internal Deployment Architecture](deployment-architecture.md) for the deployment status and remaining operational requirements.
+
+
 
 
 ## Pipeline Overview
@@ -219,7 +222,10 @@ without changing the original submissions, and the action is audited. The admini
 
 | `scripts/evaluation_bundle.py` | Integrity-checked offline evaluation bundle export/import |
 | `scripts/evaluation_queries.py` | Reviewer dashboard query, judgement, and evidence operations |
+| `Containerfile` | Multi-stage React + Flask/Gunicorn application image build |
+| `.github/workflows/publish-container-image.yml` | Manually triggered GHCR image publishing workflow |
 | `frontend/` | React browser interface for testers, reviewers, and administrators |
+
 
 | `data/Part_Master.csv`        | Parts status database, read directly by the context engine (not copied or generated) |
 | `data/ecn_intake.csv`         | Sample ECN input              |
@@ -236,10 +242,13 @@ without changing the original submissions, and the action is audited. The admini
 | `SENDGRID_API_KEY` | Enables SendGrid notification delivery (Stage 6)              |
 | `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address for Stage 6 notifications   |
 | `DRY_RUN` | Defaults to `true`; set explicitly false only to send email          |
-| `ECN_DB_HOST` / `ECN_DB_PORT` | Local PostgreSQL connection settings |
+| `ECN_DB_HOST` / `ECN_DB_PORT` | PostgreSQL connection settings; use a reachable database host from the container network |
+
 | `ECN_DB_NAME` / `ECN_DB_USER` / `ECN_DB_PASSWORD` | Evaluation database credentials |
 | `REVIEWER_ADMIN_EMAIL` | Email for the bootstrap administrator |
 | `REVIEWER_ADMIN_PASSWORD` | Private bootstrap administrator password |
+| `FLASK_SECRET_KEY` | Stable, high-entropy key for signing Flask sessions in hosted/container deployments |
+
 
 
 

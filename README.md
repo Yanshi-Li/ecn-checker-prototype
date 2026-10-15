@@ -111,12 +111,36 @@ Batch testing is command-line only. Run `py scripts/run_batch.py --help` for opt
 
 `requirements.txt` currently installs the backend and CLI dependencies: `pandas`, `openpyxl`, `pdfplumber`, `httpx`, `openai`, `sendgrid`, `psycopg[binary]`, and `pytest` (for the test suite).
 
-## Deployment direction
+## Container image and deployment
 
-The deployment should serve the React frontend and Flask backend together (or through an approved web server/reverse proxy), with PostgreSQL accessible only to the backend. See [Internal Deployment Architecture](docs/deployment-architecture.md) for the proposed deployment shape.
+A container image definition and a manually triggered GitHub Actions workflow are now available. The workflow builds the React frontend, packages it with the Flask backend, and publishes a tagged image to GitHub Container Registry (GHCR):
 
+`ghcr.io/fisherpaykel/fpa-ai-ecn-checker:<tag>`
+
+To publish an image, open **Actions → Build and publish container image → Run workflow** in GitHub, enter an OCI-compatible image tag, and run it from the intended branch. The workflow uses Podman and the repository's `GITHUB_TOKEN`; it does not deploy or start the application. Confirm the GHCR package has the intended private visibility and access permissions before sharing it.
+
+The image serves the built React frontend and Flask backend together with Gunicorn on port `5000`. PostgreSQL is not included. Run it only with a separately managed PostgreSQL database and inject configuration through the hosting platform's secret/environment settings; never bake credentials into the image. If the GHCR package is private, first authenticate Docker or Podman to GHCR using an account with permission to read it; do not put a registry token in a command argument. On Windows, replace `sandbox` with the tag you published and use the following PowerShell pattern after setting the variables in the current session:
+
+```powershell
+$env:ECN_DB_HOST = "host.docker.internal"
+$env:ECN_DB_PASSWORD = Read-Host "Enter ecn_app database password"
+$env:FLASK_SECRET_KEY = Read-Host "Enter a long random Flask session secret"
+$env:REVIEWER_ADMIN_EMAIL = Read-Host "Enter bootstrap administrator email"
+$env:REVIEWER_ADMIN_PASSWORD = Read-Host "Enter bootstrap administrator password"
+
+docker run --rm -p 127.0.0.1:5000:5000 `
+  -e ECN_DB_HOST -e ECN_DB_PORT -e ECN_DB_NAME -e ECN_DB_USER -e ECN_DB_PASSWORD `
+  -e FLASK_SECRET_KEY -e REVIEWER_ADMIN_EMAIL -e REVIEWER_ADMIN_PASSWORD `
+    ghcr.io/fisherpaykel/fpa-ai-ecn-checker:sandbox
+```
+
+Supply any required AI and email settings using the same secret-injection approach. For a local PostgreSQL server, `host.docker.internal` lets the container reach the Windows host; do not expose PostgreSQL publicly. Initialise the database schema before running the app, for example by running `py scripts/initialise_evaluation_db.py` from the repository with the database settings configured. The image's `/api/health` endpoint is a lightweight process check and does not verify database readiness.
+
+
+This is container packaging, not a completed production deployment: HTTPS, reverse proxying, platform-specific secret management, persistent database hosting/backups, and operational monitoring still need to be provided by the approved hosting environment. See [Internal Deployment Architecture](docs/deployment-architecture.md) for the deployment requirements.
 
 ## Environment variables / secrets
+
 
 For local use, the AI advisory and Flask backend read environment variables; the AI advisory also loads a repository-root `.env` file, with process environment values taking precedence. Do not commit real credentials.
 
@@ -131,9 +155,9 @@ For local use, the AI advisory and Flask backend read environment variables; the
 | `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. | CLI and Flask | `https://gateway.aitools.corp.fisherpaykel.com` |
 | `SENDGRID_API_KEY` | Authorizes SendGrid delivery. Required only when live email is enabled. | CLI and Flask | `your-sendgrid-api-key` |
 | `EMAIL_FROM_ADDRESS` | Verified SendGrid sender address. Required only when live email is enabled. | CLI and Flask | `verified-sender@example.com` |
-| `DRY_RUN` | Controls the existing CLI/Stage 6 SendGrid path. It does not enable Proofpoint web-app delivery. | CLI and Flask | `true` (default) |
-| `PROOFPOINT_TOKEN_URL` | Proofpoint OAuth token URL. | Flask web app | `https://mail-us.ser.proofpoint.com/v1/token` |
-| `PROOFPOINT_SEND_URL` | Proofpoint send-email URL; must be supplied by IT. | Flask web app | Unset until confirmed |
+| `DRY_RUN` | Controls the existing CLI/Stage 6 SendGrid path. It does not enable Secure Email Relay (SER) web-app delivery. | CLI and Flask | `true` (default) |
+| `PROOFPOINT_TOKEN_URL` | Secure Email Relay (SER) token URL (the currently known endpoint is Proofpoint-hosted). | Flask web app | `https://mail-us.ser.proofpoint.com/v1/token` |
+| `PROOFPOINT_SEND_URL` | Secure Email Relay send-email URL; must be supplied by IT. | Flask web app | Unset until confirmed |
 | `PROOFPOINT_SENDER_ADDRESS` | Approved internal sender. | Flask web app | `ai-ecn-notifications@fisherpaykel.com` |
 | `PROOFPOINT_CLIENT_ID` / `PROOFPOINT_CLIENT_SECRET` | Backend credentials; secret supplied through approved secret configuration. | Flask web app | No defaults |
 | `PROOFPOINT_TOKEN_*` / `PROOFPOINT_SEND_*` | Grant/scope or audience, request formats, field mappings, and token response field; exact values must come from IT. | Flask web app | Unset until confirmed |
@@ -141,13 +165,14 @@ For local use, the AI advisory and Flask backend read environment variables; the
 | `ECN_APP_URL` | Optional safe application URL included in notification email. | Flask web app | No default |
 
 
-| `ECN_DB_HOST` | Local evaluation database host. | Evaluation store | `localhost` |
+| `ECN_DB_HOST` | Evaluation database host; from a local Windows container, use `host.docker.internal` to reach PostgreSQL on the host. | Evaluation store | `localhost` for a non-container local run |
 | `ECN_DB_PORT` | Local evaluation database port. | Evaluation store | `5432` |
 | `ECN_DB_NAME` | Evaluation database name. | Evaluation store | `ecn_prechecker_evaluation` |
 | `ECN_DB_USER` | Restricted evaluation database role. | Evaluation store | `ecn_app` |
 | `ECN_DB_PASSWORD` | Password for the evaluation database role. | Evaluation store | No default; keep it out of source control |
 | `REVIEWER_ADMIN_EMAIL` | Bootstrap administrator email for the reviewer area. | Flask login bootstrap | No default |
 | `REVIEWER_ADMIN_PASSWORD` | Bootstrap administrator password; used only to create the first administrator. | Flask login bootstrap | No default; keep it out of source control |
+| `FLASK_SECRET_KEY` | Signs Flask session cookies; set a stable, high-entropy value for container or hosted deployments. | Flask backend | No default; keep it out of source control |
 
 Reviewer and administrator workflows are available through React and protected Flask endpoints. Configure bootstrap values as required, initialise the schema, and never commit passwords. Reviewer passwords are stored as salted PBKDF2 hashes, and a reviewer can only open assigned attempts.
 
@@ -164,10 +189,10 @@ The backend suite covers intake (including sample HTML ECN and PDF MBOM extracti
 
 ## Web-app email notifications
 
-The React/Flask web-app notification flow uses Proofpoint. After a saved `FAIL`, Flask attempts to email the signed-in tester. After a saved `PASS`, Flask attempts to email the configured `ECN_PASS_RESULT_RECIPIENT` (default: `yanshi.li@fisherpaykel.com`). When an administrator assigns a reviewer, Flask sends that reviewer a separate task reminder that does not include the validation decision or findings. Recipients are derived server-side; the browser cannot choose an arbitrary address. Delivery failures do not undo a saved result or reviewer assignment. Outcomes are recorded in `notification_attempts`, and an authorized tester can retry a failed result notification without rerunning the pre-check.
+The React/Flask web-app notification flow uses Secure Email Relay (SER), currently configured against its Proofpoint-hosted endpoint. After a saved `FAIL`, Flask attempts to email the signed-in tester. After a saved `PASS`, Flask attempts to email the configured `ECN_PASS_RESULT_RECIPIENT` (default: `yanshi.li@fisherpaykel.com`). When an administrator assigns a reviewer, Flask sends that reviewer a separate task reminder that does not include the validation decision or findings. Recipients are derived server-side; the browser cannot choose an arbitrary address. Delivery failures do not undo a saved result or reviewer assignment. Outcomes are recorded in `notification_attempts`, and an authorized tester can retry a failed result notification without rerunning the pre-check.
 
 
-Known Proofpoint configuration:
+Known Secure Email Relay (SER) configuration:
 
 - Host: `https://mail-us.ser.proofpoint.com`
 - Token URL: `https://mail-us.ser.proofpoint.com/v1/token`
@@ -175,7 +200,7 @@ Known Proofpoint configuration:
 - Recipient domain: `fisherpaykel.com` (enforced case-insensitively by Flask)
 - Client secret: provide only through approved backend secret configuration; never place it in browser code, PostgreSQL, docs, tests, or source control.
 
-**Production delivery is not configured or verified.** IT must provide the send-email URL, token request contract (grant type and required scope or audience), token response field, and email-send request contract (format and field names). Until those exact values are supplied, leave the corresponding `PROOFPOINT_*` settings unset: the app reports `not_configured` and makes no external request. The backend supports explicit configuration for these values; it does not guess the Proofpoint contract or fall back to SMTP/SendGrid. `ECN_APP_URL` is optional and is included in the email only when configured as a safe URL.
+**Secure Email Relay production delivery is not configured or verified.** IT must provide the send-email URL, token request contract (grant type and required scope or audience), token response field, and email-send request contract (format and field names). Until those exact values are supplied, leave the corresponding `PROOFPOINT_*` implementation settings unset: the app reports `not_configured` and makes no external request. The backend supports explicit configuration for these values; it does not guess the SER contract or fall back to SMTP/SendGrid. `ECN_APP_URL` is optional and is included in the email only when configured as a safe URL.
 
 This web-app integration is separate from the CLI/Stage 6 notification path, which retains its existing SendGrid behavior and `DRY_RUN` policy.
 
@@ -198,10 +223,10 @@ This web-app integration is separate from the CLI/Stage 6 notification path, whi
 | `scripts/app.py` | Flask backend — authenticated API, pre-checks, evaluation storage, and notifications |
 | `scripts/ecn_checker.py` | Core validation rule engine |
 | `scripts/run_hybrid.py` | End-to-end CLI pipeline |
-| `scripts/stages/validation_notification.py` | Proofpoint validation-report and reviewer-task email builders/senders |
-
+| `scripts/stages/validation_notification.py` | Secure Email Relay validation-report and reviewer-task email builders/senders |
+| `Containerfile` | Multi-stage build for the React + Flask/Gunicorn application image |
+| `.github/workflows/publish-container-image.yml` | Manually triggered tagged-image publishing workflow for GHCR |
 | `frontend/` | React browser interface for testers, reviewers, and administrators |
-
 | `data/` | Sample CSV inputs used by the prototype |
 | `out/` | Generated dashboard and AI summary outputs |
 | `docs/` | Architecture, rule, and test documentation |
@@ -238,8 +263,7 @@ pytest -q
 - [Approved rule-policy source table](docs/rules_origin.txt)
 - [Machine-readable rule catalogue](docs/rules_list.json)
 - [React frontend setup and workflows](frontend/README.md)
-
-
+- [Internal deployment architecture and container status](docs/deployment-architecture.md)
 - [Tester introduction and test procedure](docs/tester-guide.md)
 - [One-hour laptop test session](docs/laptop-test-session-guide.md)
 - [Intake scenarios and regression expectations](docs/test-scenarios.md)
